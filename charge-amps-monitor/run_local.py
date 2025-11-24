@@ -76,7 +76,17 @@ def print_config_summary():
     print("\n" + "=" * 60)
     print("EV Charger Monitor - Local Debug Mode")
     print("=" * 60)
-    print(f"Email: {os.environ.get('CHARGER_EMAIL', 'NOT SET')}")
+    # Mask email for security (only show first char and domain)
+    email = os.environ.get('CHARGER_EMAIL', 'NOT SET')
+    if email and email != 'NOT SET':
+        email_parts = email.split("@")
+        if len(email_parts) == 2:
+            masked_email = f"{email_parts[0][0]}***@{email_parts[1]}"
+        else:
+            masked_email = "***"
+    else:
+        masked_email = email
+    print(f"Email: {masked_email}")
     print(f"Host Name: {os.environ.get('CHARGER_HOST_NAME', 'my.charge.space (default)')}")
     print(f"Base URL: {os.environ.get('CHARGER_BASE_URL', 'https://my.charge.space (default)')}")
     print(f"Update Interval: {os.environ.get('CHARGER_UPDATE_INTERVAL', '1 (default)')} minutes")

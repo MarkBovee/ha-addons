@@ -404,7 +404,16 @@ def main():
         sys.exit(1)
 
     logger.info("Starting EV Charger Monitor addon")
-    logger.info(f"Email: {email}")
+    # Mask email for security (only show first char and domain)
+    if email:
+        email_parts = email.split("@")
+        if len(email_parts) == 2:
+            masked_email = f"{email_parts[0][0]}***@{email_parts[1]}"
+        else:
+            masked_email = "***"
+    else:
+        masked_email = "NOT SET"
+    logger.info(f"Email: {masked_email}")
     logger.info(f"Host Name: {host_name}")
     logger.info(f"Base URL: {base_url}")
     logger.info(f"Update Interval: {update_interval} minutes")
