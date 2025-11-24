@@ -1,0 +1,26 @@
+name: Charge Amps - EV Charger Monitor
+description: Monitor Charge Amps EV charger status and create Home Assistant entities
+version: "1.0.0"
+slug: charge_amps_ev_charger_monitor
+init: false
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+# Options schema for UI-managed settings
+options:
+  email: ""
+  password: ""
+  host_name: "my.charge.space"
+  base_url: "https://my.charge.space"
+  update_interval: 1
+
+schema:
+  email: str
+  password: str
+  host_name: str
+  base_url: str
+  update_interval: int
