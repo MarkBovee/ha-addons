@@ -31,7 +31,7 @@ def signal_handler(signum, frame):
 
 def get_ha_api_url() -> str:
     """Get Home Assistant API URL from environment."""
-    return os.environ.get("HA_API_URL", "http://supervisor/core/api")
+    return os.environ.get("HA_API_URL", "http://supervisor/core")
 
 
 def get_ha_api_token() -> Optional[str]:
@@ -42,7 +42,7 @@ def get_ha_api_token() -> Optional[str]:
 def delete_entity(entity_id: str, ha_api_url: str, ha_api_token: str) -> bool:
     """Delete a Home Assistant entity."""
     try:
-        url = f"{ha_api_url}/states/{entity_id}"
+        url = f"{ha_api_url}/api/states/{entity_id}"
         headers = {
             "Authorization": f"Bearer {ha_api_token}",
             "Content-Type": "application/json",
@@ -75,7 +75,7 @@ def create_or_update_entity(
 ) -> bool:
     """Create or update a Home Assistant entity."""
     try:
-        url = f"{ha_api_url}/states/{entity_id}"
+        url = f"{ha_api_url}/api/states/{entity_id}"
         headers = {
             "Authorization": f"Bearer {ha_api_token}",
             "Content-Type": "application/json",
@@ -92,9 +92,18 @@ def create_or_update_entity(
                 )
             return True
         else:
-            logger.error(
-                f"Failed to update entity {entity_id}: {response.status_code} - {response.text}"
-            )
+            # Log more details for 401 errors
+            if response.status_code == 401:
+                logger.error(
+                    f"Failed to update entity {entity_id}: 401 Unauthorized. "
+                    f"Token present: {'YES' if ha_api_token else 'NO'}, "
+                    f"URL: {url}, "
+                    f"Response: {response.text[:200]}"
+                )
+            else:
+                logger.error(
+                    f"Failed to update entity {entity_id}: {response.status_code} - {response.text}"
+                )
             return False
 
     except Exception as ex:
@@ -404,6 +413,7 @@ def main():
         sys.exit(1)
 
     logger.info("Starting EV Charger Monitor addon")
+    logger.info(f"HA API Token present: {'YES' if ha_api_token else 'NO'} (length: {len(ha_api_token) if ha_api_token else 0})")
     # Mask email for security (only show first char and domain)
     if email:
         email_parts = email.split("@")
@@ -428,6 +438,23 @@ def main():
         sys.exit(1)
 
     logger.info("Successfully authenticated with Charge Amps API")
+
+    # Test Home Assistant API connection
+    try:
+        test_url = f"{ha_api_url}/api/states"
+        test_headers = {
+            "Authorization": f"Bearer {ha_api_token}",
+            "Content-Type": "application/json",
+        }
+        test_response = requests.get(test_url, headers=test_headers, timeout=10)
+        if test_response.ok:
+            logger.info("Home Assistant API connection successful")
+        else:
+            logger.warning(
+                f"Home Assistant API test failed: {test_response.status_code} - {test_response.text[:200]}"
+            )
+    except Exception as ex:
+        logger.warning(f"Home Assistant API test exception: {ex}")
 
     # Delete old entities before creating new ones
     delete_old_entities(ha_api_url, ha_api_token)
