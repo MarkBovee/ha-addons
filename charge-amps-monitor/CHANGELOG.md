@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.6] - 2025-11-25
+
+### Fixed
+- Enabled Home Assistant API access to prevent 401 errors when updating entities.
+
+### Changed
+- Reformatted this changelog to fully follow the Keep a Changelog convention.
+
 ## [1.0.5] - 2024-11-24
 
 ### Changed
