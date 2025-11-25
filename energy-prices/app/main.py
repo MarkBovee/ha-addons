@@ -325,7 +325,13 @@ def update_ha_entities(data: dict, base_url: str, token: str):
             token
         )
         
-        logger.info("Successfully updated all HA entities")
+        # Log created entities
+        logger.info("Updated Home Assistant entities:")
+        logger.info("  • sensor.ep_price_import: %.4f cents/kWh (import price with VAT, markup, tax)", data['current_import'])
+        logger.info("  • sensor.ep_price_export: %.4f cents/kWh (export/feed-in price)", data['current_export'])
+        logger.info("  • sensor.ep_price_level: %s (None/Low/Medium/High based on percentiles)", data['price_level'])
+        logger.info("Each sensor includes price_curve attribute with %d intervals for today+tomorrow", 
+                   len(data['price_curve_import']))
         
     except Exception as e:
         logger.error("Failed to update HA entities: %s", e, exc_info=True)
