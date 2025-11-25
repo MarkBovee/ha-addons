@@ -2,7 +2,7 @@
 
 **Change ID:** 1.0-energy-prices-addon  
 **Version:** 1.0  
-**Status:** 🟡 **IN PROGRESS - 17% COMPLETE**
+**Status:** 🟡 **IN PROGRESS - 83% COMPLETE**
 
 ---
 
@@ -55,46 +55,46 @@
 
 ---
 
-## Phase 2: Nord Pool API Client ⏳
+## Phase 2: Nord Pool API Client ✅
 
-**Target:** 17% → 33%
+**Target:** 17% → 33% | **Status:** COMPLETE
 
-- [ ] 2.1 Create `app/models.py` with data models
-  - [ ] 2.1.1 Define `PriceInterval` class with `start_time`, `end_time`, `price_cents_kwh` fields
-  - [ ] 2.1.2 Add `from_dict()` classmethod for JSON parsing
-  - [ ] 2.1.3 Add `to_dict()` method for serialization
-  - [ ] 2.1.4 Add `__repr__()` for debugging
+- [x] 2.1 Create `app/models.py` with data models - **DONE [16:50]**
+  - [x] 2.1.1 Define `PriceInterval` class with `start_time`, `end_time`, `price_cents_kwh` fields
+  - [x] 2.1.2 Add `from_dict()` classmethod for JSON parsing
+  - [x] 2.1.3 Add `to_dict()` method for serialization
+  - [x] 2.1.4 Add `__repr__()` for debugging
 
-- [ ] 2.2 Create `app/nordpool_api.py` with API client
-  - [ ] 2.2.1 Create `NordPoolApi` class with constructor
-  - [ ] 2.2.2 Add `BASE_URL` constant: `https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices`
-  - [ ] 2.2.3 Initialize `requests.Session()` for connection pooling
+- [x] 2.2 Create `app/nordpool_api.py` with API client - **DONE [16:50]**
+  - [x] 2.2.1 Create `NordPoolApi` class with constructor
+  - [x] 2.2.2 Add `BASE_URL` constant: `https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices`
+  - [x] 2.2.3 Initialize `requests.Session()` for connection pooling
 
-- [ ] 2.3 Implement `fetch_prices()` method
-  - [ ] 2.3.1 Accept `date` (YYYY-MM-DD), `delivery_area`, `currency` parameters
-  - [ ] 2.3.2 Build query string with parameters
-  - [ ] 2.3.3 Set required headers (Accept, Origin, Referer for CORS)
-  - [ ] 2.3.4 Make GET request with timeout (30s)
+- [x] 2.3 Implement `fetch_prices()` method - **DONE [16:50]**
+  - [x] 2.3.1 Accept `date` (YYYY-MM-DD), `delivery_area`, `currency` parameters
+  - [x] 2.3.2 Build query string with parameters
+  - [x] 2.3.3 Set required headers (Accept, Origin, Referer for CORS)
+  - [x] 2.3.4 Make GET request with timeout (30s)
 
-- [ ] 2.4 Handle API responses
-  - [ ] 2.4.1 Handle HTTP 200: parse JSON, extract `multiAreaEntries`
-  - [ ] 2.4.2 Handle HTTP 204: return empty list (data not available)
-  - [ ] 2.4.3 Handle HTTP errors: log and raise with context
-  - [ ] 2.4.4 Handle network errors: log and raise with retry suggestion
+- [x] 2.4 Handle API responses - **DONE [16:50]**
+  - [x] 2.4.1 Handle HTTP 200: parse JSON, extract `multiAreaEntries`
+  - [x] 2.4.2 Handle HTTP 204: return empty list (data not available)
+  - [x] 2.4.3 Handle HTTP errors: log and raise with context
+  - [x] 2.4.4 Handle network errors: log and raise with retry suggestion
 
-- [ ] 2.5 Parse price data
-  - [ ] 2.5.1 Iterate through `multiAreaEntries` array
-  - [ ] 2.5.2 Extract `deliveryStart`, `deliveryEnd` (UTC ISO 8601 strings)
-  - [ ] 2.5.3 Extract `entryPerArea[delivery_area]` (EUR/MWh)
-  - [ ] 2.5.4 Convert EUR/MWh to cents/kWh: `price_eur_mwh * 0.1`
-  - [ ] 2.5.5 Parse timestamps to Python datetime objects (UTC-aware)
-  - [ ] 2.5.6 Create `PriceInterval` instances
+- [x] 2.5 Parse price data - **DONE [16:50]**
+  - [x] 2.5.1 Iterate through `multiAreaEntries` array
+  - [x] 2.5.2 Extract `deliveryStart`, `deliveryEnd` (UTC ISO 8601 strings)
+  - [x] 2.5.3 Extract `entryPerArea[delivery_area]` (EUR/MWh)
+  - [x] 2.5.4 Convert EUR/MWh to cents/kWh: `price_eur_mwh * 0.1`
+  - [x] 2.5.5 Parse timestamps to Python datetime objects (UTC-aware)
+  - [x] 2.5.6 Create `PriceInterval` instances
 
-- [ ] 2.6 Add logging and error handling
-  - [ ] 2.6.1 Log API request parameters (date, area, currency)
-  - [ ] 2.6.2 Log response status and data availability
-  - [ ] 2.6.3 Log number of intervals fetched
-  - [ ] 2.6.4 Log conversion details (EUR/MWh → cents/kWh) for first interval
+- [x] 2.6 Add logging and error handling - **DONE [16:50]**
+  - [x] 2.6.1 Log API request parameters (date, area, currency)
+  - [x] 2.6.2 Log response status and data availability
+  - [x] 2.6.3 Log number of intervals fetched
+  - [x] 2.6.4 Log conversion details (EUR/MWh → cents/kWh) for first interval
 
 **Phase 2 Completion Criteria:**
 - `NordPoolApi.fetch_prices()` returns list of `PriceInterval` objects
@@ -105,45 +105,45 @@
 
 ---
 
-## Phase 3: Template Processor ⏳
+## Phase 3: Template Processor ✅
 
-**Target:** 33% → 50%
+**Target:** 33% → 50% | **Status:** COMPLETE
 
-- [ ] 3.1 Create `app/price_calculator.py` with template processor
-  - [ ] 3.1.1 Create `TemplateProcessor` class
-  - [ ] 3.1.2 Import `jinja2.sandbox.SandboxedEnvironment` for security
-  - [ ] 3.1.3 Add constructor accepting `template_str` parameter
+- [x] 3.1 Create `app/price_calculator.py` with template processor - **DONE [16:50]**
+  - [x] 3.1.1 Create `TemplateProcessor` class
+  - [x] 3.1.2 Import `jinja2.sandbox.SandboxedEnvironment` for security
+  - [x] 3.1.3 Add constructor accepting `template_str` parameter
 
-- [ ] 3.2 Implement template validation
-  - [ ] 3.2.1 Parse template string with Jinja2 parser
-  - [ ] 3.2.2 Catch `jinja2.TemplateSyntaxError` exceptions
-  - [ ] 3.2.3 Log validation errors with template snippet and line number
-  - [ ] 3.2.4 Raise exception to fail add-on startup on invalid template
+- [x] 3.2 Implement template validation - **DONE [16:50]**
+  - [x] 3.2.1 Parse template string with Jinja2 parser
+  - [x] 3.2.2 Catch `jinja2.TemplateSyntaxError` exceptions
+  - [x] 3.2.3 Log validation errors with template snippet and line number
+  - [x] 3.2.4 Raise exception to fail add-on startup on invalid template
 
-- [ ] 3.3 Implement `calculate_price()` method
-  - [ ] 3.3.1 Accept `marktprijs_cents` parameter (float)
-  - [ ] 3.3.2 Create Jinja2 context dict: `{"marktprijs": marktprijs_cents}`
-  - [ ] 3.3.3 Render template with context using sandboxed environment
-  - [ ] 3.3.4 Parse rendered output as float
-  - [ ] 3.3.5 Round to 4 decimal places using `round(price, 4)`
+- [x] 3.3 Implement `calculate_price()` method - **DONE [16:50]**
+  - [x] 3.3.1 Accept `marktprijs_cents` parameter (float)
+  - [x] 3.3.2 Create Jinja2 context dict: `{"marktprijs": marktprijs_cents}`
+  - [x] 3.3.3 Render template with context using sandboxed environment
+  - [x] 3.3.4 Parse rendered output as float
+  - [x] 3.3.5 Round to 4 decimal places using `round(price, 4)`
 
-- [ ] 3.4 Add error handling for template rendering
-  - [ ] 3.4.1 Catch `jinja2.TemplateError` during rendering
-  - [ ] 3.4.2 Catch `ValueError` if output is not numeric
-  - [ ] 3.4.3 Log errors with template context and input value
-  - [ ] 3.4.4 Return `None` or raise exception (TBD: decide fail strategy)
+- [x] 3.4 Add error handling for template rendering - **DONE [16:50]**
+  - [x] 3.4.1 Catch `jinja2.TemplateError` during rendering
+  - [x] 3.4.2 Catch `ValueError` if output is not numeric
+  - [x] 3.4.3 Log errors with template context and input value
+  - [x] 3.4.4 Return `None` or raise exception (TBD: decide fail strategy)
 
-- [ ] 3.5 Add unit tests for template processor
-  - [ ] 3.5.1 Test valid template: `{{ marktprijs * 1.21 }}` (21% VAT)
-  - [ ] 3.5.2 Test complex template with multiple operations
-  - [ ] 3.5.3 Test invalid syntax: `{{ marktprijs *` (missing closing)
-  - [ ] 3.5.4 Test non-numeric output: `{{ "invalid" }}`
-  - [ ] 3.5.5 Test precision: verify 4 decimal rounding
+- [x] 3.5 Add unit tests for template processor - **DONE [16:50]**
+  - [x] 3.5.1 Test valid template: `{{ marktprijs * 1.21 }}` (21% VAT)
+  - [x] 3.5.2 Test complex template with multiple operations
+  - [x] 3.5.3 Test invalid syntax: `{{ marktprijs *` (missing closing)
+  - [x] 3.5.4 Test non-numeric output: `{{ "invalid" }}`
+  - [x] 3.5.5 Test precision: verify 4 decimal rounding
 
-- [ ] 3.6 Create default template examples for documentation
-  - [ ] 3.6.1 Dutch import template: VAT (21%) + grid fee (€0.0248) + energy tax (€0.1228)
-  - [ ] 3.6.2 Dutch export template: market price only (no fees)
-  - [ ] 3.6.3 Document template variables and expected output format
+- [x] 3.6 Create default template examples for documentation - **DONE [16:50]**
+  - [x] 3.6.1 Dutch import template: VAT (21%) + grid fee (€0.0248) + energy tax (€0.1228)
+  - [x] 3.6.2 Dutch export template: market price only (no fees)
+  - [x] 3.6.3 Document template variables and expected output format
 
 **Phase 3 Completion Criteria:**
 - Templates validated at processor initialization (fail-fast on syntax errors)
@@ -154,81 +154,81 @@
 
 ---
 
-## Phase 4: Main Loop & Entity Management ⏳
+## Phase 4: Main Loop & Entity Management ✅
 
-**Target:** 50% → 67%
+**Target:** 50% → 67% | **Status:** COMPLETE
 
-- [ ] 4.1 Create `app/main.py` with basic structure
-  - [ ] 4.1.1 Import required modules (logging, signal, time, requests, json)
-  - [ ] 4.1.2 Set up logging configuration
-  - [ ] 4.1.3 Load configuration from environment/options
+- [x] 4.1 Create `app/main.py` with basic structure - **DONE [16:50]**
+  - [x] 4.1.1 Import required modules (logging, signal, time, requests, json)
+  - [x] 4.1.2 Set up logging configuration
+  - [x] 4.1.3 Load configuration from environment/options
 
-- [ ] 4.2 Implement configuration loading
-  - [ ] 4.2.1 Read config from `/data/options.json` (HA pattern)
-  - [ ] 4.2.2 Extract delivery_area, currency, timezone settings
-  - [ ] 4.2.3 Extract import_price_template, export_price_template
-  - [ ] 4.2.4 Extract fetch_interval_minutes
-  - [ ] 4.2.5 Validate required fields are present
+- [x] 4.2 Implement configuration loading - **DONE [16:50]**
+  - [x] 4.2.1 Read config from `/data/options.json` (HA pattern)
+  - [x] 4.2.2 Extract delivery_area, currency, timezone settings
+  - [x] 4.2.3 Extract import_price_template, export_price_template
+  - [x] 4.2.4 Extract fetch_interval_minutes
+  - [x] 4.2.5 Validate required fields are present
 
-- [ ] 4.3 Initialize API clients and processors
-  - [ ] 4.3.1 Create `NordPoolApi` instance
-  - [ ] 4.3.2 Create `TemplateProcessor` for import template (validate here)
-  - [ ] 4.3.3 Create `TemplateProcessor` for export template (validate here)
-  - [ ] 4.3.4 Exit with error if template validation fails
+- [x] 4.3 Initialize API clients and processors - **DONE [16:50]**
+  - [x] 4.3.1 Create `NordPoolApi` instance
+  - [x] 4.3.2 Create `TemplateProcessor` for import template (validate here)
+  - [x] 4.3.3 Create `TemplateProcessor` for export template (validate here)
+  - [x] 4.3.4 Exit with error if template validation fails
 
-- [ ] 4.4 Implement signal handlers for graceful shutdown
-  - [ ] 4.4.1 Create `shutdown_flag` threading.Event
-  - [ ] 4.4.2 Register SIGTERM handler
-  - [ ] 4.4.3 Register SIGINT handler (Ctrl+C)
-  - [ ] 4.4.4 Handlers set `shutdown_flag` and log shutdown message
+- [x] 4.4 Implement signal handlers for graceful shutdown - **DONE [16:50]**
+  - [x] 4.4.1 Create `shutdown_flag` threading.Event
+  - [x] 4.4.2 Register SIGTERM handler
+  - [x] 4.4.3 Register SIGINT handler (Ctrl+C)
+  - [x] 4.4.4 Handlers set `shutdown_flag` and log shutdown message
 
-- [ ] 4.5 Implement price fetching logic
-  - [ ] 4.5.1 Calculate today's date (CET timezone)
-  - [ ] 4.5.2 Calculate tomorrow's date
-  - [ ] 4.5.3 Fetch today's prices via `nordpool_api.fetch_prices()`
-  - [ ] 4.5.4 Fetch tomorrow's prices (handle HTTP 204 gracefully)
-  - [ ] 4.5.5 Combine today + tomorrow intervals into single list
-  - [ ] 4.5.6 Log total number of intervals fetched
+- [x] 4.5 Implement price fetching logic - **DONE [16:50]**
+  - [x] 4.5.1 Calculate today's date (CET timezone)
+  - [x] 4.5.2 Calculate tomorrow's date
+  - [x] 4.5.3 Fetch today's prices via `nordpool_api.fetch_prices()`
+  - [x] 4.5.4 Fetch tomorrow's prices (handle HTTP 204 gracefully)
+  - [x] 4.5.5 Combine today + tomorrow intervals into single list
+  - [x] 4.5.6 Log total number of intervals fetched
 
-- [ ] 4.6 Implement price calculation with templates
-  - [ ] 4.6.1 Iterate through each `PriceInterval`
-  - [ ] 4.6.2 Calculate import price using import template processor
-  - [ ] 4.6.3 Calculate export price using export template processor
-  - [ ] 4.6.4 Store results in new list with timestamps
-  - [ ] 4.6.5 Handle template errors gracefully (log and skip interval)
+- [x] 4.6 Implement price calculation with templates - **DONE [16:50]**
+  - [x] 4.6.1 Iterate through each `PriceInterval`
+  - [x] 4.6.2 Calculate import price using import template processor
+  - [x] 4.6.3 Calculate export price using export template processor
+  - [x] 4.6.4 Store results in new list with timestamps
+  - [x] 4.6.5 Handle template errors gracefully (log and skip interval)
 
-- [ ] 4.7 Implement percentile calculations
-  - [ ] 4.7.1 Extract all import prices into sorted list
-  - [ ] 4.7.2 Calculate P05, P20, P40, P60, P80, P95 using `numpy.percentile()` or custom impl
-  - [ ] 4.7.3 Store percentiles in dict for entity attributes
+- [x] 4.7 Implement percentile calculations - **DONE [16:50]**
+  - [x] 4.7.1 Extract all import prices into sorted list
+  - [x] 4.7.2 Calculate P05, P20, P40, P60, P80, P95 using `numpy.percentile()` or custom impl
+  - [x] 4.7.3 Store percentiles in dict for entity attributes
 
-- [ ] 4.8 Implement price level classification
-  - [ ] 4.8.1 Get current time (UTC)
-  - [ ] 4.8.2 Find current price interval
-  - [ ] 4.8.3 Compare current import price to P20/P40/P60
-  - [ ] 4.8.4 Determine level: None (<P20), Low (P20-P40), Medium (P40-P60), High (>P60)
+- [x] 4.8 Implement price level classification - **DONE [16:50]**
+  - [x] 4.8.1 Get current time (UTC)
+  - [x] 4.8.2 Find current price interval
+  - [x] 4.8.3 Compare current import price to P20/P40/P60
+  - [x] 4.8.4 Determine level: None (<P20), Low (P20-P40), Medium (P40-P60), High (>P60)
 
-- [ ] 4.9 Implement Home Assistant entity management
-  - [ ] 4.9.1 Create `create_or_update_entity()` helper function
-  - [ ] 4.9.2 Get HA Supervisor token from environment
-  - [ ] 4.9.3 Build HA API base URL (`http://supervisor/core/api`)
-  - [ ] 4.9.4 POST to `/api/states/{entity_id}` with auth headers
+- [x] 4.9 Implement Home Assistant entity management - **DONE [16:50]**
+  - [x] 4.9.1 Create `create_or_update_entity()` helper function
+  - [x] 4.9.2 Get HA Supervisor token from environment
+  - [x] 4.9.3 Build HA API base URL (`http://supervisor/core/api`)
+  - [x] 4.9.4 POST to `/api/states/{entity_id}` with auth headers
 
-- [ ] 4.10 Create/update price entities
-  - [ ] 4.10.1 Create `sensor.ep_price_import` with current import price as state
-  - [ ] 4.10.2 Add attributes: unit (cents/kWh), price_curve (48h data), percentiles
-  - [ ] 4.10.3 Create `sensor.ep_price_export` with current export price as state
-  - [ ] 4.10.4 Add attributes: unit (cents/kWh), price_curve (48h data)
-  - [ ] 4.10.5 Create `sensor.ep_price_level` with classification (None/Low/Medium/High)
-  - [ ] 4.10.6 Add attributes: p20, p40, p60 values, current_price
+- [x] 4.10 Create/update price entities - **DONE [16:50]**
+  - [x] 4.10.1 Create `sensor.ep_price_import` with current import price as state
+  - [x] 4.10.2 Add attributes: unit (cents/kWh), price_curve (48h data), percentiles
+  - [x] 4.10.3 Create `sensor.ep_price_export` with current export price as state
+  - [x] 4.10.4 Add attributes: unit (cents/kWh), price_curve (48h data)
+  - [x] 4.10.5 Create `sensor.ep_price_level` with classification (None/Low/Medium/High)
+  - [x] 4.10.6 Add attributes: p20, p40, p60 values, current_price
 
-- [ ] 4.11 Implement main loop
-  - [ ] 4.11.1 While not `shutdown_flag.is_set()`
-  - [ ] 4.11.2 Fetch prices and calculate (steps 4.5-4.8)
-  - [ ] 4.11.3 Update HA entities (steps 4.10)
-  - [ ] 4.11.4 Log successful update with timestamp
-  - [ ] 4.11.5 Sleep for `fetch_interval_minutes * 60` seconds (check shutdown_flag every second)
-  - [ ] 4.11.6 Handle exceptions in loop (log and continue)
+- [x] 4.11 Implement main loop - **DONE [16:50]**
+  - [x] 4.11.1 While not `shutdown_flag.is_set()`
+  - [x] 4.11.2 Fetch prices and calculate (steps 4.5-4.8)
+  - [x] 4.11.3 Update HA entities (steps 4.10)
+  - [x] 4.11.4 Log successful update with timestamp
+  - [x] 4.11.5 Sleep for `fetch_interval_minutes * 60` seconds (check shutdown_flag every second)
+  - [x] 4.11.6 Handle exceptions in loop (log and continue)
 
 **Phase 4 Completion Criteria:**
 - Main loop fetches prices every configured interval
