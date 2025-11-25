@@ -165,7 +165,7 @@ def create_entities(
         {"friendly_name": "Charger Charging", "icon": "mdi:ev-station"},
         ha_api_url,
         ha_api_token,
-        log_success=verbose,
+        log_success=False,
     ):
         created_entities.append("input_boolean.ca_charger_charging")
 
@@ -179,7 +179,7 @@ def create_entities(
         },
         ha_api_url,
         ha_api_token,
-        log_success=verbose,
+        log_success=False,
     ):
         created_entities.append("input_number.ca_charger_total_consumption_kwh")
 
@@ -193,7 +193,7 @@ def create_entities(
         },
         ha_api_url,
         ha_api_token,
-        log_success=verbose,
+        log_success=False,
     ):
         created_entities.append("input_number.ca_charger_current_power_w")
 
@@ -204,7 +204,7 @@ def create_entities(
         {"friendly_name": "Charger Status", "icon": "mdi:information"},
         ha_api_url,
         ha_api_token,
-        log_success=verbose,
+        log_success=False,
     ):
         created_entities.append("sensor.ca_charger_status")
 
@@ -219,7 +219,7 @@ def create_entities(
         },
         ha_api_url,
         ha_api_token,
-        log_success=verbose,
+        log_success=False,
     ):
         created_entities.append("sensor.ca_charger_power_kw")
 
@@ -239,7 +239,7 @@ def create_entities(
             },
             ha_api_url,
             ha_api_token,
-            log_success=verbose,
+            log_success=False,
         ):
             created_entities.append("sensor.ca_charger_voltage")
 
@@ -255,7 +255,7 @@ def create_entities(
             },
             ha_api_url,
             ha_api_token,
-            log_success=verbose,
+            log_success=False,
         ):
             created_entities.append("sensor.ca_charger_current")
 
@@ -270,7 +270,7 @@ def create_entities(
         },
         ha_api_url,
         ha_api_token,
-        log_success=verbose,
+        log_success=False,
     ):
         created_entities.append("binary_sensor.ca_charger_online")
 
@@ -280,7 +280,7 @@ def create_entities(
         {"friendly_name": "Charger Connector Enabled", "icon": "mdi:power"},
         ha_api_url,
         ha_api_token,
-        log_success=verbose,
+        log_success=False,
     ):
         created_entities.append("binary_sensor.ca_charger_connector_enabled")
 
@@ -292,7 +292,7 @@ def create_entities(
             {"friendly_name": "Charger Name", "icon": "mdi:ev-station"},
             ha_api_url,
             ha_api_token,
-            log_success=verbose,
+            log_success=False,
         ):
             created_entities.append("input_text.ca_charger_name")
 
@@ -303,7 +303,7 @@ def create_entities(
             {"friendly_name": "Charger Serial Number", "icon": "mdi:identifier"},
             ha_api_url,
             ha_api_token,
-            log_success=verbose,
+            log_success=False,
         ):
             created_entities.append("input_text.ca_charger_serial")
 
@@ -315,7 +315,7 @@ def create_entities(
             {"friendly_name": "Charger Connector Mode", "icon": "mdi:cog"},
             ha_api_url,
             ha_api_token,
-            log_success=verbose,
+            log_success=False,
         ):
             created_entities.append("sensor.ca_charger_connector_mode")
 
@@ -326,7 +326,7 @@ def create_entities(
             {"friendly_name": "Charger OCPP Status", "icon": "mdi:network"},
             ha_api_url,
             ha_api_token,
-            log_success=verbose,
+            log_success=False,
         ):
             created_entities.append("sensor.ca_charger_ocpp_status")
 
@@ -337,7 +337,7 @@ def create_entities(
             {"friendly_name": "Charger Error Code", "icon": "mdi:alert"},
             ha_api_url,
             ha_api_token,
-            log_success=verbose,
+            log_success=False,
         ):
             created_entities.append("sensor.ca_charger_error_code")
 
