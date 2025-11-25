@@ -19,7 +19,7 @@ Provide a single add-on/service responsible for fetching, caching, and normalizi
 | `market_api.region` | string | `NL` | Market/area code. |
 | `market_api.api_key` | string | – | Optional API key if provider requires authentication. |
 | `fallback_sensor_id` | string | – | Sensor to read when API fails. |
-| `timezone` | string | `Europe/Amsterdam` | Ensures 15-minute alignment. |
+| `region` | string | `NL` | Ensures 15-minute alignment. |
 | `vat_percent` | number | `0.21` | VAT applied to buy price. |
 | `grid_fee_eur_per_kwh` | number | `0.02` | Added to buy price. |
 | `export_tariff_eur_per_kwh` | number | `0.00` | Added to sell price. |
@@ -34,11 +34,8 @@ Provide a single add-on/service responsible for fetching, caching, and normalizi
 
 | Entity | Direction | Description |
 | --- | --- | --- |
-| `sensor.energy_price_buy` | write | Final buy price (€/kWh) after adjustments. |
-| `sensor.energy_price_sell` | write | Final sell price (€/kWh) after adjustments. |
 | `sensor.energy_price_level` | write | Level enum derived from percentile thresholds. |
 | `sensor.energy_price_percentiles` | write | Attributes for P05, P20, P40, P60, P80 etc. |
-| `sensor.energy_price_next_change` | write | Timestamp of next scheduled price change. |
 | `sensor.energy_price_curve` | write | JSON attribute containing the next 48 hours of prices. |
 | `binary_sensor.energy_price_fetch_status` | write | Indicates whether the last fetch succeeded. |
 | Services (`price_helper.get_curve`, `price_helper.notify_if_threshold_crossed`) | exposed | Allow other automations to pull data or register notifications. |
@@ -47,11 +44,6 @@ Provide a single add-on/service responsible for fetching, caching, and normalizi
 
 - Log fetch latency, cache hits/misses, and API error summaries.
 - Metrics for threshold-crossing events (count per day).
-
-## Future Extensions
-
-- Support multiple markets simultaneously (e.g., NL + BE) for cross-border scenarios.
-- Provide predictive smoothing (moving averages) for more advanced strategies.
 
 ## Related Documentation
 
