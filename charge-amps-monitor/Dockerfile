@@ -13,6 +13,7 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages -r requirement
 
 # Copy application code
 COPY app/ ./app/
+COPY shared/ ./shared/
 COPY run.sh /
 
 # Make run.sh executable

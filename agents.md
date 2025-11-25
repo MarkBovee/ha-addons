@@ -102,9 +102,16 @@ All add-ons run in Docker containers built from Alpine-based Home Assistant imag
 
 ### Entity Creation Best Practices
 
-The REST API `/api/states/` approach has a known limitation: entities created this way do **not** have a `unique_id`, so they cannot be managed from the HA UI (you'll see a warning about this).
+The REST API `/api/states/` approach has a known limitation: entities created this way do **not** have a `unique_id`, so they cannot be managed from the HA UI (you'll see a warning about this). This is by design - the REST API is meant for simple state updates, not full entity registration.
 
-To mitigate issues:
+**Why unique_id matters:**
+- Without `unique_id`, entities cannot be renamed, hidden, or managed in the HA UI
+- Entities will show a warning in the entity settings
+- Entity settings are not persisted across restarts
+
+**Current workaround (REST API):**
+
+To mitigate issues with the REST API approach:
 
 1. **Delete old entities on startup**: Call `delete_old_entities()` at startup to remove any stale entities before recreating them. This ensures a clean state.
 
@@ -122,7 +129,36 @@ To mitigate issues:
 
 4. **Maintain old_entities list**: When renaming entities, add the old names to the `delete_old_entities()` list so they get cleaned up.
 
-5. **Future improvement**: For proper `unique_id` support, consider migrating to MQTT Discovery or a custom integration. The REST API approach works but has this limitation.
+**Future improvement: MQTT Discovery**
+
+For proper `unique_id` support, migrate to MQTT Discovery. This requires:
+- Mosquitto MQTT broker add-on installed in Home Assistant
+- `paho-mqtt` Python dependency
+- Publishing discovery payloads to `homeassistant/sensor/<object_id>/config`
+- Publishing state updates to dedicated state topics
+
+Example MQTT discovery payload for a sensor with unique_id:
+```json
+{
+  "name": "Electricity Import Price",
+  "unique_id": "ep_price_import",
+  "state_topic": "energy-prices/sensor/price_import/state",
+  "unit_of_measurement": "cents/kWh",
+  "device_class": "monetary",
+  "device": {
+    "identifiers": ["energy_prices_addon"],
+    "name": "Energy Prices",
+    "manufacturer": "HA Addons",
+    "model": "Nord Pool Price Monitor"
+  }
+}
+```
+
+This approach creates entities that:
+- Have proper `unique_id` for UI management
+- Are grouped under a device in the HA UI
+- Persist settings across restarts
+- Can be renamed/hidden by users
 
 ---
 

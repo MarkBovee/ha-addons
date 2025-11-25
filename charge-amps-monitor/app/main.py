@@ -12,6 +12,13 @@ import requests
 from .charger_api import ChargerApi
 from .models import ChargePoint, Connector
 
+# Try to import MQTT Discovery module
+try:
+    from shared.ha_mqtt_discovery import MqttDiscovery, EntityConfig, get_mqtt_config_from_env
+    MQTT_AVAILABLE = True
+except ImportError:
+    MQTT_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -348,10 +355,267 @@ def create_entities(
             logger.info(f"  - {entity_id}")
 
 
+def create_entities_mqtt(
+    charge_point: ChargePoint,
+    connector: Connector,
+    mqtt_client: 'MqttDiscovery',
+    verbose: bool = False,
+):
+    """Create or update all Home Assistant entities via MQTT Discovery.
+    
+    This creates entities with proper unique_id support for UI management.
+    """
+    if not charge_point or not connector:
+        logger.warning("Cannot create entities: missing charge point or connector data")
+        return
+
+    if verbose:
+        logger.info("Creating/updating Home Assistant entities via MQTT Discovery...")
+    
+    created_entities = []
+    
+    # Charging binary sensor
+    mqtt_client.publish_binary_sensor(EntityConfig(
+        object_id="charging",
+        name="Charger Charging",
+        state="ON" if connector.is_charging else "OFF",
+        device_class="plug",
+        icon="mdi:ev-station",
+    ))
+    created_entities.append("charging")
+    
+    # Total consumption sensor
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="total_consumption",
+        name="Charger Total Consumption",
+        state=str(connector.total_consumption_kwh),
+        unit_of_measurement="kWh",
+        device_class="energy",
+        state_class="total_increasing",
+        icon="mdi:lightning-bolt",
+    ))
+    created_entities.append("total_consumption")
+    
+    # Current power sensor
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="current_power",
+        name="Charger Current Power",
+        state=str(connector.current_power_w),
+        unit_of_measurement="W",
+        device_class="power",
+        state_class="measurement",
+        icon="mdi:flash",
+    ))
+    created_entities.append("current_power")
+    
+    # Power in kW sensor
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="power_kw",
+        name="Charger Power",
+        state=str(connector.current_power_w / 1000.0),
+        unit_of_measurement="kW",
+        device_class="power",
+        state_class="measurement",
+        icon="mdi:flash",
+    ))
+    created_entities.append("power_kw")
+    
+    # Status sensor
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="status",
+        name="Charger Status",
+        state=charge_point.charge_point_status or "unknown",
+        icon="mdi:information",
+    ))
+    created_entities.append("status")
+    
+    # Online binary sensor
+    mqtt_client.publish_binary_sensor(EntityConfig(
+        object_id="online",
+        name="Charger Online",
+        state="ON" if charge_point.is_online else "OFF",
+        device_class="connectivity",
+        icon="mdi:network",
+    ))
+    created_entities.append("online")
+    
+    # Connector enabled binary sensor
+    mqtt_client.publish_binary_sensor(EntityConfig(
+        object_id="connector_enabled",
+        name="Charger Connector Enabled",
+        state="ON" if connector.enabled else "OFF",
+        icon="mdi:power",
+    ))
+    created_entities.append("connector_enabled")
+    
+    # Calculate average voltage and current
+    avg_voltage = (connector.voltage1 + connector.voltage2 + connector.voltage3) / 3.0
+    avg_current = (connector.current1 + connector.current2 + connector.current3) / 3.0
+    
+    if avg_voltage > 0:
+        mqtt_client.publish_sensor(EntityConfig(
+            object_id="voltage",
+            name="Charger Voltage",
+            state=str(round(avg_voltage, 1)),
+            unit_of_measurement="V",
+            device_class="voltage",
+            state_class="measurement",
+            icon="mdi:lightning-bolt",
+        ))
+        created_entities.append("voltage")
+    
+    if avg_current > 0:
+        mqtt_client.publish_sensor(EntityConfig(
+            object_id="current",
+            name="Charger Current",
+            state=str(round(avg_current, 1)),
+            unit_of_measurement="A",
+            device_class="current",
+            state_class="measurement",
+            icon="mdi:current-ac",
+        ))
+        created_entities.append("current")
+    
+    # Charger info sensors
+    if charge_point.name:
+        mqtt_client.publish_sensor(EntityConfig(
+            object_id="name",
+            name="Charger Name",
+            state=charge_point.name,
+            icon="mdi:ev-station",
+            entity_category="diagnostic",
+        ))
+        created_entities.append("name")
+    
+    if charge_point.serial_number:
+        mqtt_client.publish_sensor(EntityConfig(
+            object_id="serial",
+            name="Charger Serial Number",
+            state=charge_point.serial_number,
+            icon="mdi:identifier",
+            entity_category="diagnostic",
+        ))
+        created_entities.append("serial")
+    
+    if connector.mode:
+        mqtt_client.publish_sensor(EntityConfig(
+            object_id="connector_mode",
+            name="Charger Connector Mode",
+            state=connector.mode,
+            icon="mdi:cog",
+            entity_category="diagnostic",
+        ))
+        created_entities.append("connector_mode")
+    
+    if connector.ocpp_status:
+        mqtt_client.publish_sensor(EntityConfig(
+            object_id="ocpp_status",
+            name="Charger OCPP Status",
+            state=connector.ocpp_status,
+            icon="mdi:network",
+            entity_category="diagnostic",
+        ))
+        created_entities.append("ocpp_status")
+    
+    if connector.error_code:
+        mqtt_client.publish_sensor(EntityConfig(
+            object_id="error_code",
+            name="Charger Error Code",
+            state=connector.error_code,
+            icon="mdi:alert",
+            entity_category="diagnostic",
+        ))
+        created_entities.append("error_code")
+    
+    if verbose:
+        logger.info(f"Created {len(created_entities)} entities via MQTT Discovery:")
+        logger.info("  Entities have unique_id and can be managed from HA UI")
+        for entity_id in created_entities:
+            logger.info(f"  - sensor.charge_amps_{entity_id}")
+
+
+def update_entities_mqtt(
+    charge_point: ChargePoint,
+    connector: Connector,
+    mqtt_client: 'MqttDiscovery',
+):
+    """Update entity states via MQTT (without republishing discovery config)."""
+    if not charge_point or not connector:
+        return
+    
+    # Update main sensors
+    mqtt_client.update_state("binary_sensor", "charging", 
+                             "ON" if connector.is_charging else "OFF")
+    mqtt_client.update_state("sensor", "total_consumption", 
+                             str(connector.total_consumption_kwh))
+    mqtt_client.update_state("sensor", "current_power", 
+                             str(connector.current_power_w))
+    mqtt_client.update_state("sensor", "power_kw", 
+                             str(connector.current_power_w / 1000.0))
+    mqtt_client.update_state("sensor", "status", 
+                             charge_point.charge_point_status or "unknown")
+    mqtt_client.update_state("binary_sensor", "online", 
+                             "ON" if charge_point.is_online else "OFF")
+    mqtt_client.update_state("binary_sensor", "connector_enabled", 
+                             "ON" if connector.enabled else "OFF")
+    
+    # Update voltage/current if available
+    avg_voltage = (connector.voltage1 + connector.voltage2 + connector.voltage3) / 3.0
+    avg_current = (connector.current1 + connector.current2 + connector.current3) / 3.0
+    
+    if avg_voltage > 0:
+        mqtt_client.update_state("sensor", "voltage", str(round(avg_voltage, 1)))
+    if avg_current > 0:
+        mqtt_client.update_state("sensor", "current", str(round(avg_current, 1)))
+
+
+def setup_mqtt_client() -> Optional['MqttDiscovery']:
+    """Set up MQTT Discovery client if available.
+    
+    Returns:
+        MqttDiscovery client if connected, None otherwise
+    """
+    if not MQTT_AVAILABLE:
+        logger.info("MQTT Discovery not available (paho-mqtt not installed)")
+        return None
+    
+    mqtt_config = get_mqtt_config_from_env()
+    
+    mqtt_host = os.getenv('MQTT_HOST', mqtt_config['mqtt_host'])
+    mqtt_port = int(os.getenv('MQTT_PORT', mqtt_config['mqtt_port']))
+    mqtt_user = os.getenv('MQTT_USER', mqtt_config['mqtt_user'])
+    mqtt_password = os.getenv('MQTT_PASSWORD', mqtt_config['mqtt_password'])
+    
+    logger.info("Attempting MQTT Discovery connection to %s:%d...", mqtt_host, mqtt_port)
+    
+    try:
+        mqtt_client = MqttDiscovery(
+            addon_name="Charge Amps Monitor",
+            addon_id="charge_amps",
+            mqtt_host=mqtt_host,
+            mqtt_port=mqtt_port,
+            mqtt_user=mqtt_user,
+            mqtt_password=mqtt_password,
+            manufacturer="Charge Amps",
+            model="EV Charger"
+        )
+        
+        if mqtt_client.connect(timeout=10.0):
+            logger.info("MQTT Discovery connected - entities will have unique_id")
+            return mqtt_client
+        else:
+            logger.warning("MQTT connection failed, falling back to REST API")
+            return None
+            
+    except Exception as e:
+        logger.warning("MQTT setup failed (%s), falling back to REST API", e)
+        return None
+
+
 def update_charger_status(
     charger_api: ChargerApi, ha_api_url: str, ha_api_token: str, verbose: bool = False
 ) -> bool:
-    """Update charger status and Home Assistant entities."""
+    """Update charger status and Home Assistant entities via REST API."""
     try:
         charge_points = charger_api.get_charge_points()
 
@@ -386,6 +650,45 @@ def update_charger_status(
         return False
 
 
+def update_charger_status_mqtt(
+    charger_api: ChargerApi, mqtt_client: 'MqttDiscovery', verbose: bool = False
+) -> bool:
+    """Update charger status via MQTT Discovery."""
+    try:
+        charge_points = charger_api.get_charge_points()
+
+        if not charge_points or len(charge_points) == 0:
+            logger.warning("No charge points found")
+            return False
+
+        charge_point = charge_points[0]
+        connector = charge_point.connectors[0] if charge_point.connectors else None
+
+        if not connector:
+            logger.warning(f"No connector found on charge point {charge_point.id}")
+            return False
+
+        if verbose:
+            # First run: publish full discovery config
+            create_entities_mqtt(charge_point, connector, mqtt_client, verbose=True)
+        else:
+            # Subsequent runs: just update states
+            update_entities_mqtt(charge_point, connector, mqtt_client)
+
+        logger.info(
+            f"Charger status updated (MQTT): {charge_point.name} - "
+            f"Charging={connector.is_charging}, "
+            f"TotalKwh={connector.total_consumption_kwh:.2f}, "
+            f"Power={connector.current_power_w:.0f}W"
+        )
+
+        return True
+
+    except Exception as ex:
+        logger.error(f"Failed to update charger status via MQTT: {ex}", exc_info=True)
+        return False
+
+
 def main():
     """Main application entry point."""
     global shutdown_flag
@@ -403,18 +706,15 @@ def main():
 
     ha_api_url = get_ha_api_url()
     ha_api_token = get_ha_api_token()
+    
+    mqtt_client = None
 
     # Validate configuration
     if not email or not password:
         logger.error("Missing required configuration: email and password must be set")
         sys.exit(1)
 
-    if not ha_api_token:
-        logger.error("Missing Home Assistant API token")
-        sys.exit(1)
-
     logger.info("Starting EV Charger Monitor addon")
-    logger.info(f"HA API Token present: {'YES' if ha_api_token else 'NO'} (length: {len(ha_api_token) if ha_api_token else 0})")
     # Mask email for security (only show first char and domain)
     if email:
         email_parts = email.split("@")
@@ -428,7 +728,6 @@ def main():
     logger.info(f"Host Name: {host_name}")
     logger.info(f"Base URL: {base_url}")
     logger.info(f"Update Interval: {update_interval} minutes")
-    logger.info(f"Home Assistant API URL: {ha_api_url}")
 
     # Initialize API client
     charger_api = ChargerApi(email, password, host_name, base_url)
@@ -440,50 +739,73 @@ def main():
 
     logger.info("Successfully authenticated with Charge Amps API")
 
-    # Test Home Assistant API connection
-    try:
-        test_url = f"{ha_api_url}/api/states"
-        test_headers = {
-            "Authorization": f"Bearer {ha_api_token}",
-            "Content-Type": "application/json",
-        }
-        test_response = requests.get(test_url, headers=test_headers, timeout=10)
-        if test_response.ok:
-            logger.info("Home Assistant API connection successful")
-        else:
-            logger.warning(
-                f"Home Assistant API test failed: {test_response.status_code} - {test_response.text[:200]}"
-            )
-    except Exception as ex:
-        logger.warning(f"Home Assistant API test exception: {ex}")
+    # Try MQTT Discovery first (provides unique_id for UI management)
+    mqtt_client = setup_mqtt_client()
+    use_mqtt = mqtt_client is not None
 
-    # Delete old entities before creating new ones
-    delete_old_entities(ha_api_url, ha_api_token)
+    if not use_mqtt:
+        # Fall back to REST API
+        if not ha_api_token:
+            logger.error("Missing Home Assistant API token and MQTT not available")
+            sys.exit(1)
+        
+        logger.info(f"Using REST API fallback: {ha_api_url}")
+        
+        # Test Home Assistant API connection
+        try:
+            test_url = f"{ha_api_url}/api/states"
+            test_headers = {
+                "Authorization": f"Bearer {ha_api_token}",
+                "Content-Type": "application/json",
+            }
+            test_response = requests.get(test_url, headers=test_headers, timeout=10)
+            if test_response.ok:
+                logger.info("Home Assistant API connection successful")
+            else:
+                logger.warning(
+                    f"Home Assistant API test failed: {test_response.status_code} - {test_response.text[:200]}"
+                )
+        except Exception as ex:
+            logger.warning(f"Home Assistant API test exception: {ex}")
+
+        # Delete old entities before creating new ones (REST API only)
+        delete_old_entities(ha_api_url, ha_api_token)
 
     # Initial update (with verbose entity logging)
     logger.info("Performing initial charger status update...")
-    update_charger_status(charger_api, ha_api_url, ha_api_token, verbose=True)
+    if use_mqtt:
+        update_charger_status_mqtt(charger_api, mqtt_client, verbose=True)
+    else:
+        update_charger_status(charger_api, ha_api_url, ha_api_token, verbose=True)
 
     # Main loop
     update_interval_seconds = update_interval * 60
     logger.info(f"Starting update loop (every {update_interval} minutes)...")
 
-    while not shutdown_flag:
-        try:
-            time.sleep(update_interval_seconds)
+    try:
+        while not shutdown_flag:
+            try:
+                time.sleep(update_interval_seconds)
 
-            if shutdown_flag:
+                if shutdown_flag:
+                    break
+
+                logger.info("Updating charger status...")
+                if use_mqtt and mqtt_client and mqtt_client.is_connected():
+                    update_charger_status_mqtt(charger_api, mqtt_client)
+                else:
+                    update_charger_status(charger_api, ha_api_url, ha_api_token)
+
+            except KeyboardInterrupt:
+                logger.info("Received keyboard interrupt, stopping...")
                 break
-
-            logger.info("Updating charger status...")
-            update_charger_status(charger_api, ha_api_url, ha_api_token)
-
-        except KeyboardInterrupt:
-            logger.info("Received keyboard interrupt, stopping...")
-            break
-        except Exception as ex:
-            logger.error(f"Error in update loop: {ex}", exc_info=True)
-            # Continue loop even on error
+            except Exception as ex:
+                logger.error(f"Error in update loop: {ex}", exc_info=True)
+                # Continue loop even on error
+    finally:
+        # Clean up MQTT connection
+        if mqtt_client:
+            mqtt_client.disconnect()
 
     logger.info("EV Charger Monitor addon stopped")
 

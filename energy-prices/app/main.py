@@ -7,12 +7,19 @@ import json
 import os
 import requests
 from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from zoneinfo import ZoneInfo
 
 from .nordpool_api import NordPoolApi
 from .models import PriceInterval
 from .price_calculator import PriceCalculator
+
+# Try to import MQTT Discovery module
+try:
+    from shared.ha_mqtt_discovery import MqttDiscovery, EntityConfig, get_mqtt_config_from_env
+    MQTT_AVAILABLE = True
+except ImportError:
+    MQTT_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(
@@ -30,6 +37,8 @@ def signal_handler(signum, frame):
     global shutdown_flag
     logger.info("Received signal %d, initiating graceful shutdown...", signum)
     shutdown_flag = True
+
+
 def load_config() -> dict:
     """Load configuration from /data/options.json (HA Supervisor pattern).
     
@@ -407,6 +416,139 @@ def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = 
         logger.error("Failed to update HA entities: %s", e, exc_info=True)
 
 
+def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run: bool = False):
+    """Update Home Assistant entities via MQTT Discovery.
+    
+    This creates entities with proper unique_id support for UI management.
+    
+    Args:
+        data: Processed price data dictionary
+        mqtt_client: MQTT Discovery client
+        first_run: If True, publish full discovery config; otherwise just state updates
+    """
+    try:
+        if first_run:
+            # Publish full discovery config on first run
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="price_import",
+                name="Electricity Import Price",
+                state=str(round(data['current_import'], 4)),
+                unit_of_measurement="cents/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:currency-eur",
+                attributes={
+                    'price_curve': data['price_curve_import'],
+                    'percentiles': data['percentiles'],
+                    'last_update': data['last_update']
+                }
+            ))
+            
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="price_export",
+                name="Electricity Export Price",
+                state=str(round(data['current_export'], 4)),
+                unit_of_measurement="cents/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:currency-eur",
+                attributes={
+                    'price_curve': data['price_curve_export'],
+                    'last_update': data['last_update']
+                }
+            ))
+            
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="price_level",
+                name="Electricity Price Level",
+                state=data['price_level'],
+                icon="mdi:gauge",
+                attributes={
+                    'current_price': data['current_import'],
+                    'p20': data['percentiles']['p20'],
+                    'p40': data['percentiles']['p40'],
+                    'p60': data['percentiles']['p60'],
+                    'classification_rules': 'None: <P20, Low: P20-P40, Medium: P40-P60, High: >=P60'
+                }
+            ))
+            
+            logger.info("Created Home Assistant entities via MQTT Discovery:")
+            logger.info("  • sensor.energy_prices_price_import: %.4f cents/kWh", data['current_import'])
+            logger.info("  • sensor.energy_prices_price_export: %.4f cents/kWh", data['current_export'])
+            logger.info("  • sensor.energy_prices_price_level: %s", data['price_level'])
+            logger.info("Entities have unique_id and can be managed from HA UI")
+        else:
+            # Just update state values
+            mqtt_client.update_state("sensor", "price_import", 
+                                     str(round(data['current_import'], 4)),
+                                     {'price_curve': data['price_curve_import'],
+                                      'percentiles': data['percentiles'],
+                                      'last_update': data['last_update']})
+            
+            mqtt_client.update_state("sensor", "price_export",
+                                     str(round(data['current_export'], 4)),
+                                     {'price_curve': data['price_curve_export'],
+                                      'last_update': data['last_update']})
+            
+            mqtt_client.update_state("sensor", "price_level",
+                                     data['price_level'],
+                                     {'current_price': data['current_import'],
+                                      'p20': data['percentiles']['p20'],
+                                      'p40': data['percentiles']['p40'],
+                                      'p60': data['percentiles']['p60']})
+            
+            logger.info("Updated MQTT entities: import=%.4f, export=%.4f, level=%s",
+                       data['current_import'], data['current_export'], data['price_level'])
+        
+    except Exception as e:
+        logger.error("Failed to update HA entities via MQTT: %s", e, exc_info=True)
+
+
+def setup_mqtt_client(config: dict) -> Optional['MqttDiscovery']:
+    """Set up MQTT Discovery client if available.
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        MqttDiscovery client if connected, None otherwise
+    """
+    if not MQTT_AVAILABLE:
+        logger.info("MQTT Discovery not available (paho-mqtt not installed)")
+        return None
+    
+    mqtt_config = get_mqtt_config_from_env()
+    
+    # Allow config override
+    mqtt_host = config.get('mqtt_host', mqtt_config['mqtt_host'])
+    mqtt_port = config.get('mqtt_port', mqtt_config['mqtt_port'])
+    mqtt_user = config.get('mqtt_user', mqtt_config['mqtt_user'])
+    mqtt_password = config.get('mqtt_password', mqtt_config['mqtt_password'])
+    
+    logger.info("Attempting MQTT Discovery connection to %s:%d...", mqtt_host, mqtt_port)
+    
+    try:
+        mqtt_client = MqttDiscovery(
+            addon_name="Energy Prices",
+            addon_id="energy_prices",
+            mqtt_host=mqtt_host,
+            mqtt_port=mqtt_port,
+            mqtt_user=mqtt_user,
+            mqtt_password=mqtt_password,
+            manufacturer="HA Addons",
+            model="Nord Pool Price Monitor"
+        )
+        
+        if mqtt_client.connect(timeout=10.0):
+            logger.info("MQTT Discovery connected - entities will have unique_id")
+            return mqtt_client
+        else:
+            logger.warning("MQTT connection failed, falling back to REST API")
+            return None
+            
+    except Exception as e:
+        logger.warning("MQTT setup failed (%s), falling back to REST API", e)
+        return None
 
 
 def main():
@@ -417,6 +559,8 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
+    mqtt_client = None
+    
     try:
         # Load configuration
         config = load_config()
@@ -424,14 +568,18 @@ def main():
         # Initialize API client
         nordpool = NordPoolApi()
         
-        # Get HA API config (URL + token)
-        ha_base_url, ha_token = get_ha_api_config()
-        if not ha_token:
-            logger.warning("No HA API token set (SUPERVISOR_TOKEN/HA_API_TOKEN), entity updates will fail")
-        logger.info("Using HA API base URL: %s", ha_base_url)
+        # Try MQTT Discovery first (provides unique_id for UI management)
+        mqtt_client = setup_mqtt_client(config)
+        use_mqtt = mqtt_client is not None
         
-        # Delete old entities on startup to ensure clean state
-        delete_old_entities(ha_base_url, ha_token)
+        # Get HA API config as fallback
+        ha_base_url, ha_token = get_ha_api_config()
+        if not use_mqtt:
+            if not ha_token:
+                logger.warning("No HA API token set (SUPERVISOR_TOKEN/HA_API_TOKEN), entity updates will fail")
+            logger.info("Using REST API fallback: %s", ha_base_url)
+            # Delete old entities on startup to ensure clean state (REST API only)
+            delete_old_entities(ha_base_url, ha_token)
         
         fetch_interval = config['fetch_interval_minutes'] * 60
         run_once = os.getenv('RUN_ONCE', '').lower() in ('1', 'true', 'yes')
@@ -452,8 +600,11 @@ def main():
                 data = fetch_and_process_prices(nordpool, config)
                 
                 if data:
-                    # Update HA entities (log details only on first run)
-                    update_ha_entities(data, ha_base_url, ha_token, first_run=first_run)
+                    # Update HA entities via preferred method
+                    if use_mqtt and mqtt_client and mqtt_client.is_connected():
+                        update_ha_entities_mqtt(data, mqtt_client, first_run=first_run)
+                    else:
+                        update_ha_entities(data, ha_base_url, ha_token, first_run=first_run)
                     first_run = False  # Only log creation details once
                 else:
                     logger.warning("No price data to update entities")
@@ -475,6 +626,10 @@ def main():
     except Exception as e:
         logger.error("Fatal error in main: %s", e, exc_info=True)
         return 1
+    finally:
+        # Clean up MQTT connection
+        if mqtt_client:
+            mqtt_client.disconnect()
     
     logger.info("Energy Prices add-on stopped")
     return 0

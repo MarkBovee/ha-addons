@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.1.0] - 2025-11-25
+
+### Added
+- **MQTT Discovery support** for entities with proper `unique_id`
+  - Entities can now be renamed, hidden, and managed from HA UI
+  - Entities are grouped under "Charge Amps Monitor" device in HA
+  - Automatically detects Mosquitto MQTT broker
+- Optional MQTT configuration: `mqtt_host`, `mqtt_port`, `mqtt_user`, `mqtt_password`
+- Falls back to REST API if MQTT broker is not available
+
+### Changed
+- Entity names when using MQTT: `sensor.charge_amps_power_kw`, etc.
+- Device info shows manufacturer "Charge Amps" and model "EV Charger"
+
 ## [1.0.7] - 2025-11-25
 
 ### Changed

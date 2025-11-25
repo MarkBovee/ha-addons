@@ -5,6 +5,20 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2025-11-25
+
+### Added
+- **MQTT Discovery support** for entities with proper `unique_id`
+  - Entities can now be renamed, hidden, and managed from HA UI
+  - Entities are grouped under "Energy Prices" device in HA
+  - Automatically detects Mosquitto MQTT broker
+- Optional MQTT configuration: `mqtt_host`, `mqtt_port`, `mqtt_user`, `mqtt_password`
+- Falls back to REST API if MQTT broker is not available
+
+### Changed
+- Entity names when using MQTT: `sensor.energy_prices_price_import`, etc.
+- Device info shows manufacturer "HA Addons" and model "Nord Pool Price Monitor"
+
 ## [1.2.6] - 2025-11-25
 
 ### Added
