@@ -149,18 +149,26 @@ class MqttDiscovery:
         """Get discovery config topic for an entity."""
         return f"{self.DISCOVERY_PREFIX}/{component}/{self.addon_id}/{object_id}/config"
     
-    def _on_connect(self, client, userdata, flags, rc, properties=None):
-        """Callback when MQTT connection is established."""
-        if rc == 0:
+    def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        """Callback when MQTT connection is established.
+        
+        Note: paho-mqtt 2.x uses ReasonCode objects instead of int return codes.
+        """
+        # paho-mqtt 2.x: reason_code is a ReasonCode object
+        # Success is when reason_code == 0 or reason_code.is_failure is False
+        if reason_code == 0 or (hasattr(reason_code, 'is_failure') and not reason_code.is_failure):
             logger.info("Connected to MQTT broker at %s:%d", self.mqtt_host, self.mqtt_port)
             self._connected = True
         else:
-            logger.error("Failed to connect to MQTT broker, return code: %d", rc)
+            logger.error("Failed to connect to MQTT broker: %s", reason_code)
             self._connected = False
     
-    def _on_disconnect(self, client, userdata, rc, properties=None):
-        """Callback when MQTT connection is lost."""
-        logger.info("Disconnected from MQTT broker (rc=%d)", rc)
+    def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties=None):
+        """Callback when MQTT connection is lost.
+        
+        Note: paho-mqtt 2.x callback has different signature with disconnect_flags.
+        """
+        logger.info("Disconnected from MQTT broker: %s", reason_code)
         self._connected = False
     
     def connect(self, timeout: float = 10.0) -> bool:
