@@ -95,10 +95,34 @@ All add-ons run in Docker containers built from Alpine-based Home Assistant imag
 
 1. `ChargerApi.authenticate()` posts to `https://my.charge.space/api/auth/login` and stores the JWT token plus expiration buffer. Always call `_ensure_authenticated()` before issuing new API requests.
 2. `ChargerApi.get_charge_points()` posts to `/api/users/chargepoints/owned?expand=ocppConfig`. Parse responses into `ChargePoint` / `Connector` model instances via their `from_dict` helpers instead of reimplementing parsing.
-3. Entity management happens through Home Assistant’s Supervisor REST API:
+3. Entity management happens through Home Assistant's Supervisor REST API:
    - `create_or_update_entity()` issues authenticated POSTs to `/api/states/{entity_id}`.
    - `delete_entity()` removes stale IDs before recreating them; extend the `old_entities` list when renaming.
-4. Whenever you add new Home Assistant entities, ensure friendly names, units, icons, and prefixes follow the existing `ca_` conventions so dashboards remain consistent.
+4. Whenever you add new Home Assistant entities, ensure friendly names, units, icons, and prefixes follow the existing `ca_` or `ep_` conventions so dashboards remain consistent.
+
+### Entity Creation Best Practices
+
+The REST API `/api/states/` approach has a known limitation: entities created this way do **not** have a `unique_id`, so they cannot be managed from the HA UI (you'll see a warning about this).
+
+To mitigate issues:
+
+1. **Delete old entities on startup**: Call `delete_old_entities()` at startup to remove any stale entities before recreating them. This ensures a clean state.
+
+2. **Track first run**: Only log entity creation details once (first run), then use compact logging for subsequent updates:
+   ```python
+   first_run = True
+   while not shutdown_flag:
+       update_ha_entities(data, first_run=first_run)
+       first_run = False
+   ```
+
+3. **Use consistent naming**: Entity IDs should use a prefix unique to your add-on:
+   - `ca_` for charge-amps-monitor (e.g., `sensor.ca_charger_power_kw`)
+   - `ep_` for energy-prices (e.g., `sensor.ep_price_import`)
+
+4. **Maintain old_entities list**: When renaming entities, add the old names to the `delete_old_entities()` list so they get cleaned up.
+
+5. **Future improvement**: For proper `unique_id` support, consider migrating to MQTT Discovery or a custom integration. The REST API approach works but has this limitation.
 
 ---
 

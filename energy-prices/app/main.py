@@ -127,7 +127,64 @@ def get_ha_api_config() -> tuple[str, str]:
     return base_url.rstrip('/'), token
 
 
-def create_or_update_entity(entity_id: str, state: str, attributes: dict, base_url: str, token: str):
+def delete_entity(entity_id: str, base_url: str, token: str) -> bool:
+    """Delete a Home Assistant entity.
+    
+    Args:
+        entity_id: Entity ID to delete
+        base_url: Base URL for HA API
+        token: API token for authentication
+        
+    Returns:
+        True if deleted, False otherwise
+    """
+    try:
+        url = f"{base_url}/states/{entity_id}"
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json'
+        }
+        response = requests.delete(url, headers=headers, timeout=10)
+        if response.ok:
+            logger.info("Deleted old entity: %s", entity_id)
+            return True
+        else:
+            logger.debug("Entity %s not found or already deleted", entity_id)
+            return False
+    except Exception as e:
+        logger.debug("Exception deleting entity %s: %s", entity_id, e)
+        return False
+
+
+def delete_old_entities(base_url: str, token: str):
+    """Delete old entities that may have been created with different naming.
+    
+    This ensures clean state on startup and prevents duplicate entities.
+    """
+    old_entities = [
+        # Current entity names (delete to recreate fresh)
+        'sensor.ep_price_import',
+        'sensor.ep_price_export', 
+        'sensor.ep_price_level',
+        # Any legacy names from development
+        'sensor.energy_price_import',
+        'sensor.energy_price_export',
+        'sensor.energy_price_level',
+    ]
+    
+    logger.info("Cleaning up old entities...")
+    deleted_count = 0
+    for entity_id in old_entities:
+        if delete_entity(entity_id, base_url, token):
+            deleted_count += 1
+    
+    if deleted_count > 0:
+        logger.info("Deleted %d old entities", deleted_count)
+    else:
+        logger.info("No old entities found to delete")
+
+
+def create_or_update_entity(entity_id: str, state: str, attributes: dict, base_url: str, token: str, log_success: bool = True):
     """Create or update a Home Assistant entity.
     
     Args:
@@ -152,7 +209,8 @@ def create_or_update_entity(entity_id: str, state: str, attributes: dict, base_u
     
     response = requests.post(url, json=payload, headers=headers, timeout=10)
     response.raise_for_status()
-    logger.debug("Updated entity %s: state=%s", entity_id, state)
+    if log_success:
+        logger.debug("Updated entity %s: state=%s", entity_id, state)
 
 
 def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[dict]:
@@ -269,13 +327,14 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         return None
 
 
-def update_ha_entities(data: dict, base_url: str, token: str):
+def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = False):
     """Update Home Assistant entities with price data.
     
     Args:
         data: Processed price data dictionary
         base_url: Base URL for HA API
         token: API token
+        first_run: If True, log entity creation details (only on first run)
     """
     try:
         # Update sensor.ep_price_import
@@ -291,7 +350,8 @@ def update_ha_entities(data: dict, base_url: str, token: str):
                 'last_update': data['last_update']
             },
             base_url,
-            token
+            token,
+            log_success=first_run
         )
         
         # Update sensor.ep_price_export
@@ -306,7 +366,8 @@ def update_ha_entities(data: dict, base_url: str, token: str):
                 'last_update': data['last_update']
             },
             base_url,
-            token
+            token,
+            log_success=first_run
         )
         
         # Update sensor.ep_price_level
@@ -322,16 +383,21 @@ def update_ha_entities(data: dict, base_url: str, token: str):
                 'classification_rules': 'None: <P20, Low: P20-P40, Medium: P40-P60, High: >=P60'
             },
             base_url,
-            token
+            token,
+            log_success=first_run
         )
         
-        # Log created entities
-        logger.info("Updated Home Assistant entities:")
-        logger.info("  • sensor.ep_price_import: %.4f cents/kWh (import price with VAT, markup, tax)", data['current_import'])
-        logger.info("  • sensor.ep_price_export: %.4f cents/kWh (export/feed-in price)", data['current_export'])
-        logger.info("  • sensor.ep_price_level: %s (None/Low/Medium/High based on percentiles)", data['price_level'])
-        logger.info("Each sensor includes price_curve attribute with %d intervals for today+tomorrow", 
-                   len(data['price_curve_import']))
+        # Log entity details on first run
+        if first_run:
+            logger.info("Created Home Assistant entities:")
+            logger.info("  • sensor.ep_price_import: %.4f cents/kWh (import price with VAT, markup, tax)", data['current_import'])
+            logger.info("  • sensor.ep_price_export: %.4f cents/kWh (export/feed-in price)", data['current_export'])
+            logger.info("  • sensor.ep_price_level: %s (None/Low/Medium/High based on percentiles)", data['price_level'])
+            logger.info("Each sensor includes price_curve attribute with %d intervals for today+tomorrow", 
+                       len(data['price_curve_import']))
+        else:
+            logger.info("Updated entities: import=%.4f, export=%.4f, level=%s",
+                       data['current_import'], data['current_export'], data['price_level'])
         
     except Exception as e:
         logger.error("Failed to update HA entities: %s", e, exc_info=True)
@@ -360,9 +426,15 @@ def main():
             logger.warning("No HA API token set (SUPERVISOR_TOKEN/HA_API_TOKEN), entity updates will fail")
         logger.info("Using HA API base URL: %s", ha_base_url)
         
+        # Delete old entities on startup to ensure clean state
+        delete_old_entities(ha_base_url, ha_token)
+        
         fetch_interval = config['fetch_interval_minutes'] * 60
         logger.info("Starting main loop (fetch interval: %d minutes)", 
                    config['fetch_interval_minutes'])
+        
+        # Track first run for entity creation logging
+        first_run = True
         
         # Main loop
         while not shutdown_flag:
@@ -371,8 +443,9 @@ def main():
                 data = fetch_and_process_prices(nordpool, config)
                 
                 if data:
-                    # Update HA entities
-                    update_ha_entities(data, ha_base_url, ha_token)
+                    # Update HA entities (log details only on first run)
+                    update_ha_entities(data, ha_base_url, ha_token, first_run=first_run)
+                    first_run = False  # Only log creation details once
                 else:
                     logger.warning("No price data to update entities")
                 

@@ -5,6 +5,13 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.5] - 2025-11-25
+
+### Changed
+- Delete old entities on startup to ensure clean state
+- Only log entity creation details on first run, subsequent updates show compact log
+- Added delete_entity() and delete_old_entities() functions for cleanup
+
 ## [1.2.4] - 2025-11-25
 
 ### Changed
