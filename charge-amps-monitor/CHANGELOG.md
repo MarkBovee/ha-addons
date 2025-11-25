@@ -2,6 +2,8 @@
 
 All notable changes to this project will be documented in this file.
 
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
 ## [1.0.5] - 2024-11-24
 
 ### Changed
@@ -17,8 +19,6 @@ All notable changes to this project will be documented in this file.
 - Secure authentication with Charge Amps API
 - Comprehensive monitoring of charger status and metrics
 - Support for multiple architectures (aarch64, amd64, armhf, armv7, i386)
-
-### Features
 - Monitor charging status (on/off)
 - Track total consumption (kWh)
 - Monitor current power (W)
