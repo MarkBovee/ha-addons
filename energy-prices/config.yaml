@@ -30,16 +30,8 @@ options:
   export_vat_multiplier: 1.21
   export_markup: 0.0248
   export_energy_tax: 0.1228
-  
-  # MQTT settings (optional - for MQTT Discovery with unique_id support)
-  # Leave empty to auto-detect or fall back to REST API
-  mqtt_host: ""
-  mqtt_port: 1883
-  mqtt_user: ""
-  mqtt_password: ""
 
 # Schema defines the data types for validation
-# Descriptions are in the README - HA UI shows field names from options
 schema:
   delivery_area: str
   currency: str
@@ -51,6 +43,7 @@ schema:
   export_vat_multiplier: float
   export_markup: float
   export_energy_tax: float
+  # Advanced: MQTT settings (optional - auto-detects core-mosquitto by default)
   mqtt_host: str?
   mqtt_port: int?
   mqtt_user: str?

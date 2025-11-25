@@ -18,13 +18,6 @@ options:
   host_name: "my.charge.space"
   base_url: "https://my.charge.space"
   update_interval: 1
-  
-  # MQTT settings (optional - for MQTT Discovery with unique_id support)
-  # Leave empty to auto-detect or fall back to REST API
-  mqtt_host: ""
-  mqtt_port: 1883
-  mqtt_user: ""
-  mqtt_password: ""
 
 schema:
   email: str
@@ -32,6 +25,7 @@ schema:
   host_name: str
   base_url: str
   update_interval: int
+  # Advanced: MQTT settings (optional - auto-detects core-mosquitto by default)
   mqtt_host: str?
   mqtt_port: int?
   mqtt_user: str?

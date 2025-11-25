@@ -14,8 +14,19 @@ export CHARGER_HOST_NAME="${HOST_NAME}"
 export CHARGER_BASE_URL="${BASE_URL}"
 export CHARGER_UPDATE_INTERVAL="${UPDATE_INTERVAL}"
 
+# Export MQTT settings - default: core-mosquitto (HA's built-in MQTT broker)
+export MQTT_HOST=$(bashio::config 'mqtt_host' 'core-mosquitto')
+export MQTT_PORT=$(bashio::config 'mqtt_port' '1883')
+
+# Only export credentials if explicitly configured
+if bashio::config.exists 'mqtt_user' && bashio::config.has_value 'mqtt_user'; then
+    export MQTT_USER=$(bashio::config 'mqtt_user')
+fi
+if bashio::config.exists 'mqtt_password' && bashio::config.has_value 'mqtt_password'; then
+    export MQTT_PASSWORD=$(bashio::config 'mqtt_password')
+fi
+
 # Get Home Assistant API token from Supervisor
-# SUPERVISOR_TOKEN should be automatically available as environment variable
 export HA_API_TOKEN="${SUPERVISOR_TOKEN}"
 export HA_API_URL="http://supervisor/core"
 
@@ -25,6 +36,7 @@ bashio::log.info "Email: ${EMAIL}"
 bashio::log.info "Host Name: ${HOST_NAME}"
 bashio::log.info "Base URL: ${BASE_URL}"
 bashio::log.info "Update Interval: ${UPDATE_INTERVAL} minutes"
+bashio::log.info "MQTT: ${MQTT_HOST}:${MQTT_PORT}"
 if [ -n "${SUPERVISOR_TOKEN}" ]; then
     bashio::log.info "Home Assistant API token: SET"
 else

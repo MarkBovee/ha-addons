@@ -519,11 +519,11 @@ def setup_mqtt_client(config: dict) -> Optional['MqttDiscovery']:
     
     mqtt_config = get_mqtt_config_from_env()
     
-    # Allow config override
-    mqtt_host = config.get('mqtt_host', mqtt_config['mqtt_host'])
-    mqtt_port = config.get('mqtt_port', mqtt_config['mqtt_port'])
-    mqtt_user = config.get('mqtt_user', mqtt_config['mqtt_user'])
-    mqtt_password = config.get('mqtt_password', mqtt_config['mqtt_password'])
+    # Allow config override - treat empty strings as "not configured"
+    mqtt_host = config.get('mqtt_host') or mqtt_config['mqtt_host']
+    mqtt_port = config.get('mqtt_port') or mqtt_config['mqtt_port']
+    mqtt_user = config.get('mqtt_user') or mqtt_config['mqtt_user']
+    mqtt_password = config.get('mqtt_password') or mqtt_config['mqtt_password']
     
     logger.info("Attempting MQTT Discovery connection to %s:%d...", mqtt_host, mqtt_port)
     
