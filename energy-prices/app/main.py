@@ -72,28 +72,34 @@ def load_config() -> dict:
     return config
 
 
-def get_ha_api_token() -> str:
-    """Get Home Assistant Supervisor API token.
-    
+def get_ha_api_config() -> tuple[str, str]:
+    """Get Home Assistant API base URL and token.
+
+    Prefers explicit HA_API_URL if set (for local/dev runs), otherwise
+    falls back to the Supervisor core API URL.
+
     Returns:
-        Supervisor token for authentication
+        Tuple of (base_url, token)
     """
-    return os.getenv('SUPERVISOR_TOKEN', '')
+    token = os.getenv('HA_API_TOKEN') or os.getenv('SUPERVISOR_TOKEN', '')
+    base_url = os.getenv('HA_API_URL') or 'http://supervisor/core/api'
+    return base_url.rstrip('/'), token
 
 
-def create_or_update_entity(entity_id: str, state: str, attributes: dict, token: str):
+def create_or_update_entity(entity_id: str, state: str, attributes: dict, base_url: str, token: str):
     """Create or update a Home Assistant entity.
     
     Args:
         entity_id: Entity ID (e.g., sensor.ep_price_import)
         state: Entity state value
         attributes: Entity attributes dictionary
-        token: Supervisor API token
+        base_url: Base URL for HA API (e.g. http://supervisor/core/api or http://host:8123/api)
+        token: API token for authentication
         
     Raises:
         requests.HTTPError: If API request fails
     """
-    url = f"http://supervisor/core/api/states/{entity_id}"
+    url = f"{base_url}/states/{entity_id}"
     headers = {
         'Authorization': f'Bearer {token}',
         'Content-Type': 'application/json'
@@ -223,12 +229,13 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict,
         return None
 
 
-def update_ha_entities(data: dict, token: str):
+def update_ha_entities(data: dict, base_url: str, token: str):
     """Update Home Assistant entities with price data.
     
     Args:
         data: Processed price data dictionary
-        token: Supervisor API token
+        base_url: Base URL for HA API
+        token: API token
     """
     try:
         # Update sensor.ep_price_import
@@ -243,6 +250,7 @@ def update_ha_entities(data: dict, token: str):
                 'percentiles': data['percentiles'],
                 'last_update': data['last_update']
             },
+            base_url,
             token
         )
         
@@ -257,6 +265,7 @@ def update_ha_entities(data: dict, token: str):
                 'price_curve': data['price_curve_export'],
                 'last_update': data['last_update']
             },
+            base_url,
             token
         )
         
@@ -272,6 +281,7 @@ def update_ha_entities(data: dict, token: str):
                 'p60': data['percentiles']['p60'],
                 'classification_rules': 'None: <P20, Low: P20-P40, Medium: P40-P60, High: >=P60'
             },
+            base_url,
             token
         )
         
@@ -304,10 +314,11 @@ def main():
         export_processor = TemplateProcessor(config['export_price_template'])
         logger.info("Templates validated successfully")
         
-        # Get HA API token
-        ha_token = get_ha_api_token()
+        # Get HA API config (URL + token)
+        ha_base_url, ha_token = get_ha_api_config()
         if not ha_token:
-            logger.warning("SUPERVISOR_TOKEN not set, entity updates will fail")
+            logger.warning("No HA API token set (SUPERVISOR_TOKEN/HA_API_TOKEN), entity updates will fail")
+        logger.info("Using HA API base URL: %s", ha_base_url)
         
         fetch_interval = config['fetch_interval_minutes'] * 60
         logger.info("Starting main loop (fetch interval: %d minutes)", 
@@ -321,7 +332,7 @@ def main():
                 
                 if data:
                     # Update HA entities
-                    update_ha_entities(data, ha_token)
+                    update_ha_entities(data, ha_base_url, ha_token)
                 else:
                     logger.warning("No price data to update entities")
                 
