@@ -109,6 +109,7 @@ def main():
     parser.add_argument("--list", action="store_true", help="List discovered add-ons")
     parser.add_argument("--init-env", action="store_true", help="If set, create a local .env from .env.example for the selected add-on and exit")
     parser.add_argument("--dry-run", action="store_true", help="Show resolved configuration without running")
+    parser.add_argument("--once", action="store_true", help="Run only one iteration then exit (sets RUN_ONCE=1 env var)")
     args = parser.parse_args()
 
     addons = find_addons()
@@ -182,6 +183,11 @@ def main():
     if args.dry_run:
         print("Dry run: not executing script.")
         return 0
+
+    # Set RUN_ONCE env var if --once flag is used
+    if args.once:
+        os.environ["RUN_ONCE"] = "1"
+        print("Running in single-iteration mode (--once)")
 
     rc = run_addon(target)
     return rc

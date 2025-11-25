@@ -145,11 +145,15 @@ def delete_entity(entity_id: str, base_url: str, token: str) -> bool:
             'Content-Type': 'application/json'
         }
         response = requests.delete(url, headers=headers, timeout=10)
-        if response.ok:
-            logger.info("Deleted old entity: %s", entity_id)
+        # 200 = deleted, 404 = not found (already gone)
+        if response.status_code == 200:
+            logger.info("Deleted entity: %s", entity_id)
             return True
+        elif response.status_code == 404:
+            logger.debug("Entity %s not found (already deleted)", entity_id)
+            return False
         else:
-            logger.debug("Entity %s not found or already deleted", entity_id)
+            logger.debug("Delete %s returned %d: %s", entity_id, response.status_code, response.text[:100])
             return False
     except Exception as e:
         logger.debug("Exception deleting entity %s: %s", entity_id, e)
@@ -430,8 +434,13 @@ def main():
         delete_old_entities(ha_base_url, ha_token)
         
         fetch_interval = config['fetch_interval_minutes'] * 60
-        logger.info("Starting main loop (fetch interval: %d minutes)", 
-                   config['fetch_interval_minutes'])
+        run_once = os.getenv('RUN_ONCE', '').lower() in ('1', 'true', 'yes')
+        
+        if run_once:
+            logger.info("Running single iteration (RUN_ONCE mode)")
+        else:
+            logger.info("Starting main loop (fetch interval: %d minutes)", 
+                       config['fetch_interval_minutes'])
         
         # Track first run for entity creation logging
         first_run = True
@@ -451,6 +460,11 @@ def main():
                 
             except Exception as e:
                 logger.error("Error in main loop iteration: %s", e, exc_info=True)
+            
+            # Exit after first iteration if RUN_ONCE is set
+            if run_once:
+                logger.info("Single iteration complete, exiting")
+                break
             
             # Sleep with shutdown check every second
             for _ in range(fetch_interval):

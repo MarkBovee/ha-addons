@@ -132,6 +132,42 @@ To mitigate issues:
 - Environment variables should fall back to safe defaults (`HA_API_URL`, `HA_API_TOKEN`, etc.) like in `get_ha_api_url()` and `get_ha_api_token()`. Mirror that pattern for new settings.
 - Validate inputs early (e.g., ensure intervals are positive integers) and fail fast with clear log messages.
 
+### Using run_addon.py (Universal Add-on Runner)
+
+The `run_addon.py` script at the repository root is the **preferred way to run and test add-ons locally**:
+
+```bash
+# List all available add-ons
+python run_addon.py --list
+
+# Run an add-on (continuous mode)
+python run_addon.py --addon energy-prices
+
+# Run a single iteration then exit (for testing)
+python run_addon.py --addon energy-prices --once
+
+# Initialize .env from .env.example
+python run_addon.py --addon energy-prices --init-env
+
+# Dry run (show config without executing)
+python run_addon.py --addon energy-prices --dry-run
+```
+
+**Key features:**
+- Loads `.env` files automatically (root `.env` → addon `.env`)
+- `--once` flag sets `RUN_ONCE=1` env var to exit after one iteration
+- Validates required environment variables per add-on
+- Normalizes token env vars (`SUPERVISOR_TOKEN` ↔ `HA_API_TOKEN`)
+
+**Add-ons should support `RUN_ONCE` mode:**
+```python
+run_once = os.getenv('RUN_ONCE', '').lower() in ('1', 'true', 'yes')
+if run_once:
+    logger.info("Running single iteration (RUN_ONCE mode)")
+    # ... do work ...
+    break  # Exit after first iteration
+```
+
 ---
 
 ## Workflow Expectations
