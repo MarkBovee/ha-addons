@@ -3,6 +3,7 @@ description: Monitor Charge Amps EV charger status and create Home Assistant ent
 version: "1.0.5"
 slug: charge_amps_ev_charger_monitor
 init: false
+homeassistant_api: true
 arch:
   - aarch64
   - amd64
