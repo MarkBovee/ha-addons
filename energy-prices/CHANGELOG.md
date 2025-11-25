@@ -5,6 +5,15 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2025-11-25
+
+### Added
+- MQTT credentials now configurable in add-on UI (`mqtt_user`, `mqtt_password`)
+- Default MQTT settings exposed: `mqtt_host: core-mosquitto`, `mqtt_port: 1883`
+
+### Fixed
+- Logging now shows full precision for markup and tax values (0.0248 instead of 0.02)
+
 ## [1.3.1] - 2025-11-25
 
 ### Changed

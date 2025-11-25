@@ -1,6 +1,6 @@
 name: Energy Prices
 description: Fetch Nord Pool electricity prices and calculate final costs with configurable price components
-version: "1.3.1"
+version: "1.3.2"
 slug: energy_prices
 init: false
 homeassistant_api: true
@@ -30,6 +30,13 @@ options:
   export_vat_multiplier: 1.21
   export_markup: 0.0248
   export_energy_tax: 0.1228
+  
+  # MQTT settings for Home Assistant Mosquitto broker
+  # Get credentials from Mosquitto add-on configuration
+  mqtt_host: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
 
 # Schema defines the data types for validation
 schema:
