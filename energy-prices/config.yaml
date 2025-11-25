@@ -1,6 +1,6 @@
 name: Energy Prices
 description: Fetch Nord Pool electricity prices and calculate final costs with customizable templates
-version: "1.0.1"
+version: "1.1.0"
 slug: energy_prices
 init: false
 homeassistant_api: true
@@ -16,19 +16,29 @@ options:
   delivery_area: "NL"
   currency: "EUR"
   timezone: "CET"
-  import_price_template: |
-    {% set marktprijs = marktprijs %}
-    {% set opslag_inc = 2.48 %}
-    {% set energiebelasting_inc = 12.28 %}
-    {% set btw = 1.21 %}
-    {{ (marktprijs * btw + opslag_inc + energiebelasting_inc) | round(4) }}
-  export_price_template: "{{ marktprijs | round(4) }}"
   fetch_interval_minutes: 60
+  
+  # Import price components (buying from grid)
+  # Formula: (marktprijs * import_vat_multiplier) + import_markup + import_energy_tax
+  import_vat_multiplier: 1.21
+  import_markup: 2.48
+  import_energy_tax: 12.28
+  
+  # Export price components (selling to grid / feed-in)
+  # Formula: (marktprijs * export_vat_multiplier) + export_markup + export_energy_tax
+  # Default: market price only (no VAT, no fees for feed-in)
+  export_vat_multiplier: 1.0
+  export_markup: 0.0
+  export_energy_tax: 0.0
 
 schema:
   delivery_area: str
   currency: str
   timezone: str
-  import_price_template: str
-  export_price_template: str
   fetch_interval_minutes: int(1,1440)
+  import_vat_multiplier: float(0,10)?
+  import_markup: float(-100,100)?
+  import_energy_tax: float(-100,100)?
+  export_vat_multiplier: float(0,10)?
+  export_markup: float(-100,100)?
+  export_energy_tax: float(-100,100)?

@@ -1,6 +1,6 @@
 # Energy Prices Add-on
 
-Fetch Nord Pool day-ahead electricity prices and calculate final import/export costs using customizable Jinja2 templates.
+Fetch Nord Pool day-ahead electricity prices and calculate final import/export costs using simple price component fields.
 
 ## Overview
 
@@ -12,7 +12,7 @@ This add-on connects to the Nord Pool Day-Ahead Prices API to fetch 15-minute in
 
 ## Features
 
-- **Flexible Price Calculation**: Use Jinja2 templates to define exactly how final prices are calculated
+- **Simple Price Calculation**: Configure VAT, markup, and energy tax separately - no templates required
 - **15-Minute Granularity**: Fetch prices with 15-minute intervals (96 per day)
 - **Price Classification**: Automatic classification of current price as None/Low/Medium/High based on percentiles
 - **48-Hour Forecast**: Price curves with both today's and tomorrow's prices
@@ -52,49 +52,44 @@ Configure the addon through the Home Assistant UI:
 | `delivery_area` | string | `NL` | Nord Pool delivery area (NL for Netherlands) |
 | `currency` | string | `EUR` | Currency for price data |
 | `timezone` | string | `CET` | Timezone for display (data stored in UTC) |
-| `import_price_template` | string | See below | Jinja2 template for calculating import price |
-| `export_price_template` | string | `{{ marktprijs \| round(4) }}` | Jinja2 template for calculating export price |
+| `import_vat_multiplier` | float | `1.21` | VAT multiplier for import (1.21 = 21% VAT) |
+| `import_markup` | float | `2.48` | Fixed markup in cents/kWh for import |
+| `import_energy_tax` | float | `12.28` | Energy tax in cents/kWh for import |
+| `export_vat_multiplier` | float | `1.0` | VAT multiplier for export (1.0 = no VAT) |
+| `export_markup` | float | `0.0` | Fixed markup in cents/kWh for export |
+| `export_energy_tax` | float | `0.0` | Energy tax in cents/kWh for export |
 | `fetch_interval_minutes` | integer | `60` | How often to fetch new prices (1-1440 minutes) |
 
-### Template Examples
+### Price Calculation Formula
 
-#### Dutch Import Price Template (Default)
-```jinja2
-{% set marktprijs = marktprijs %}
-{% set opslag_inc = 2.48 %}
-{% set energiebelasting_inc = 12.28 %}
-{% set btw = 1.21 %}
-{{ (marktprijs * btw + opslag_inc + energiebelasting_inc) | round(4) }}
+The final price is calculated using a simple formula for both import and export:
+
+```
+final_price = (market_price × vat_multiplier) + markup + energy_tax
 ```
 
-**Explanation:**
-- `marktprijs` - Market price in cents/kWh (automatically provided)
-- `opslag_inc` - Grid fee/markup in cents/kWh (2.48 cents)
-- `energiebelasting_inc` - Energy tax in cents/kWh (12.28 cents)
-- `btw` - VAT multiplier (1.21 = 21%)
-- Formula: (market_price × 1.21) + 2.48 + 12.28
+### Dutch Defaults (Import)
 
-#### Dutch Export Price Template (Default)
-```jinja2
-{{ marktprijs | round(4) }}
+The default import settings are configured for a typical Dutch energy contract:
+
+- **VAT Multiplier**: 1.21 (21% VAT)
+- **Markup**: 2.48 cents/kWh (supplier margin, grid costs)
+- **Energy Tax**: 12.28 cents/kWh (energiebelasting)
+
+**Example**: If market price is 10 cents/kWh:
+```
+(10 × 1.21) + 2.48 + 12.28 = 26.86 cents/kWh
 ```
 
-**Explanation:**
-- Export price equals market price (no fees/taxes applied)
-- Rounded to 4 decimal places for precision
+### Export Settings
 
-#### Custom Template Example
-```jinja2
-{% if marktprijs < 10 %}
-  {{ (marktprijs * 1.21 + 1.00) | round(4) }}
-{% else %}
-  {{ (marktprijs * 1.21 + 2.50) | round(4) }}
-{% endif %}
-```
+By default, export uses only the market price (no VAT, markup, or tax):
 
-**Explanation:**
-- Conditional pricing: lower fees when market price is below 10 cents/kWh
-- Demonstrates template flexibility
+- **VAT Multiplier**: 1.0 (no VAT)
+- **Markup**: 0.0 cents/kWh
+- **Energy Tax**: 0.0 cents/kWh
+
+For salderingsregeling or other export contracts, adjust the export components accordingly.
 
 ## Created Entities
 
@@ -208,16 +203,25 @@ For local testing without Home Assistant:
    DELIVERY_AREA=NL
    CURRENCY=EUR
    TIMEZONE=CET
-   IMPORT_PRICE_TEMPLATE={{ (marktprijs * 1.21 + 2.48 + 12.28) | round(4) }}
-   EXPORT_PRICE_TEMPLATE={{ marktprijs | round(4) }}
+   
+   # Import price components
+   IMPORT_VAT_MULTIPLIER=1.21
+   IMPORT_MARKUP=2.48
+   IMPORT_ENERGY_TAX=12.28
+   
+   # Export price components  
+   EXPORT_VAT_MULTIPLIER=1.0
+   EXPORT_MARKUP=0.0
+   EXPORT_ENERGY_TAX=0.0
+   
    FETCH_INTERVAL_MINUTES=60
    HA_API_URL=http://localhost:8123
    HA_API_TOKEN=your_token_here
    ```
 
-3. Run locally:
+3. Run locally using the universal runner (from repo root):
    ```bash
-   python3 run_local.py
+   python run_addon.py --addon energy-prices
    ```
 
 ## Technical Details

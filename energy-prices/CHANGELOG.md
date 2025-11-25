@@ -5,6 +5,35 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-11-25
+
+### Changed
+- **BREAKING**: Replaced Jinja2 templates with simple numeric configuration fields
+  - Removed `import_price_template` and `export_price_template`
+  - Added separate fields for VAT, markup, and energy tax (import and export)
+- Price calculation now uses formula: `(market_price × vat_multiplier) + markup + energy_tax`
+- Configuration is now much easier to edit in Home Assistant UI
+
+### Added
+- `import_vat_multiplier`: VAT multiplier for import (default: 1.21 for 21%)
+- `import_markup`: Fixed markup in cents/kWh (default: 2.48)
+- `import_energy_tax`: Energy tax in cents/kWh (default: 12.28)
+- `export_vat_multiplier`: VAT multiplier for export (default: 1.0)
+- `export_markup`: Fixed markup for export (default: 0.0)
+- `export_energy_tax`: Energy tax for export (default: 0.0)
+
+### Removed
+- Jinja2 template dependency (templates replaced by numeric fields)
+- `import_price_template` configuration option
+- `export_price_template` configuration option
+
+## [1.0.1] - 2025-11-25
+
+### Fixed
+- Docker build on Alpine 3.22+ (added `--break-system-packages` for pip)
+- Added default BUILD_FROM arg for standalone Dockerfile builds
+- Fixed run.sh path to absolute location (/run.sh)
+
 ## [1.0.0] - 2025-11-25
 
 ### Added
@@ -41,4 +70,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fail-fast template validation at startup
 - Linear interpolation for percentile calculations
 
+[1.1.0]: https://github.com/MarkBovee/ha-addons/releases/tag/energy-prices-v1.1.0
+[1.0.1]: https://github.com/MarkBovee/ha-addons/releases/tag/energy-prices-v1.0.1
 [1.0.0]: https://github.com/MarkBovee/ha-addons/releases/tag/energy-prices-v1.0.0

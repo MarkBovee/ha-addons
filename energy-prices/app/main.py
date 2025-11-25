@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from .nordpool_api import NordPoolApi
 from .models import PriceInterval
-from .price_calculator import TemplateProcessor, PriceCalculator
+from .price_calculator import PriceCalculator
 
 # Configure logging
 logging.basicConfig(
@@ -46,30 +46,71 @@ def load_config() -> dict:
     # For local development, allow override via environment
     if not os.path.exists(config_path):
         logger.warning("Config file %s not found, using environment variables", config_path)
-        return {
+        config = {
             'delivery_area': os.getenv('DELIVERY_AREA', 'NL'),
             'currency': os.getenv('CURRENCY', 'EUR'),
             'timezone': os.getenv('TIMEZONE', 'CET'),
-            'import_price_template': os.getenv('IMPORT_PRICE_TEMPLATE', '{{ marktprijs | round(4) }}'),
-            'export_price_template': os.getenv('EXPORT_PRICE_TEMPLATE', '{{ marktprijs | round(4) }}'),
+            'import_vat_multiplier': float(os.getenv('IMPORT_VAT_MULTIPLIER', '1.21')),
+            'import_markup': float(os.getenv('IMPORT_MARKUP', '2.48')),
+            'import_energy_tax': float(os.getenv('IMPORT_ENERGY_TAX', '12.28')),
+            'export_vat_multiplier': float(os.getenv('EXPORT_VAT_MULTIPLIER', '1.0')),
+            'export_markup': float(os.getenv('EXPORT_MARKUP', '0.0')),
+            'export_energy_tax': float(os.getenv('EXPORT_ENERGY_TAX', '0.0')),
             'fetch_interval_minutes': int(os.getenv('FETCH_INTERVAL_MINUTES', '60'))
         }
+        logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
+                   config['delivery_area'], config['currency'], config['timezone'], 
+                   config['fetch_interval_minutes'])
+        logger.info("Import: VAT=%.2f, markup=%.2f, tax=%.2f",
+                   config['import_vat_multiplier'], config['import_markup'], config['import_energy_tax'])
+        logger.info("Export: VAT=%.2f, markup=%.2f, tax=%.2f",
+                   config['export_vat_multiplier'], config['export_markup'], config['export_energy_tax'])
+        return config
     
     with open(config_path, 'r') as f:
         config = json.load(f)
     
-    # Validate required fields
-    required = ['delivery_area', 'currency', 'timezone', 'import_price_template', 
-                'export_price_template', 'fetch_interval_minutes']
+    # Validate required fields (only base fields are strictly required)
+    required = ['delivery_area', 'currency', 'timezone', 'fetch_interval_minutes']
     for field in required:
         if field not in config:
             raise KeyError(f"Required config field missing: {field}")
     
+    # Set defaults for optional price component fields
+    config.setdefault('import_vat_multiplier', 1.21)
+    config.setdefault('import_markup', 2.48)
+    config.setdefault('import_energy_tax', 12.28)
+    config.setdefault('export_vat_multiplier', 1.0)
+    config.setdefault('export_markup', 0.0)
+    config.setdefault('export_energy_tax', 0.0)
+    
     logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
                config['delivery_area'], config['currency'], config['timezone'], 
                config['fetch_interval_minutes'])
+    logger.info("Import: VAT=%.2f, markup=%.2f, tax=%.2f",
+               config['import_vat_multiplier'], config['import_markup'], config['import_energy_tax'])
+    logger.info("Export: VAT=%.2f, markup=%.2f, tax=%.2f",
+               config['export_vat_multiplier'], config['export_markup'], config['export_energy_tax'])
     
     return config
+
+
+def calculate_final_price(market_price: float, vat_multiplier: float, markup: float, energy_tax: float) -> float:
+    """Calculate final price from market price and components.
+    
+    Formula: (market_price * vat_multiplier) + markup + energy_tax
+    
+    Args:
+        market_price: Market price in cents/kWh
+        vat_multiplier: VAT multiplier (e.g., 1.21 for 21% VAT)
+        markup: Fixed markup in cents/kWh
+        energy_tax: Energy tax in cents/kWh
+        
+    Returns:
+        Final price rounded to 4 decimals
+    """
+    result = (market_price * vat_multiplier) + markup + energy_tax
+    return round(result, 4)
 
 
 def get_ha_api_config() -> tuple[str, str]:
@@ -114,16 +155,12 @@ def create_or_update_entity(entity_id: str, state: str, attributes: dict, base_u
     logger.debug("Updated entity %s: state=%s", entity_id, state)
 
 
-def fetch_and_process_prices(nordpool: NordPoolApi, config: dict, 
-                            import_processor: TemplateProcessor,
-                            export_processor: TemplateProcessor) -> Optional[dict]:
-    """Fetch prices, apply templates, calculate percentiles.
+def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[dict]:
+    """Fetch prices, apply price components, calculate percentiles.
     
     Args:
         nordpool: Nord Pool API client
-        config: Configuration dictionary
-        import_processor: Template processor for import prices
-        export_processor: Template processor for export prices
+        config: Configuration dictionary with price component fields
         
     Returns:
         Dictionary with processed prices, percentiles, current_level
@@ -150,7 +187,15 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict,
         logger.info("Fetched %d intervals total (%d today, %d tomorrow)", 
                    len(all_intervals), len(today_intervals), len(tomorrow_intervals))
         
-        # Apply templates to calculate final prices
+        # Extract price components from config
+        import_vat = config['import_vat_multiplier']
+        import_markup = config['import_markup']
+        import_tax = config['import_energy_tax']
+        export_vat = config['export_vat_multiplier']
+        export_markup = config['export_markup']
+        export_tax = config['export_energy_tax']
+        
+        # Calculate final prices using component formula
         import_prices = []
         export_prices = []
         price_curve_import = []
@@ -159,27 +204,22 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict,
         for interval in all_intervals:
             market_price = interval.price_cents_kwh()
             
-            try:
-                import_price = import_processor.calculate_price(market_price)
-                export_price = export_processor.calculate_price(market_price)
-                
-                import_prices.append(import_price)
-                export_prices.append(export_price)
-                
-                price_curve_import.append({
-                    'start': interval.start.isoformat(),
-                    'end': interval.end.isoformat(),
-                    'price': import_price
-                })
-                price_curve_export.append({
-                    'start': interval.start.isoformat(),
-                    'end': interval.end.isoformat(),
-                    'price': export_price
-                })
-            except Exception as e:
-                logger.warning("Failed to calculate price for interval %s: %s", 
-                             interval.start.isoformat(), e)
-                continue
+            import_price = calculate_final_price(market_price, import_vat, import_markup, import_tax)
+            export_price = calculate_final_price(market_price, export_vat, export_markup, export_tax)
+            
+            import_prices.append(import_price)
+            export_prices.append(export_price)
+            
+            price_curve_import.append({
+                'start': interval.start.isoformat(),
+                'end': interval.end.isoformat(),
+                'price': import_price
+            })
+            price_curve_export.append({
+                'start': interval.start.isoformat(),
+                'end': interval.end.isoformat(),
+                'price': export_price
+            })
         
         if not import_prices:
             logger.error("No prices calculated successfully")
@@ -308,12 +348,6 @@ def main():
         # Initialize API client
         nordpool = NordPoolApi()
         
-        # Initialize template processors (fail-fast validation)
-        logger.info("Validating templates...")
-        import_processor = TemplateProcessor(config['import_price_template'])
-        export_processor = TemplateProcessor(config['export_price_template'])
-        logger.info("Templates validated successfully")
-        
         # Get HA API config (URL + token)
         ha_base_url, ha_token = get_ha_api_config()
         if not ha_token:
@@ -328,7 +362,7 @@ def main():
         while not shutdown_flag:
             try:
                 # Fetch and process prices
-                data = fetch_and_process_prices(nordpool, config, import_processor, export_processor)
+                data = fetch_and_process_prices(nordpool, config)
                 
                 if data:
                     # Update HA entities
