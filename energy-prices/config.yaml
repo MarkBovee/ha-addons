@@ -1,0 +1,34 @@
+name: Energy Prices
+description: Fetch Nord Pool electricity prices and calculate final costs with customizable templates
+version: "1.0.0"
+slug: energy_prices
+init: false
+homeassistant_api: true
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+# Options schema for UI-managed settings
+options:
+  delivery_area: "NL"
+  currency: "EUR"
+  timezone: "CET"
+  import_price_template: |
+    {% set marktprijs = marktprijs %}
+    {% set opslag_inc = 2.48 %}
+    {% set energiebelasting_inc = 12.28 %}
+    {% set btw = 1.21 %}
+    {{ (marktprijs * btw + opslag_inc + energiebelasting_inc) | round(4) }}
+  export_price_template: "{{ marktprijs | round(4) }}"
+  fetch_interval_minutes: 60
+
+schema:
+  delivery_area: str
+  currency: str
+  timezone: str
+  import_price_template: str
+  export_price_template: str
+  fetch_interval_minutes: int(1,1440)
