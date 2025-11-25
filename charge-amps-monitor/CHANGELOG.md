@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.7] - 2025-11-25
+
+### Changed
+- Reduced routine logging noise by limiting entity-by-entity messages to the initial verbose startup pass.
+
+### Added
+- Packaged a Charge Amps icon (`icon.png`) so the add-on is recognizable inside Home Assistant.
+
 ## [1.0.6] - 2025-11-25
 
 ### Fixed

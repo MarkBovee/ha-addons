@@ -341,10 +341,11 @@ def create_entities(
         ):
             created_entities.append("sensor.ca_charger_error_code")
 
-    # Log summary of created entities
-    logger.info(f"Successfully created/updated {len(created_entities)} entities:")
-    for entity_id in created_entities:
-        logger.info(f"  - {entity_id}")
+    # Log summary only when verbose to avoid spamming each update cycle
+    if verbose:
+        logger.info(f"Successfully created/updated {len(created_entities)} entities:")
+        for entity_id in created_entities:
+            logger.info(f"  - {entity_id}")
 
 
 def update_charger_status(
