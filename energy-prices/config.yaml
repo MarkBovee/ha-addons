@@ -1,6 +1,6 @@
 name: Energy Prices
-description: Fetch Nord Pool electricity prices and calculate final costs with customizable templates
-version: "1.1.0"
+description: Fetch Nord Pool electricity prices and calculate final costs with configurable price components
+version: "1.2.1"
 slug: energy_prices
 init: false
 homeassistant_api: true
@@ -19,26 +19,44 @@ options:
   fetch_interval_minutes: 60
   
   # Import price components (buying from grid)
-  # Formula: (marktprijs * import_vat_multiplier) + import_markup + import_energy_tax
   import_vat_multiplier: 1.21
   import_markup: 2.48
   import_energy_tax: 12.28
   
   # Export price components (selling to grid / feed-in)
-  # Formula: (marktprijs * export_vat_multiplier) + export_markup + export_energy_tax
-  # Default: market price only (no VAT, no fees for feed-in)
-  export_vat_multiplier: 1.0
-  export_markup: 0.0
-  export_energy_tax: 0.0
+  # Using same values as import for Dutch salderingsregeling
+  export_vat_multiplier: 1.21
+  export_markup: 2.48
+  export_energy_tax: 12.28
 
 schema:
-  delivery_area: str
-  currency: str
-  timezone: str
-  fetch_interval_minutes: int(1,1440)
-  import_vat_multiplier: float(0,10)?
-  import_markup: float(-100,100)?
-  import_energy_tax: float(-100,100)?
-  export_vat_multiplier: float(0,10)?
-  export_markup: float(-100,100)?
-  export_energy_tax: float(-100,100)?
+  delivery_area:
+    name: Delivery Area
+    description: "Nord Pool delivery area code (e.g., NL for Netherlands, BE for Belgium)"
+  currency:
+    name: Currency
+    description: "Currency code for price data (EUR, NOK, SEK, DKK)"
+  timezone:
+    name: Timezone
+    description: "Timezone for display purposes (CET, UTC, etc.)"
+  fetch_interval_minutes:
+    name: Fetch Interval (minutes)
+    description: "How often to fetch new prices from Nord Pool (1-1440 minutes)"
+  import_vat_multiplier:
+    name: Import VAT Multiplier
+    description: "VAT multiplier for import prices. Use 1.21 for 21% VAT (Netherlands). Formula: market_price × VAT"
+  import_markup:
+    name: Import Markup (cents/kWh)
+    description: "Fixed supplier markup/grid fee in cents/kWh. Dutch default: 2.48 (€0.0248)"
+  import_energy_tax:
+    name: Import Energy Tax (cents/kWh)
+    description: "Energy tax (energiebelasting) in cents/kWh. Dutch default: 12.28 (€0.1228)"
+  export_vat_multiplier:
+    name: Export VAT Multiplier
+    description: "VAT multiplier for export/feed-in prices. Use 1.21 for salderingsregeling, 1.0 for market price only"
+  export_markup:
+    name: Export Markup (cents/kWh)
+    description: "Fixed markup for export in cents/kWh. Use 2.48 for salderingsregeling, 0.0 for market price only"
+  export_energy_tax:
+    name: Export Energy Tax (cents/kWh)
+    description: "Energy tax for export in cents/kWh. Use 12.28 for salderingsregeling, 0.0 for market price only"

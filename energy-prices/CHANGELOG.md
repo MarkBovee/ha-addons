@@ -5,6 +5,23 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2025-11-25
+
+### Changed
+- Version bump to consolidate all v1.2.x changes
+
+## [1.2.0] - 2025-11-25
+
+### Changed
+- Export defaults now match import values for Dutch salderingsregeling
+  - `export_vat_multiplier`: 1.21 (was 1.0)
+  - `export_markup`: 2.48 (was 0.0)
+  - `export_energy_tax`: 12.28 (was 0.0)
+
+### Added
+- Detailed field descriptions in Home Assistant configuration UI
+- Each field now shows name and description explaining its purpose
+
 ## [1.1.0] - 2025-11-25
 
 ### Changed
@@ -18,9 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `import_vat_multiplier`: VAT multiplier for import (default: 1.21 for 21%)
 - `import_markup`: Fixed markup in cents/kWh (default: 2.48)
 - `import_energy_tax`: Energy tax in cents/kWh (default: 12.28)
-- `export_vat_multiplier`: VAT multiplier for export (default: 1.0)
-- `export_markup`: Fixed markup for export (default: 0.0)
-- `export_energy_tax`: Energy tax for export (default: 0.0)
+- `export_vat_multiplier`: VAT multiplier for export (default: 1.21)
+- `export_markup`: Fixed markup for export (default: 2.48)
+- `export_energy_tax`: Energy tax for export (default: 12.28)
 
 ### Removed
 - Jinja2 template dependency (templates replaced by numeric fields)
@@ -64,12 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Technical Details
 - Python 3.12+ runtime
-- Dependencies: requests>=2.31.0, Jinja2>=3.1.0
-- Sandboxed Jinja2 environment for template security
+- Dependencies: requests>=2.31.0
 - Session-based HTTP client with connection pooling
-- Fail-fast template validation at startup
 - Linear interpolation for percentile calculations
 
+[1.2.0]: https://github.com/MarkBovee/ha-addons/releases/tag/energy-prices-v1.2.0
 [1.1.0]: https://github.com/MarkBovee/ha-addons/releases/tag/energy-prices-v1.1.0
 [1.0.1]: https://github.com/MarkBovee/ha-addons/releases/tag/energy-prices-v1.0.1
 [1.0.0]: https://github.com/MarkBovee/ha-addons/releases/tag/energy-prices-v1.0.0

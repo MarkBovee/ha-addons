@@ -53,9 +53,9 @@ def load_config() -> dict:
             'import_vat_multiplier': float(os.getenv('IMPORT_VAT_MULTIPLIER', '1.21')),
             'import_markup': float(os.getenv('IMPORT_MARKUP', '2.48')),
             'import_energy_tax': float(os.getenv('IMPORT_ENERGY_TAX', '12.28')),
-            'export_vat_multiplier': float(os.getenv('EXPORT_VAT_MULTIPLIER', '1.0')),
-            'export_markup': float(os.getenv('EXPORT_MARKUP', '0.0')),
-            'export_energy_tax': float(os.getenv('EXPORT_ENERGY_TAX', '0.0')),
+            'export_vat_multiplier': float(os.getenv('EXPORT_VAT_MULTIPLIER', '1.21')),
+            'export_markup': float(os.getenv('EXPORT_MARKUP', '2.48')),
+            'export_energy_tax': float(os.getenv('EXPORT_ENERGY_TAX', '12.28')),
             'fetch_interval_minutes': int(os.getenv('FETCH_INTERVAL_MINUTES', '60'))
         }
         logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
@@ -80,9 +80,9 @@ def load_config() -> dict:
     config.setdefault('import_vat_multiplier', 1.21)
     config.setdefault('import_markup', 2.48)
     config.setdefault('import_energy_tax', 12.28)
-    config.setdefault('export_vat_multiplier', 1.0)
-    config.setdefault('export_markup', 0.0)
-    config.setdefault('export_energy_tax', 0.0)
+    config.setdefault('export_vat_multiplier', 1.21)
+    config.setdefault('export_markup', 2.48)
+    config.setdefault('export_energy_tax', 12.28)
     
     logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
                config['delivery_area'], config['currency'], config['timezone'], 

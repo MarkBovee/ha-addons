@@ -53,11 +53,11 @@ Configure the addon through the Home Assistant UI:
 | `currency` | string | `EUR` | Currency for price data |
 | `timezone` | string | `CET` | Timezone for display (data stored in UTC) |
 | `import_vat_multiplier` | float | `1.21` | VAT multiplier for import (1.21 = 21% VAT) |
-| `import_markup` | float | `2.48` | Fixed markup in cents/kWh for import |
-| `import_energy_tax` | float | `12.28` | Energy tax in cents/kWh for import |
-| `export_vat_multiplier` | float | `1.0` | VAT multiplier for export (1.0 = no VAT) |
-| `export_markup` | float | `0.0` | Fixed markup in cents/kWh for export |
-| `export_energy_tax` | float | `0.0` | Energy tax in cents/kWh for export |
+| `import_markup` | float | `2.48` | Fixed markup in cents/kWh (€0.0248) |
+| `import_energy_tax` | float | `12.28` | Energy tax in cents/kWh (€0.1228) |
+| `export_vat_multiplier` | float | `1.21` | VAT multiplier for export (same as import for salderingsregeling) |
+| `export_markup` | float | `2.48` | Fixed markup in cents/kWh for export |
+| `export_energy_tax` | float | `12.28` | Energy tax in cents/kWh for export |
 | `fetch_interval_minutes` | integer | `60` | How often to fetch new prices (1-1440 minutes) |
 
 ### Price Calculation Formula
@@ -68,28 +68,29 @@ The final price is calculated using a simple formula for both import and export:
 final_price = (market_price × vat_multiplier) + markup + energy_tax
 ```
 
-### Dutch Defaults (Import)
+### Dutch Defaults
 
-The default import settings are configured for a typical Dutch energy contract:
+The defaults are configured for a typical Dutch energy contract with salderingsregeling:
 
-- **VAT Multiplier**: 1.21 (21% VAT)
-- **Markup**: 2.48 cents/kWh (supplier margin, grid costs)
-- **Energy Tax**: 12.28 cents/kWh (energiebelasting)
+| Component | Value | EUR/kWh | Description |
+|-----------|-------|---------|-------------|
+| VAT Multiplier | 1.21 | - | 21% BTW |
+| Markup | 2.48 | €0.0248 | Supplier margin + grid costs |
+| Energy Tax | 12.28 | €0.1228 | Energiebelasting |
 
 **Example**: If market price is 10 cents/kWh:
 ```
 (10 × 1.21) + 2.48 + 12.28 = 26.86 cents/kWh
 ```
 
-### Export Settings
+### Export Settings (Salderingsregeling)
 
-By default, export uses only the market price (no VAT, markup, or tax):
+By default, export uses the **same values** as import for Dutch salderingsregeling (net metering).
 
-- **VAT Multiplier**: 1.0 (no VAT)
-- **Markup**: 0.0 cents/kWh
-- **Energy Tax**: 0.0 cents/kWh
-
-For salderingsregeling or other export contracts, adjust the export components accordingly.
+If you want export to use only the market price (no fees), set:
+- `export_vat_multiplier`: 1.0
+- `export_markup`: 0.0
+- `export_energy_tax`: 0.0
 
 ## Created Entities
 
