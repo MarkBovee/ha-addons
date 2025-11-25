@@ -5,6 +5,16 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2025-11-25
+
+### Changed
+- **Unit changed from cents/kWh to EUR/kWh** for consistency with HA energy dashboard
+- Configuration values (markup, energy_tax) now in EUR instead of cents
+- Default values: `import_markup: 0.0248`, `import_energy_tax: 0.1228` (was 2.48 and 12.28)
+
+### Fixed
+- Updated MQTT callbacks for paho-mqtt 2.x API compatibility
+
 ## [1.3.0] - 2025-11-25
 
 ### Added

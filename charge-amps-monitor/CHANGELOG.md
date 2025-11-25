@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.1.1] - 2025-11-25
+
+### Fixed
+- Updated MQTT callbacks for paho-mqtt 2.x API compatibility
+- `_on_connect` and `_on_disconnect` now handle ReasonCode objects correctly
+
 ## [1.1.0] - 2025-11-25
 
 ### Added

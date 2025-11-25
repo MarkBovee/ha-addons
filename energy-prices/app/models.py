@@ -12,6 +12,14 @@ class PriceInterval:
     end: datetime
     price_eur_mwh: float
     
+    def price_eur_kwh(self) -> float:
+        """Convert price from EUR/MWh to EUR/kWh.
+        
+        Returns:
+            Price in EUR/kWh (EUR/MWh / 1000), rounded to 4 decimals
+        """
+        return round(self.price_eur_mwh / 1000, 4)
+    
     def price_cents_kwh(self) -> float:
         """Convert price from EUR/MWh to cents/kWh.
         

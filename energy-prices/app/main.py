@@ -60,11 +60,11 @@ def load_config() -> dict:
             'currency': os.getenv('CURRENCY', 'EUR'),
             'timezone': os.getenv('TIMEZONE', 'CET'),
             'import_vat_multiplier': float(os.getenv('IMPORT_VAT_MULTIPLIER', '1.21')),
-            'import_markup': float(os.getenv('IMPORT_MARKUP', '2.48')),
-            'import_energy_tax': float(os.getenv('IMPORT_ENERGY_TAX', '12.28')),
+            'import_markup': float(os.getenv('IMPORT_MARKUP', '0.0248')),
+            'import_energy_tax': float(os.getenv('IMPORT_ENERGY_TAX', '0.1228')),
             'export_vat_multiplier': float(os.getenv('EXPORT_VAT_MULTIPLIER', '1.21')),
-            'export_markup': float(os.getenv('EXPORT_MARKUP', '2.48')),
-            'export_energy_tax': float(os.getenv('EXPORT_ENERGY_TAX', '12.28')),
+            'export_markup': float(os.getenv('EXPORT_MARKUP', '0.0248')),
+            'export_energy_tax': float(os.getenv('EXPORT_ENERGY_TAX', '0.1228')),
             'fetch_interval_minutes': int(os.getenv('FETCH_INTERVAL_MINUTES', '60'))
         }
         logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
@@ -85,13 +85,13 @@ def load_config() -> dict:
         if field not in config:
             raise KeyError(f"Required config field missing: {field}")
     
-    # Set defaults for optional price component fields
+    # Set defaults for optional price component fields (values in EUR/kWh)
     config.setdefault('import_vat_multiplier', 1.21)
-    config.setdefault('import_markup', 2.48)
-    config.setdefault('import_energy_tax', 12.28)
+    config.setdefault('import_markup', 0.0248)
+    config.setdefault('import_energy_tax', 0.1228)
     config.setdefault('export_vat_multiplier', 1.21)
-    config.setdefault('export_markup', 2.48)
-    config.setdefault('export_energy_tax', 12.28)
+    config.setdefault('export_markup', 0.0248)
+    config.setdefault('export_energy_tax', 0.1228)
     
     logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
                config['delivery_area'], config['currency'], config['timezone'], 
@@ -110,13 +110,13 @@ def calculate_final_price(market_price: float, vat_multiplier: float, markup: fl
     Formula: (market_price * vat_multiplier) + markup + energy_tax
     
     Args:
-        market_price: Market price in cents/kWh
+        market_price: Market price in EUR/kWh
         vat_multiplier: VAT multiplier (e.g., 1.21 for 21% VAT)
-        markup: Fixed markup in cents/kWh
-        energy_tax: Energy tax in cents/kWh
+        markup: Fixed markup in EUR/kWh
+        energy_tax: Energy tax in EUR/kWh
         
     Returns:
-        Final price rounded to 4 decimals
+        Final price in EUR/kWh rounded to 4 decimals
     """
     result = (market_price * vat_multiplier) + markup + energy_tax
     return round(result, 4)
@@ -273,7 +273,7 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         price_curve_export = []
         
         for interval in all_intervals:
-            market_price = interval.price_cents_kwh()
+            market_price = interval.price_eur_kwh()
             
             import_price = calculate_final_price(market_price, import_vat, import_markup, import_tax)
             export_price = calculate_final_price(market_price, export_vat, export_markup, export_tax)
@@ -322,7 +322,7 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
             current_import, percentiles['p20'], percentiles['p40'], percentiles['p60']
         )
         
-        logger.info("Current import price: %.4f cents/kWh, level: %s", 
+        logger.info("Current import price: %.4f EUR/kWh, level: %s", 
                    current_import, price_level)
         
         return {
@@ -355,7 +355,7 @@ def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = 
             'sensor.ep_price_import',
             str(data['current_import']),
             {
-                'unit_of_measurement': 'cents/kWh',
+                'unit_of_measurement': 'EUR/kWh',
                 'device_class': 'monetary',
                 'friendly_name': 'Electricity Import Price',
                 'price_curve': data['price_curve_import'],
@@ -372,7 +372,7 @@ def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = 
             'sensor.ep_price_export',
             str(data['current_export']),
             {
-                'unit_of_measurement': 'cents/kWh',
+                'unit_of_measurement': 'EUR/kWh',
                 'device_class': 'monetary',
                 'friendly_name': 'Electricity Export Price',
                 'price_curve': data['price_curve_export'],
@@ -403,8 +403,8 @@ def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = 
         # Log entity details on first run
         if first_run:
             logger.info("Created Home Assistant entities:")
-            logger.info("  • sensor.ep_price_import: %.4f cents/kWh (import price with VAT, markup, tax)", data['current_import'])
-            logger.info("  • sensor.ep_price_export: %.4f cents/kWh (export/feed-in price)", data['current_export'])
+            logger.info("  • sensor.ep_price_import: %.4f EUR/kWh (import price with VAT, markup, tax)", data['current_import'])
+            logger.info("  • sensor.ep_price_export: %.4f EUR/kWh (export/feed-in price)", data['current_export'])
             logger.info("  • sensor.ep_price_level: %s (None/Low/Medium/High based on percentiles)", data['price_level'])
             logger.info("Each sensor includes price_curve attribute with %d intervals for today+tomorrow", 
                        len(data['price_curve_import']))
@@ -433,7 +433,7 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
                 object_id="price_import",
                 name="Electricity Import Price",
                 state=str(round(data['current_import'], 4)),
-                unit_of_measurement="cents/kWh",
+                unit_of_measurement="EUR/kWh",
                 device_class="monetary",
                 state_class="measurement",
                 icon="mdi:currency-eur",
@@ -448,7 +448,7 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
                 object_id="price_export",
                 name="Electricity Export Price",
                 state=str(round(data['current_export'], 4)),
-                unit_of_measurement="cents/kWh",
+                unit_of_measurement="EUR/kWh",
                 device_class="monetary",
                 state_class="measurement",
                 icon="mdi:currency-eur",
@@ -473,8 +473,8 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
             ))
             
             logger.info("Created Home Assistant entities via MQTT Discovery:")
-            logger.info("  • sensor.energy_prices_price_import: %.4f cents/kWh", data['current_import'])
-            logger.info("  • sensor.energy_prices_price_export: %.4f cents/kWh", data['current_export'])
+            logger.info("  • sensor.energy_prices_price_import: %.4f EUR/kWh", data['current_import'])
+            logger.info("  • sensor.energy_prices_price_export: %.4f EUR/kWh", data['current_export'])
             logger.info("  • sensor.energy_prices_price_level: %s", data['price_level'])
             logger.info("Entities have unique_id and can be managed from HA UI")
         else:

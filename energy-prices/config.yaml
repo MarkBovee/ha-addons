@@ -1,6 +1,6 @@
 name: Energy Prices
 description: Fetch Nord Pool electricity prices and calculate final costs with configurable price components
-version: "1.3.0"
+version: "1.3.1"
 slug: energy_prices
 init: false
 homeassistant_api: true
@@ -19,15 +19,17 @@ options:
   fetch_interval_minutes: 60
   
   # Import price components (buying from grid)
+  # Values in EUR/kWh (e.g., 0.0248 = 2.48 cents)
   import_vat_multiplier: 1.21
-  import_markup: 2.48
-  import_energy_tax: 12.28
+  import_markup: 0.0248
+  import_energy_tax: 0.1228
   
   # Export price components (selling to grid / feed-in)
   # Using same values as import for Dutch salderingsregeling
+  # Values in EUR/kWh (e.g., 0.0248 = 2.48 cents)
   export_vat_multiplier: 1.21
-  export_markup: 2.48
-  export_energy_tax: 12.28
+  export_markup: 0.0248
+  export_energy_tax: 0.1228
   
   # MQTT settings (optional - for MQTT Discovery with unique_id support)
   # Leave empty to auto-detect or fall back to REST API
