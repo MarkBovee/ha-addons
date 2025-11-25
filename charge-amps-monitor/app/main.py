@@ -147,7 +147,7 @@ def create_entities(
     connector: Connector,
     ha_api_url: str,
     ha_api_token: str,
-    verbose: bool = True,
+    verbose: bool = False,
 ):
     """Create or update all Home Assistant entities."""
     if not charge_point or not connector:
