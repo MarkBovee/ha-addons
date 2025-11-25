@@ -63,6 +63,32 @@ Use this document whenever you plan, review, or implement changes in this reposi
 - Ensure `config.yaml` values match add-on reality (name, slug, version, supported architectures).
 - When you add new configuration options, document both the `options` defaults and the `schema` types, then reference them in the add-on README.
 
+### Docker / Dockerfile
+
+All add-ons run in Docker containers built from Alpine-based Home Assistant images. Follow these patterns:
+
+1. **BUILD_FROM argument**: Always provide a default value so the Dockerfile works standalone:
+   ```dockerfile
+   ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
+   FROM $BUILD_FROM
+   ```
+
+2. **Python pip installs**: Alpine 3.22+ enforces PEP 668 (externally-managed Python). Use `--break-system-packages` to install pip packages:
+   ```dockerfile
+   RUN python3 -m pip install --no-cache-dir --break-system-packages -r requirements.txt
+   ```
+
+3. **run.sh location**: Copy `run.sh` to the root (`/run.sh`) and reference it absolutely:
+   ```dockerfile
+   COPY run.sh /
+   RUN chmod a+x /run.sh
+   CMD [ "/run.sh" ]
+   ```
+
+4. **Minimal layers**: Combine related commands where practical, but keep the `requirements.txt` copy separate for Docker layer caching.
+
+5. **Reference implementation**: Use `charge-amps-monitor/Dockerfile` as the canonical pattern for new add-ons.
+
 ---
 
 ## API & Home Assistant Integration
