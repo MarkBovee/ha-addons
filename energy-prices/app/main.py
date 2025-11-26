@@ -67,27 +67,24 @@ def load_config() -> dict:
             'export_energy_tax': float(os.getenv('EXPORT_ENERGY_TAX', '0.1228')),
             'fetch_interval_minutes': int(os.getenv('FETCH_INTERVAL_MINUTES', '60'))
         }
-    logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
-               config['delivery_area'], config['currency'], config['timezone'], 
-               config['fetch_interval_minutes'])
-    logger.info("Import: VAT=%.2f, markup=%.4f, tax=%.4f",
-               config['import_vat_multiplier'], config['import_markup'], config['import_energy_tax'])
-    logger.info("Export: VAT=%.2f, markup=%.4f, tax=%.4f",
-               config['export_vat_multiplier'], config['export_markup'], config['export_energy_tax'])
-    return config    
-    # Validate required fields (only base fields are strictly required)
-    required = ['delivery_area', 'currency', 'timezone', 'fetch_interval_minutes']
-    for field in required:
-        if field not in config:
-            raise KeyError(f"Required config field missing: {field}")
-    
-    # Set defaults for optional price component fields (values in EUR/kWh)
-    config.setdefault('import_vat_multiplier', 1.21)
-    config.setdefault('import_markup', 0.0248)
-    config.setdefault('import_energy_tax', 0.1228)
-    config.setdefault('export_vat_multiplier', 1.21)
-    config.setdefault('export_markup', 0.0248)
-    config.setdefault('export_energy_tax', 0.1228)
+    else:
+        # Load from JSON config file
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        
+        # Validate required fields (only base fields are strictly required)
+        required = ['delivery_area', 'currency', 'timezone', 'fetch_interval_minutes']
+        for field in required:
+            if field not in config:
+                raise KeyError(f"Required config field missing: {field}")
+        
+        # Set defaults for optional price component fields (values in EUR/kWh)
+        config.setdefault('import_vat_multiplier', 1.21)
+        config.setdefault('import_markup', 0.0248)
+        config.setdefault('import_energy_tax', 0.1228)
+        config.setdefault('export_vat_multiplier', 1.21)
+        config.setdefault('export_markup', 0.0248)
+        config.setdefault('export_energy_tax', 0.1228)
     
     logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
                config['delivery_area'], config['currency'], config['timezone'], 
