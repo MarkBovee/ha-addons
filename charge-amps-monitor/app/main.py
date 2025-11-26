@@ -2,7 +2,6 @@
 
 import logging
 import os
-import signal
 import sys
 import time
 from typing import Optional
@@ -12,38 +11,38 @@ import requests
 from .charger_api import ChargerApi
 from .models import ChargePoint, Connector
 
-# Try to import MQTT Discovery module
+# Import shared modules
+from shared.addon_base import setup_logging, setup_signal_handlers, sleep_with_shutdown_check
+from shared.ha_api import HomeAssistantApi
+from shared.mqtt_setup import setup_mqtt_client, is_mqtt_available
+
+# Try to import MQTT Discovery for entity publishing
 try:
-    from shared.ha_mqtt_discovery import MqttDiscovery, EntityConfig, get_mqtt_config_from_env
-    MQTT_AVAILABLE = True
+    from shared.ha_mqtt_discovery import EntityConfig
+    MQTT_ENTITY_CONFIG_AVAILABLE = True
 except ImportError:
-    MQTT_AVAILABLE = False
+    MQTT_ENTITY_CONFIG_AVAILABLE = False
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+logger = setup_logging(name=__name__)
 
-# Global flag for graceful shutdown
-shutdown_flag = False
-
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals."""
-    global shutdown_flag
-    logger.info("Received shutdown signal, stopping...")
-    shutdown_flag = True
-
-
-def get_ha_api_url() -> str:
-    """Get Home Assistant API URL from environment."""
-    return os.environ.get("HA_API_URL", "http://supervisor/core")
-
-
-def get_ha_api_token() -> Optional[str]:
-    """Get Home Assistant API token from environment."""
-    return os.environ.get("HA_API_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
+# Old entities to clean up on startup (REST API mode only)
+OLD_ENTITIES = [
+    "input_boolean.charger_charging",
+    "input_number.charger_total_consumption_kwh",
+    "input_number.charger_current_power_w",
+    "sensor.charger_status",
+    "sensor.charger_power_kw",
+    "sensor.charger_voltage",
+    "sensor.charger_current",
+    "binary_sensor.charger_online",
+    "binary_sensor.charger_connector_enabled",
+    "input_text.charger_name",
+    "input_text.charger_serial",
+    "sensor.charger_connector_mode",
+    "sensor.charger_ocpp_status",
+    "sensor.charger_error_code",
+]
 
 
 def delete_entity(entity_id: str, ha_api_url: str, ha_api_token: str) -> bool:
@@ -116,37 +115,6 @@ def create_or_update_entity(
     except Exception as ex:
         logger.error(f"Exception updating entity {entity_id}: {ex}", exc_info=True)
         return False
-
-
-def delete_old_entities(ha_api_url: str, ha_api_token: str):
-    """Delete old entities that don't have the ca_ prefix."""
-    old_entities = [
-        "input_boolean.charger_charging",
-        "input_number.charger_total_consumption_kwh",
-        "input_number.charger_current_power_w",
-        "sensor.charger_status",
-        "sensor.charger_power_kw",
-        "sensor.charger_voltage",
-        "sensor.charger_current",
-        "binary_sensor.charger_online",
-        "binary_sensor.charger_connector_enabled",
-        "input_text.charger_name",
-        "input_text.charger_serial",
-        "sensor.charger_connector_mode",
-        "sensor.charger_ocpp_status",
-        "sensor.charger_error_code",
-    ]
-
-    logger.info("Cleaning up old entities...")
-    deleted_count = 0
-    for entity_id in old_entities:
-        if delete_entity(entity_id, ha_api_url, ha_api_token):
-            deleted_count += 1
-
-    if deleted_count > 0:
-        logger.info(f"Deleted {deleted_count} old entities")
-    else:
-        logger.info("No old entities found to delete")
 
 
 def create_entities(
@@ -569,49 +537,6 @@ def update_entities_mqtt(
         mqtt_client.update_state("sensor", "current", str(round(avg_current, 1)))
 
 
-def setup_mqtt_client() -> Optional['MqttDiscovery']:
-    """Set up MQTT Discovery client if available.
-    
-    Returns:
-        MqttDiscovery client if connected, None otherwise
-    """
-    if not MQTT_AVAILABLE:
-        logger.info("MQTT Discovery not available (paho-mqtt not installed)")
-        return None
-    
-    mqtt_config = get_mqtt_config_from_env()
-    
-    mqtt_host = os.getenv('MQTT_HOST', mqtt_config['mqtt_host'])
-    mqtt_port = int(os.getenv('MQTT_PORT', mqtt_config['mqtt_port']))
-    mqtt_user = os.getenv('MQTT_USER', mqtt_config['mqtt_user'])
-    mqtt_password = os.getenv('MQTT_PASSWORD', mqtt_config['mqtt_password'])
-    
-    logger.info("Attempting MQTT Discovery connection to %s:%d...", mqtt_host, mqtt_port)
-    
-    try:
-        mqtt_client = MqttDiscovery(
-            addon_name="Charge Amps Monitor",
-            addon_id="charge_amps",
-            mqtt_host=mqtt_host,
-            mqtt_port=mqtt_port,
-            mqtt_user=mqtt_user,
-            mqtt_password=mqtt_password,
-            manufacturer="Charge Amps",
-            model="EV Charger"
-        )
-        
-        if mqtt_client.connect(timeout=10.0):
-            logger.info("MQTT Discovery connected - entities will have unique_id")
-            return mqtt_client
-        else:
-            logger.warning("MQTT connection failed, falling back to REST API")
-            return None
-            
-    except Exception as e:
-        logger.warning("MQTT setup failed (%s), falling back to REST API", e)
-        return None
-
-
 def update_charger_status(
     charger_api: ChargerApi, ha_api_url: str, ha_api_token: str, verbose: bool = False
 ) -> bool:
@@ -691,11 +616,8 @@ def update_charger_status_mqtt(
 
 def main():
     """Main application entry point."""
-    global shutdown_flag
-
-    # Register signal handlers
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
+    # Register signal handlers using shared module
+    shutdown_event = setup_signal_handlers(logger)
 
     # Get configuration from environment
     email = os.environ.get("CHARGER_EMAIL")
@@ -704,8 +626,8 @@ def main():
     base_url = os.environ.get("CHARGER_BASE_URL", "https://my.charge.space")
     update_interval = int(os.environ.get("CHARGER_UPDATE_INTERVAL", "1"))
 
-    ha_api_url = get_ha_api_url()
-    ha_api_token = get_ha_api_token()
+    # Initialize HA API client
+    ha_api = HomeAssistantApi()
     
     mqtt_client = None
 
@@ -740,65 +662,57 @@ def main():
     logger.info("Successfully authenticated with Charge Amps API")
 
     # Try MQTT Discovery first (provides unique_id for UI management)
-    mqtt_client = setup_mqtt_client()
+    mqtt_client = setup_mqtt_client(
+        addon_name="Charge Amps Monitor",
+        addon_id="charge_amps",
+        manufacturer="Charge Amps",
+        model="EV Charger"
+    )
     use_mqtt = mqtt_client is not None
 
     if not use_mqtt:
         # Fall back to REST API
-        if not ha_api_token:
+        if not ha_api.token:
             logger.error("Missing Home Assistant API token and MQTT not available")
             sys.exit(1)
         
-        logger.info(f"Using REST API fallback: {ha_api_url}")
+        logger.info(f"Using REST API fallback: {ha_api.base_url}")
         
         # Test Home Assistant API connection
-        try:
-            test_url = f"{ha_api_url}/api/states"
-            test_headers = {
-                "Authorization": f"Bearer {ha_api_token}",
-                "Content-Type": "application/json",
-            }
-            test_response = requests.get(test_url, headers=test_headers, timeout=10)
-            if test_response.ok:
-                logger.info("Home Assistant API connection successful")
-            else:
-                logger.warning(
-                    f"Home Assistant API test failed: {test_response.status_code} - {test_response.text[:200]}"
-                )
-        except Exception as ex:
-            logger.warning(f"Home Assistant API test exception: {ex}")
+        ha_api.test_connection()
 
         # Delete old entities before creating new ones (REST API only)
-        delete_old_entities(ha_api_url, ha_api_token)
+        logger.info("Cleaning up old entities...")
+        deleted = ha_api.delete_entities(OLD_ENTITIES)
+        if deleted > 0:
+            logger.info(f"Deleted {deleted} old entities")
+        else:
+            logger.info("No old entities found to delete")
 
     # Initial update (with verbose entity logging)
     logger.info("Performing initial charger status update...")
     if use_mqtt:
         update_charger_status_mqtt(charger_api, mqtt_client, verbose=True)
     else:
-        update_charger_status(charger_api, ha_api_url, ha_api_token, verbose=True)
+        update_charger_status(charger_api, ha_api.base_url, ha_api.token, verbose=True)
 
     # Main loop
     update_interval_seconds = update_interval * 60
     logger.info(f"Starting update loop (every {update_interval} minutes)...")
 
     try:
-        while not shutdown_flag:
+        while not shutdown_event.is_set():
+            # Sleep first, then update
+            if not sleep_with_shutdown_check(shutdown_event, update_interval_seconds):
+                break
+
             try:
-                time.sleep(update_interval_seconds)
-
-                if shutdown_flag:
-                    break
-
                 logger.info("Updating charger status...")
                 if use_mqtt and mqtt_client and mqtt_client.is_connected():
                     update_charger_status_mqtt(charger_api, mqtt_client)
                 else:
-                    update_charger_status(charger_api, ha_api_url, ha_api_token)
+                    update_charger_status(charger_api, ha_api.base_url, ha_api.token)
 
-            except KeyboardInterrupt:
-                logger.info("Received keyboard interrupt, stopping...")
-                break
             except Exception as ex:
                 logger.error(f"Error in update loop: {ex}", exc_info=True)
                 # Continue loop even on error

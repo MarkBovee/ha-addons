@@ -5,6 +5,14 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2025-11-26
+
+### Changed
+- Refactored to use shared modules (`shared/addon_base.py`, `shared/ha_api.py`, etc.)
+- Migrated from global `shutdown_flag` to `threading.Event` pattern for cleaner shutdown handling
+- Consolidated Home Assistant API code into reusable `HomeAssistantApi` class
+- Configuration loading now uses `load_addon_config()` from shared modules
+
 ## [1.3.3] - 2025-11-26
 
 ### Fixed

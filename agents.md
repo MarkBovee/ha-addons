@@ -26,6 +26,8 @@ Use this document whenever you plan, review, or implement changes in this reposi
 ## Repository Overview
 
 - `charge-amps-monitor/` – Home Assistant add-on written in Python; talks to the Charge Amps cloud via the `ChargerApi` client (`app/charger_api.py`) and pushes entities into Home Assistant through REST calls in `app/main.py`.
+- `energy-prices/` – Home Assistant add-on for fetching Nord Pool electricity prices and calculating import/export costs.
+- `shared/` – **Shared Python modules** used by all add-ons (see [Shared Modules Architecture](#shared-modules-architecture) below).
 - `repository.json`, root `README.md`, and per-addon `README.md` files describe how Home Assistant discovers and installs each add-on. Keep them accurate whenever you add or rename files.
 - Future add-ons should live in peer directories, each with its own `app/`, `config.yaml`, and docs. Add nested `agents.md` files inside each addon if they require rules that differ from the items below (hierarchical `agents.md` files keep guidance scoped as the repo grows).
 
@@ -36,11 +38,12 @@ Use this document whenever you plan, review, or implement changes in this reposi
 ### Python add-ons
 
 1. **Target runtime**: Python 3.12+. Align new dependencies with `requirements.txt` and pin exact versions.
-2. **Structure**: Place networking logic in `app/charger_api.py` (extend `ChargerApi` or helpers there) and Home Assistant orchestration in `app/main.py`.
-3. **Logging**: Use the configured `logging` logger and prefer structured messages (`logger.info("Fetched %s charge points", count)`).
-4. **HTTP**: Reuse the existing `requests.Session` in `ChargerApi` so authentication headers and retries stay centralized.
+2. **Structure**: Place networking/API logic in dedicated modules (e.g., `app/charger_api.py`, `app/nordpool_api.py`) and Home Assistant orchestration in `app/main.py`.
+3. **Logging**: Use `setup_logging()` from `shared/addon_base.py` and prefer structured messages (`logger.info("Fetched %s charge points", count)`).
+4. **HTTP**: Reuse the existing `requests.Session` pattern so authentication headers and retries stay centralized.
 5. **Models**: Extend or add data models in `app/models.py` instead of passing bare dicts around.
-6. **Graceful shutdowns**: Honor the `shutdown_flag` and signal handlers defined in `app/main.py`; long-running loops must check the flag each iteration.
+6. **Graceful shutdowns**: Use `setup_signal_handlers()` from `shared/addon_base.py` which returns a `threading.Event`. Long-running loops must check `shutdown_event.is_set()` each iteration.
+7. **Use shared modules**: Import common functionality from `shared/` instead of duplicating code. See [Shared Modules Architecture](#shared-modules-architecture).
 
 ### Commenting & documentation
 
@@ -89,15 +92,138 @@ All add-ons run in Docker containers built from Alpine-based Home Assistant imag
 
 5. **Reference implementation**: Use `charge-amps-monitor/Dockerfile` as the canonical pattern for new add-ons.
 
+6. **Shared modules**: Copy the `shared/` folder into each add-on directory (see [Shared Modules Architecture](#shared-modules-architecture)):
+   ```dockerfile
+   COPY shared /app/shared
+   COPY app /app/app
+   ```
+
+---
+
+## Shared Modules Architecture
+
+This repository uses a **shared module pattern** to avoid code duplication across add-ons. Common utilities live in `shared/` at the repository root and are copied to each add-on.
+
+### Why Three `shared/` Folders?
+
+Home Assistant add-ons build inside Docker containers with access **only to files within the add-on's directory**. The Docker build context cannot reach parent directories.
+
+```
+ha-addons/
+├── shared/                      # ← SOURCE OF TRUTH (edit here)
+├── charge-amps-monitor/
+│   └── shared/                  # ← COPY (for Docker build)
+└── energy-prices/
+    └── shared/                  # ← COPY (for Docker build)
+```
+
+### Available Shared Modules
+
+| Module | Purpose | Key Exports |
+|--------|---------|-------------|
+| `addon_base.py` | Add-on lifecycle | `setup_logging()`, `setup_signal_handlers()`, `sleep_with_shutdown_check()`, `run_addon_loop()` |
+| `ha_api.py` | HA REST API client | `HomeAssistantApi`, `get_ha_api_config()` |
+| `config_loader.py` | Configuration loading | `load_addon_config()`, `get_env_with_fallback()`, `get_run_once_mode()` |
+| `mqtt_setup.py` | MQTT Discovery | `setup_mqtt_client()`, `is_mqtt_available()`, `get_entity_config_class()` |
+
+### Keeping Shared Modules in Sync
+
+**Always edit `shared/` at the repository root**, then sync to add-ons:
+
+```bash
+# Manual sync
+python sync_shared.py
+
+# Auto-sync when running locally (recommended)
+python run_addon.py --addon energy-prices  # syncs automatically
+```
+
+### Creating a New Add-on with Shared Modules
+
+1. **Create the add-on directory structure:**
+   ```
+   my-new-addon/
+   ├── app/
+   │   ├── __init__.py
+   │   └── main.py
+   ├── shared/              # Will be synced
+   ├── config.yaml
+   ├── Dockerfile
+   ├── requirements.txt
+   ├── run.sh
+   └── README.md
+   ```
+
+2. **Copy shared folder:**
+   ```bash
+   python sync_shared.py
+   ```
+
+3. **Import from shared in your `app/main.py`:**
+   ```python
+   import sys
+   import os
+   sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+   
+   from shared import (
+       setup_logging,
+       setup_signal_handlers,
+       sleep_with_shutdown_check,
+       HomeAssistantApi,
+       get_ha_api_config,
+       load_addon_config,
+       get_run_once_mode,
+       setup_mqtt_client,
+   )
+   ```
+
+4. **Use shared utilities in your main function:**
+   ```python
+   def main():
+       logger = setup_logging("my-new-addon")
+       shutdown_event = setup_signal_handlers(logger)
+       
+       config = load_addon_config(
+           config_path="/data/options.json",
+           defaults={"update_interval": 300},
+           required_fields=["api_key"]
+       )
+       
+       ha_config = get_ha_api_config()
+       ha_api = HomeAssistantApi(ha_config["url"], ha_config["token"], logger)
+       
+       run_once = get_run_once_mode()
+       
+       while not shutdown_event.is_set():
+           # Your add-on logic here
+           if run_once:
+               break
+           sleep_with_shutdown_check(shutdown_event, config["update_interval"], logger)
+   ```
+
+5. **Commit all three locations:**
+   ```bash
+   git add shared/ my-new-addon/shared/
+   git commit -m "feat(my-new-addon): add new addon with shared modules"
+   ```
+
+### Important Rules
+
+- **NEVER edit `<addon>/shared/` directly** – always edit `shared/` at the root
+- **Run `sync_shared.py`** after any changes to shared modules
+- **Commit all copies** – the add-on folders need their own copy for Docker builds
+- **`run_addon.py` auto-syncs** – use it for local development to avoid sync issues
+
 ---
 
 ## API & Home Assistant Integration
 
 1. `ChargerApi.authenticate()` posts to `https://my.charge.space/api/auth/login` and stores the JWT token plus expiration buffer. Always call `_ensure_authenticated()` before issuing new API requests.
 2. `ChargerApi.get_charge_points()` posts to `/api/users/chargepoints/owned?expand=ocppConfig`. Parse responses into `ChargePoint` / `Connector` model instances via their `from_dict` helpers instead of reimplementing parsing.
-3. Entity management happens through Home Assistant's Supervisor REST API:
-   - `create_or_update_entity()` issues authenticated POSTs to `/api/states/{entity_id}`.
-   - `delete_entity()` removes stale IDs before recreating them; extend the `old_entities` list when renaming.
+3. Entity management happens through Home Assistant's Supervisor REST API via the `HomeAssistantApi` class in `shared/ha_api.py`:
+   - `ha_api.create_or_update_entity()` issues authenticated POSTs to `/api/states/{entity_id}`.
+   - `ha_api.delete_entity()` removes stale IDs before recreating them.
+   - `ha_api.delete_entities()` batch-deletes a list of old entity IDs (use for cleanup on startup).
 4. Whenever you add new Home Assistant entities, ensure friendly names, units, icons, and prefixes follow the existing `ca_` or `ep_` conventions so dashboards remain consistent.
 
 ### Entity Creation Best Practices
