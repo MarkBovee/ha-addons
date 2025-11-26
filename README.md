@@ -11,10 +11,19 @@ ha-addons/
 ├── repository.json           # Repository metadata
 ├── README.md                 # This file
 ├── LICENSE                   # MIT License
+├── run_addon.py              # Universal addon runner for local development
+├── sync_shared.py            # Sync shared modules to all addons
+├── shared/                   # Shared Python modules (source of truth)
+│   ├── addon_base.py         # Logging, signal handling, main loop utilities
+│   ├── ha_api.py             # Home Assistant REST API client
+│   ├── config_loader.py      # Configuration loading utilities
+│   └── mqtt_setup.py         # MQTT Discovery client setup
 ├── charge-amps-monitor/      # Charge Amps EV Charger Monitor addon
 ├── energy-prices/            # Nord Pool-based Energy Prices addon
 └── [future-addons]/          # Additional addons will be added here
 ```
+
+> **Note:** Each addon has its own copy of `shared/` for Docker builds. Always edit the root `shared/` folder and run `python sync_shared.py` to propagate changes.
 
 ## Installation
 
@@ -72,7 +81,39 @@ For detailed documentation, see [energy-prices/README.md](energy-prices/README.m
 
 ## Development
 
-Each addon has its own development setup. See the individual addon directories for development instructions.
+### Local Testing
+
+Use the universal addon runner for local development:
+
+```bash
+# List all available addons
+python run_addon.py --list
+
+# Run an addon (continuous mode)
+python run_addon.py --addon energy-prices
+
+# Run a single iteration then exit (for testing)
+python run_addon.py --addon energy-prices --once
+
+# Initialize .env from .env.example
+python run_addon.py --addon energy-prices --init-env
+```
+
+The runner automatically syncs shared modules before execution.
+
+### Shared Modules
+
+Common utilities are in `shared/` at the repository root. Each addon needs its own copy for Docker builds:
+
+```bash
+# After editing shared/ modules, sync to all addons:
+python sync_shared.py
+
+# Or use run_addon.py which auto-syncs
+python run_addon.py --addon <name>
+```
+
+See [agents.md](agents.md) for detailed development guidelines.
 
 ## License
 
