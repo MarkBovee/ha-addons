@@ -1,15 +1,16 @@
 """Battery API add-on main entry point.
 
 Controls SAJ Electric battery inverters via Home Assistant entities.
-Provides charge/discharge scheduling through MQTT-based number, select, and button entities.
+Provides charge/discharge scheduling through JSON-based text entities.
 """
 
+import json
 import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 # Add parent directory to path for shared module imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,9 +21,6 @@ from shared.config_loader import load_addon_config, get_run_once_mode
 from shared.ha_mqtt_discovery import (
     MqttDiscovery,
     EntityConfig,
-    NumberConfig,
-    SelectConfig,
-    ButtonConfig,
     TextConfig,
     get_mqtt_config_from_env,
 )
@@ -46,13 +44,15 @@ BA_CONFIG_DEFAULTS = {
 
 BA_REQUIRED_FIELDS = ['saj_username', 'saj_password', 'device_serial_number', 'plant_uid']
 
+# Example schedule JSON for documentation
+SCHEDULE_EXAMPLE = '''[
+  {"start": "02:00", "power": 3000, "duration": 180},
+  {"start": "14:00", "power": 2000, "duration": 60}
+]'''
+
 
 def load_config() -> dict:
-    """Load Battery API configuration.
-    
-    Returns:
-        Configuration dictionary
-    """
+    """Load Battery API configuration."""
     config = load_addon_config(
         defaults=BA_CONFIG_DEFAULTS,
         required_fields=BA_REQUIRED_FIELDS
@@ -71,6 +71,78 @@ def load_config() -> dict:
     return config
 
 
+def parse_schedule_json(json_str: str) -> List[Dict[str, Any]]:
+    """Parse and validate schedule JSON.
+    
+    Expected format:
+    [
+      {"start": "HH:MM", "power": 3000, "duration": 180},
+      ...
+    ]
+    
+    Args:
+        json_str: JSON string (or empty string for no schedule)
+        
+    Returns:
+        List of period dictionaries
+        
+    Raises:
+        ValueError: If JSON is invalid or periods are malformed
+    """
+    if not json_str or json_str.strip() in ('', '[]'):
+        return []
+    
+    try:
+        periods = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON: {e}")
+    
+    if not isinstance(periods, list):
+        raise ValueError("Schedule must be a JSON array")
+    
+    validated = []
+    for i, period in enumerate(periods):
+        if not isinstance(period, dict):
+            raise ValueError(f"Period {i} must be an object")
+        
+        # Required fields
+        if 'start' not in period:
+            raise ValueError(f"Period {i} missing 'start' field (format: 'HH:MM')")
+        if 'power' not in period:
+            raise ValueError(f"Period {i} missing 'power' field (watts)")
+        if 'duration' not in period:
+            raise ValueError(f"Period {i} missing 'duration' field (minutes)")
+        
+        # Validate start time format
+        start = period['start']
+        if not isinstance(start, str) or len(start) != 5 or start[2] != ':':
+            raise ValueError(f"Period {i} 'start' must be 'HH:MM' format")
+        try:
+            hour, minute = int(start[:2]), int(start[3:])
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ValueError(f"Period {i} 'start' has invalid time: {start}")
+        
+        # Validate power
+        power = period['power']
+        if not isinstance(power, (int, float)) or power < 0 or power > 10000:
+            raise ValueError(f"Period {i} 'power' must be 0-10000 watts")
+        
+        # Validate duration
+        duration = period['duration']
+        if not isinstance(duration, (int, float)) or duration < 0 or duration > 1440:
+            raise ValueError(f"Period {i} 'duration' must be 0-1440 minutes")
+        
+        validated.append({
+            'start': start,
+            'power': int(power),
+            'duration': int(duration),
+        })
+    
+    return validated
+
+
 class BatteryApiAddon:
     """Main add-on class for Battery API.
     
@@ -81,33 +153,20 @@ class BatteryApiAddon:
     """
     
     def __init__(self, config: dict, shutdown_event):
-        """Initialize the add-on.
-        
-        Args:
-            config: Configuration dictionary
-            shutdown_event: Threading event for graceful shutdown
-        """
+        """Initialize the add-on."""
         self.config = config
         self.shutdown_event = shutdown_event
         self.simulation_mode = config.get('simulation_mode', False)
         
-        # Control entity states (updated from MQTT commands)
-        self.control_state = {
-            'charge_power_w': 6000,
-            'charge_duration_min': 60,
-            'charge_start_time': '00:00',
-            'discharge_power_w': 6000,
-            'discharge_duration_min': 60,
-            'discharge_start_time': '00:00',
-            'schedule_type': 'Both',  # Charge Only, Discharge Only, Both, Clear
-        }
+        # Schedule state (JSON strings)
+        self.charge_schedule_json = "[]"
+        self.discharge_schedule_json = "[]"
         
         # Status (updated from SAJ API)
         self.status = {
             'battery_soc': None,
             'battery_mode': None,
-            'charge_direction': None,
-            'current_schedule': None,
+            'active_schedule': None,
             'last_applied': None,
             'api_status': 'Initializing',
         }
@@ -125,11 +184,7 @@ class BatteryApiAddon:
         self.mqtt: Optional[MqttDiscovery] = None
     
     def setup(self) -> bool:
-        """Set up the add-on (MQTT, entities, etc.).
-        
-        Returns:
-            True if setup successful, False otherwise
-        """
+        """Set up the add-on (MQTT, entities, etc.)."""
         # Set up MQTT Discovery
         mqtt_config = get_mqtt_config_from_env()
         
@@ -177,131 +232,40 @@ class BatteryApiAddon:
         return True
     
     def _publish_discovery_configs(self):
-        """Publish MQTT Discovery configs for all control and status entities."""
+        """Publish MQTT Discovery configs for all entities."""
         if not self.mqtt:
             return
         
         logger.info("Publishing MQTT Discovery configs...")
         
-        # ===== Control Entities (inputs) =====
+        # ===== Schedule Input Entities =====
         
-        # Charge Power (number input)
-        self.mqtt.publish_number(
-            NumberConfig(
-                object_id="charge_power",
-                name="Charge Power",
-                min_value=0,
-                max_value=10000,
-                step=100,
-                state=str(self.control_state['charge_power_w']),
-                unit_of_measurement="W",
-                device_class="power",
-                icon="mdi:lightning-bolt",
-                entity_category="config",
-            ),
-            command_callback=lambda v: self._handle_command('charge_power_w', int(v)),
-        )
-        
-        # Charge Duration (number input)
-        self.mqtt.publish_number(
-            NumberConfig(
-                object_id="charge_duration",
-                name="Charge Duration",
-                min_value=0,
-                max_value=1440,  # 24 hours in minutes
-                step=15,
-                state=str(self.control_state['charge_duration_min']),
-                unit_of_measurement="min",
-                icon="mdi:timer-outline",
-                entity_category="config",
-            ),
-            command_callback=lambda v: self._handle_command('charge_duration_min', int(v)),
-        )
-        
-        # Charge Start Time (text input with pattern)
+        # Charge Schedule (JSON text input)
         self.mqtt.publish_text(
             TextConfig(
-                object_id="charge_start_time",
-                name="Charge Start Time",
-                state=self.control_state['charge_start_time'],
-                min_length=5,
-                max_length=5,
-                pattern="^[0-2][0-9]:[0-5][0-9]$",
-                icon="mdi:clock-start",
+                object_id="charge_schedule",
+                name="Charge Schedule",
+                state=self.charge_schedule_json,
+                min_length=0,
+                max_length=1024,
+                icon="mdi:battery-charging-high",
                 entity_category="config",
             ),
-            command_callback=lambda v: self._handle_command('charge_start_time', v),
+            command_callback=self._handle_charge_schedule,
         )
         
-        # Discharge Power (number input)
-        self.mqtt.publish_number(
-            NumberConfig(
-                object_id="discharge_power",
-                name="Discharge Power",
-                min_value=0,
-                max_value=10000,
-                step=100,
-                state=str(self.control_state['discharge_power_w']),
-                unit_of_measurement="W",
-                device_class="power",
-                icon="mdi:lightning-bolt-outline",
-                entity_category="config",
-            ),
-            command_callback=lambda v: self._handle_command('discharge_power_w', int(v)),
-        )
-        
-        # Discharge Duration (number input)
-        self.mqtt.publish_number(
-            NumberConfig(
-                object_id="discharge_duration",
-                name="Discharge Duration",
-                min_value=0,
-                max_value=1440,  # 24 hours in minutes
-                step=15,
-                state=str(self.control_state['discharge_duration_min']),
-                unit_of_measurement="min",
-                icon="mdi:timer-outline",
-                entity_category="config",
-            ),
-            command_callback=lambda v: self._handle_command('discharge_duration_min', int(v)),
-        )
-        
-        # Discharge Start Time (text input with pattern)
+        # Discharge Schedule (JSON text input)
         self.mqtt.publish_text(
             TextConfig(
-                object_id="discharge_start_time",
-                name="Discharge Start Time",
-                state=self.control_state['discharge_start_time'],
-                min_length=5,
-                max_length=5,
-                pattern="^[0-2][0-9]:[0-5][0-9]$",
-                icon="mdi:clock-start",
+                object_id="discharge_schedule",
+                name="Discharge Schedule",
+                state=self.discharge_schedule_json,
+                min_length=0,
+                max_length=1024,
+                icon="mdi:battery-arrow-down",
                 entity_category="config",
             ),
-            command_callback=lambda v: self._handle_command('discharge_start_time', v),
-        )
-        
-        # Schedule Type (select dropdown)
-        self.mqtt.publish_select(
-            SelectConfig(
-                object_id="schedule_type",
-                name="Schedule Type",
-                options=["Charge Only", "Discharge Only", "Both", "Clear"],
-                state=self.control_state['schedule_type'],
-                icon="mdi:battery-sync",
-                entity_category="config",
-            ),
-            command_callback=lambda v: self._handle_command('schedule_type', v),
-        )
-        
-        # Apply Schedule Button
-        self.mqtt.publish_button(
-            ButtonConfig(
-                object_id="apply_schedule",
-                name="Apply Schedule",
-                icon="mdi:play-circle",
-            ),
-            press_callback=self.apply_schedule,
+            command_callback=self._handle_discharge_schedule,
         )
         
         # ===== Status Entities (read-only sensors) =====
@@ -325,7 +289,17 @@ class BatteryApiAddon:
                 object_id="battery_mode",
                 name="Battery Mode",
                 state=self.status.get('battery_mode', 'unknown') or "unknown",
-                icon="mdi:battery-charging",
+                icon="mdi:battery-sync",
+            )
+        )
+        
+        # Active Schedule (JSON showing current schedule)
+        self.mqtt.publish_sensor(
+            EntityConfig(
+                object_id="active_schedule",
+                name="Active Schedule",
+                state=self.status.get('active_schedule') or "none",
+                icon="mdi:calendar-clock",
             )
         )
         
@@ -353,16 +327,109 @@ class BatteryApiAddon:
         
         logger.info("Published %d entities", len(self.mqtt.get_published_entities()))
     
-    def _handle_command(self, key: str, value: Any):
-        """Handle a command from an MQTT control entity.
+    def _handle_charge_schedule(self, json_str: str):
+        """Handle charge schedule JSON input - validates and applies immediately."""
+        logger.info("Received charge schedule: %s", json_str[:100] if json_str else "(empty)")
         
-        Args:
-            key: Control state key to update
-            value: New value
-        """
-        old_value = self.control_state.get(key)
-        self.control_state[key] = value
-        logger.info("Control %s changed: %s -> %s", key, old_value, value)
+        try:
+            periods = parse_schedule_json(json_str)
+            self.charge_schedule_json = json_str if json_str else "[]"
+            logger.info("Parsed %d charge periods", len(periods))
+            
+            # Apply schedule immediately
+            self._apply_schedules()
+            
+        except ValueError as e:
+            logger.error("Invalid charge schedule: %s", e)
+            self.status['api_status'] = f'Invalid schedule: {e}'
+            self.update_entities()
+    
+    def _handle_discharge_schedule(self, json_str: str):
+        """Handle discharge schedule JSON input - validates and applies immediately."""
+        logger.info("Received discharge schedule: %s", json_str[:100] if json_str else "(empty)")
+        
+        try:
+            periods = parse_schedule_json(json_str)
+            self.discharge_schedule_json = json_str if json_str else "[]"
+            logger.info("Parsed %d discharge periods", len(periods))
+            
+            # Apply schedule immediately
+            self._apply_schedules()
+            
+        except ValueError as e:
+            logger.error("Invalid discharge schedule: %s", e)
+            self.status['api_status'] = f'Invalid schedule: {e}'
+            self.update_entities()
+    
+    def _apply_schedules(self):
+        """Apply both charge and discharge schedules to the inverter."""
+        # Parse both schedules
+        try:
+            charge_periods = parse_schedule_json(self.charge_schedule_json)
+            discharge_periods = parse_schedule_json(self.discharge_schedule_json)
+        except ValueError as e:
+            logger.error("Schedule parse error: %s", e)
+            return
+        
+        # Convert to ChargingPeriod objects
+        periods: List[ChargingPeriod] = []
+        
+        for p in charge_periods[:3]:  # Max 3 charge slots
+            periods.append(ChargingPeriod(
+                charge_type=BatteryChargeType.CHARGE,
+                start_time=p['start'],
+                duration_minutes=p['duration'],
+                power_w=p['power'],
+            ))
+        
+        for p in discharge_periods[:6]:  # Max 6 discharge slots
+            periods.append(ChargingPeriod(
+                charge_type=BatteryChargeType.DISCHARGE,
+                start_time=p['start'],
+                duration_minutes=p['duration'],
+                power_w=p['power'],
+            ))
+        
+        if not periods:
+            logger.info("No schedule periods defined - clearing schedule")
+            # Build summary for active_schedule sensor
+            self.status['active_schedule'] = "none"
+        else:
+            logger.info("Applying schedule with %d periods:", len(periods))
+            for p in periods:
+                logger.info("  %s: %s for %d min at %dW", 
+                           p.charge_type.value, p.start_time, p.duration_minutes, p.power_w)
+            
+            # Build summary for active_schedule sensor
+            summary = {
+                'charge': [{'start': p.start_time, 'power': p.power_w, 'duration': p.duration_minutes} 
+                          for p in periods if p.charge_type == BatteryChargeType.CHARGE],
+                'discharge': [{'start': p.start_time, 'power': p.power_w, 'duration': p.duration_minutes} 
+                             for p in periods if p.charge_type == BatteryChargeType.DISCHARGE],
+            }
+            self.status['active_schedule'] = json.dumps(summary, separators=(',', ':'))
+        
+        # Apply to inverter
+        if self.simulation_mode:
+            logger.info("SIMULATION: Schedule would be applied")
+            self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.status['api_status'] = 'Simulation Mode'
+        else:
+            try:
+                success = self.saj_client.save_schedule(periods)
+                if success:
+                    self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    self.status['api_status'] = 'Connected'
+                    logger.info("Schedule applied successfully")
+                else:
+                    self.status['api_status'] = 'Apply Failed'
+                    logger.error("Failed to apply schedule")
+            except Exception as e:
+                self.status['api_status'] = f'Error: {e}'
+                logger.error("Schedule application error: %s", e)
+        
+        # Update sensors
+        self.update_entities()
     
     def poll_status(self):
         """Poll SAJ API for current battery status."""
@@ -370,7 +437,6 @@ class BatteryApiAddon:
             # Simulated status
             self.status['battery_soc'] = 75
             self.status['battery_mode'] = 'TimeOfUse'
-            self.status['charge_direction'] = 'idle'
             logger.debug("SIMULATION: Status poll (SOC=75%%, mode=TimeOfUse)")
             return
         
@@ -381,61 +447,11 @@ class BatteryApiAddon:
                 self.status['battery_mode'] = mode_result
                 self.status['api_status'] = 'Connected'
             
-            # TODO: Add SOC and charge direction polling in Phase 2
+            # TODO: Add SOC polling when we decode that API endpoint
             
         except Exception as e:
             logger.error("Status poll failed: %s", e)
             self.status['api_status'] = f'Poll Error: {e}'
-    
-    def apply_schedule(self):
-        """Apply the configured schedule to the inverter."""
-        schedule_type = self.control_state['schedule_type']
-        
-        periods = []
-        
-        # Build charge period if requested
-        if schedule_type in ('Charge Only', 'Both'):
-            periods.append(ChargingPeriod(
-                charge_type=BatteryChargeType.CHARGE,
-                start_time=self.control_state['charge_start_time'],
-                duration_minutes=self.control_state['charge_duration_min'],
-                power_w=self.control_state['charge_power_w'],
-            ))
-        
-        # Build discharge period if requested
-        if schedule_type in ('Discharge Only', 'Both'):
-            periods.append(ChargingPeriod(
-                charge_type=BatteryChargeType.DISCHARGE,
-                start_time=self.control_state['discharge_start_time'],
-                duration_minutes=self.control_state['discharge_duration_min'],
-                power_w=self.control_state['discharge_power_w'],
-            ))
-        
-        if not periods:
-            logger.info("Clear schedule requested")
-            # TODO: Implement clear schedule in Phase 3
-            return
-        
-        logger.info("Applying schedule with %d periods", len(periods))
-        for p in periods:
-            logger.info("  %s: %s for %d min at %dW", 
-                       p.charge_type.value, p.start_time, p.duration_minutes, p.power_w)
-        
-        if self.simulation_mode:
-            logger.info("SIMULATION: Schedule would be applied")
-            self.status['last_applied'] = datetime.now().isoformat()
-            return
-        
-        # Apply via SAJ API
-        try:
-            success = self.saj_client.save_schedule(periods)
-            if success:
-                self.status['last_applied'] = datetime.now().isoformat()
-                logger.info("Schedule applied successfully")
-            else:
-                logger.error("Failed to apply schedule")
-        except Exception as e:
-            logger.error("Schedule application error: %s", e)
     
     def update_entities(self):
         """Publish updated status to MQTT entities."""
@@ -449,6 +465,9 @@ class BatteryApiAddon:
         
         mode = self.status.get('battery_mode')
         self.mqtt.update_state("sensor", "battery_mode", mode or "unknown")
+        
+        active = self.status.get('active_schedule')
+        self.mqtt.update_state("sensor", "active_schedule", active or "none")
         
         api_status = self.status.get('api_status')
         self.mqtt.update_state("sensor", "api_status", api_status or "unknown")
