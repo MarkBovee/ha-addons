@@ -1,10 +1,10 @@
 # Proposal: Add Battery API Add-on
 
 **Version:** 1.2  
-**Status:** 10% — Register Mapping Decoded  
+**Status:** 100% — COMPLETE ✅  
 **Created:** 2025-11-25  
-**Updated:** 2025-11-28  
-**Branch:** `feature/add-battery-api-addon`
+**Completed:** 2025-11-28  
+**PR:** [#9](https://github.com/MarkBovee/ha-addons/pull/9) (merged)
 
 ---
 
@@ -42,12 +42,12 @@ This separates the battery API layer from the NetDaemon optimization logic, allo
 
 ## Success Criteria
 
-- [ ] Add-on connects to SAJ API and authenticates successfully
-- [ ] SOC sensor updates every 60 seconds with accurate battery level
-- [ ] User can trigger a simple charge/discharge via entity controls
-- [ ] Schedule applied to inverter matches requested parameters (power, duration, time)
-- [ ] Status entities reflect current inverter state (mode, charge direction)
-- [ ] All entities have proper `unique_id` via MQTT Discovery
+- [x] Add-on connects to SAJ API and authenticates successfully ✅
+- [x] SOC sensor updates every 60 seconds with accurate battery level ✅
+- [x] User can trigger a simple charge/discharge via entity controls ✅
+- [x] Schedule applied to inverter matches requested parameters (power, duration, time) ✅
+- [x] Status entities reflect current inverter state (mode, charge direction) ✅
+- [x] All entities have proper `unique_id` via MQTT Discovery ✅
 
 ---
 
