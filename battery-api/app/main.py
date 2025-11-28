@@ -330,10 +330,35 @@ class BatteryApiAddon:
         
         return True
     
+    def _cleanup_old_entities(self):
+        """Remove old/deprecated MQTT Discovery entities from previous versions."""
+        if not self.mqtt:
+            return
+        
+        # List of old entity IDs that were renamed or removed
+        old_entities = [
+            # v0.1.x had separate charge/discharge text entities
+            ("text", "charge_schedule"),
+            ("text", "discharge_schedule"),
+            # v0.2.0 renamed battery_mode_setting to battery_mode
+            ("select", "battery_mode_setting"),
+            # Any other deprecated entities can be added here
+        ]
+        
+        for component, object_id in old_entities:
+            try:
+                if self.mqtt.remove_entity(component, object_id):
+                    logger.info("Removed old entity: %s.battery_api_%s", component, object_id)
+            except Exception as e:
+                logger.debug("Could not remove old entity %s.%s: %s", component, object_id, e)
+    
     def _publish_discovery_configs(self):
         """Publish MQTT Discovery configs for all entities."""
         if not self.mqtt:
             return
+        
+        # Clean up old entities from previous versions first
+        self._cleanup_old_entities()
         
         logger.info("Publishing MQTT Discovery configs...")
         
