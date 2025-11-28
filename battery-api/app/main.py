@@ -728,7 +728,7 @@ class BatteryApiAddon:
                 logger.info("RUN_ONCE mode: exiting")
                 break
             
-            if not sleep_with_shutdown_check(self.shutdown_event, poll_interval, logger):
+            if not sleep_with_shutdown_check(self.shutdown_event, poll_interval):
                 break
         
         logger.info("Main loop exiting")
