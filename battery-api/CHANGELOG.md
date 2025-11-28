@@ -2,6 +2,19 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.0] - 2025-11-28
+
+### Added
+- Sync battery mode and schedule from inverter on startup
+  - Battery mode select now reflects actual inverter mode
+  - Schedule text input populated with current inverter schedule
+
+### Removed
+- Redundant `sensor.ba_battery_mode` sensor (mode now shown in select entity)
+
+### Changed
+- Entity count reduced from 12 to 11
+
 ## [0.1.1] - 2025-11-28
 
 ### Fixed

@@ -60,6 +60,13 @@ BATTERY_MODE_API_MAP = {
 }
 BATTERY_MODE_REVERSE_MAP = {v: k for k, v in BATTERY_MODE_API_MAP.items()}
 
+# Map from API response mode (hyphenated) to select option
+API_MODE_TO_SELECT = {
+    "self-consumption": "Self-consumption",
+    "time-of-use": "Time-of-use",
+    "ai": "AI",
+}
+
 
 def load_config() -> dict:
     """Load Battery API configuration."""
@@ -253,7 +260,6 @@ class BatteryApiAddon:
             'pv_power': None,       # W
             'grid_power': None,     # W (positive=importing, negative=exporting)
             'load_power': None,     # W
-            'battery_mode': None,   # Reported mode from inverter
             'schedule_status': 'No schedule',
             'last_applied': None,
             'api_status': 'Initializing',
@@ -429,16 +435,6 @@ class BatteryApiAddon:
             )
         )
         
-        # Battery Mode
-        self.mqtt.publish_sensor(
-            EntityConfig(
-                object_id="battery_mode",
-                name="Battery Mode",
-                state=self.status.get('battery_mode', 'unknown') or "unknown",
-                icon="mdi:battery-sync",
-            )
-        )
-        
         # Schedule Status (shows validation result or active schedule summary)
         self.mqtt.publish_sensor(
             EntityConfig(
@@ -607,7 +603,7 @@ class BatteryApiAddon:
         self.update_entities()
     
     def _fetch_current_schedule(self):
-        """Fetch current schedule from inverter (called on startup and after apply)."""
+        """Fetch current schedule from inverter and sync controls (called on startup and after apply)."""
         try:
             schedule = self.saj_client.get_schedule()
             if schedule:
@@ -616,6 +612,25 @@ class BatteryApiAddon:
                            schedule.get('mode'), 
                            len(schedule.get('charge', [])),
                            len(schedule.get('discharge', [])))
+                
+                # Sync battery mode setting from inverter
+                api_mode = schedule.get('mode')
+                if api_mode and api_mode in API_MODE_TO_SELECT:
+                    self.battery_mode_setting = API_MODE_TO_SELECT[api_mode]
+                    logger.info("Synced battery mode setting to: %s", self.battery_mode_setting)
+                
+                # Sync schedule JSON (rebuild from fetched data)
+                schedule_for_input = {
+                    "charge": schedule.get('charge', []),
+                    "discharge": schedule.get('discharge', [])
+                }
+                if schedule_for_input['charge'] or schedule_for_input['discharge']:
+                    self.schedule_json = json.dumps(schedule_for_input, indent=2)
+                    self.validated_schedule = schedule_for_input
+                    charge_count = len(schedule_for_input['charge'])
+                    discharge_count = len(schedule_for_input['discharge'])
+                    self.status['schedule_status'] = f'Synced: {charge_count} charge, {discharge_count} discharge'
+                    logger.info("Synced schedule input from inverter")
             else:
                 self.status['current_schedule'] = '{}'
                 logger.warning("Failed to fetch current schedule")
@@ -631,7 +646,6 @@ class BatteryApiAddon:
             self.status['pv_power'] = 3000
             self.status['grid_power'] = -200
             self.status['load_power'] = 2500
-            self.status['battery_mode'] = 'TimeOfUse'
             self.status['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             logger.debug("SIMULATION: Status poll (SOC=75%%, bat=500W, pv=3000W)")
             return
@@ -644,7 +658,6 @@ class BatteryApiAddon:
                 self.status['pv_power'] = flow_data.get('pv_power')
                 self.status['grid_power'] = flow_data.get('grid_power')
                 self.status['load_power'] = flow_data.get('load_power')
-                self.status['battery_mode'] = flow_data.get('user_mode')
                 self.status['last_update'] = flow_data.get('update_time')
                 self.status['api_status'] = 'Connected'
         except Exception as e:
@@ -681,10 +694,6 @@ class BatteryApiAddon:
         self.mqtt.update_state("sensor", "load_power",
                                str(int(load_power)) if load_power is not None else "unknown")
         
-        # Battery Mode
-        self.mqtt.update_state("sensor", "battery_mode", 
-                               self.status.get('battery_mode') or "unknown")
-        
         self.mqtt.update_state("sensor", "schedule_status", 
                                self.status.get('schedule_status') or "No schedule")
         
@@ -717,7 +726,7 @@ class BatteryApiAddon:
                 if first_run:
                     logger.info("Ready: SOC=%s, mode=%s, api=%s",
                                self.status.get('battery_soc'),
-                               self.status.get('battery_mode'),
+                               self.battery_mode_setting,
                                self.status.get('api_status'))
                     first_run = False
                 
