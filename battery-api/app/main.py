@@ -21,6 +21,7 @@ from shared.ha_mqtt_discovery import (
     MqttDiscovery,
     EntityConfig,
     TextConfig,
+    SelectConfig,
     get_mqtt_config_from_env,
 )
 
@@ -49,6 +50,14 @@ SCHEDULE_EXAMPLE = '''{
     {"start": "17:00", "power": 2500, "duration": 120}
   ]
 }'''
+
+# Battery mode options for the select entity
+BATTERY_MODE_OPTIONS = ["Self-consumption", "Time-of-use"]
+BATTERY_MODE_API_MAP = {
+    "Self-consumption": "self_consumption",
+    "Time-of-use": "time_of_use",
+}
+BATTERY_MODE_REVERSE_MAP = {v: k for k, v in BATTERY_MODE_API_MAP.items()}
 
 
 def load_config() -> dict:
@@ -220,10 +229,13 @@ class BatteryApiAddon:
         self.schedule_json = "{}"
         self.validated_schedule: Optional[Dict[str, List]] = None
         
+        # Battery mode setting (what user selected)
+        self.battery_mode_setting = "Self-consumption"  # Default
+        
         # Status (updated from SAJ API)
         self.status = {
             'battery_soc': None,
-            'battery_mode': None,
+            'battery_mode': None,  # Reported mode from inverter
             'schedule_status': 'No schedule',
             'last_applied': None,
             'api_status': 'Initializing',
@@ -295,6 +307,21 @@ class BatteryApiAddon:
             return
         
         logger.info("Publishing MQTT Discovery configs...")
+        
+        # ===== Control Entities =====
+        
+        # Battery Mode Setting (select entity for mode control)
+        self.mqtt.publish_select(
+            SelectConfig(
+                object_id="battery_mode_setting",
+                name="Battery Mode",
+                options=BATTERY_MODE_OPTIONS,
+                state=self.battery_mode_setting,
+                icon="mdi:battery-sync",
+                entity_category="config",
+            ),
+            command_callback=self._handle_mode_select,
+        )
         
         # ===== Schedule Input Entity =====
         
@@ -371,6 +398,39 @@ class BatteryApiAddon:
         
         logger.info("Published %d entities", len(self.mqtt.get_published_entities()))
     
+    def _handle_mode_select(self, mode: str):
+        """Handle battery mode selection."""
+        logger.info("Received mode selection: %s", mode)
+        
+        if mode not in BATTERY_MODE_OPTIONS:
+            logger.error("Invalid mode: %s (expected one of %s)", mode, BATTERY_MODE_OPTIONS)
+            return
+        
+        # Store the setting
+        self.battery_mode_setting = mode
+        
+        # Apply to inverter
+        api_mode = BATTERY_MODE_API_MAP.get(mode, "self_consumption")
+        
+        if self.simulation_mode:
+            logger.info("SIMULATION: Would set mode to %s", mode)
+            self.status['api_status'] = 'Simulation'
+        else:
+            try:
+                success = self.saj_client.set_battery_mode(api_mode)
+                if success:
+                    self.status['api_status'] = 'Connected'
+                    logger.info("Mode set to %s successfully", mode)
+                else:
+                    self.status['api_status'] = 'Mode Set Failed'
+                    logger.error("Failed to set mode to %s", mode)
+            except Exception as e:
+                self.status['api_status'] = f'Error: {e}'
+                logger.error("Mode setting error: %s", e)
+        
+        # Update entities
+        self.update_entities()
+
     def _handle_schedule_input(self, json_str: str):
         """Handle schedule JSON input - validates and applies if valid."""
         logger.info("Received schedule input: %s", json_str[:200] if json_str else "(empty)")
@@ -494,6 +554,10 @@ class BatteryApiAddon:
         
         self.mqtt.update_state("sensor", "last_applied", 
                                self.status.get('last_applied') or "never")
+        
+        # Update mode select state (in case it changed)
+        self.mqtt.update_state("select", "battery_mode_setting", 
+                               self.battery_mode_setting)
     
     def run(self):
         """Main run loop."""

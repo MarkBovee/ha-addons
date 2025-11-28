@@ -38,6 +38,12 @@ DEFAULT_LANG = "en"
 CLIENT_ID = "esolar-monitor-admin"
 BASE_URL = "https://eop.saj-electric.com"
 
+# Battery mode register address (from HAR analysis)
+MODE_COMM_ADDRESS = "3647|3647"
+# Mode values: 0 = Self-consumption, 1 = Time-of-use
+MODE_VALUE_SELF_CONSUMPTION = "0|0"
+MODE_VALUE_TIME_OF_USE = "1|1"
+
 # Token refresh buffer (refresh 24h before expiry)
 REFRESH_BEFORE_EXPIRY = timedelta(hours=24)
 
@@ -508,4 +514,79 @@ class SajApiClient:
                 
         except Exception as e:
             logger.error("Exception saving schedule: %s", e)
+            return False
+
+    def set_battery_mode(self, mode: str) -> bool:
+        """Set the battery operation mode.
+        
+        Args:
+            mode: Mode to set - "self_consumption" or "time_of_use"
+            
+        Returns:
+            True if mode was set successfully
+        """
+        mode_lower = mode.lower().replace("-", "_").replace(" ", "_")
+        
+        if mode_lower in ("self_consumption", "selfconsumption"):
+            mode_value = MODE_VALUE_SELF_CONSUMPTION
+            mode_name = "Self-consumption"
+        elif mode_lower in ("time_of_use", "timeofuse", "tou"):
+            mode_value = MODE_VALUE_TIME_OF_USE
+            mode_name = "Time-of-use"
+        else:
+            logger.error("Unknown battery mode: %s (expected 'self_consumption' or 'time_of_use')", mode)
+            return False
+        
+        if self.simulation_mode:
+            logger.info("SIMULATION: Would set battery mode to %s", mode_name)
+            return True
+        
+        self._ensure_authenticated()
+        
+        url = f"{self.base_url}/dev-api/api/v1/remote/client/saveCommonParaRemoteSetting"
+        
+        # Prepare signing parameters
+        client_date = datetime.utcnow().strftime('%Y-%m-%d')
+        timestamp = str(int(time.time() * 1000))
+        random_str = _generate_random_alphanumeric(32)
+        
+        sign_params = {
+            'appProjectName': DEFAULT_APP_PROJECT_NAME,
+            'clientDate': client_date,
+            'lang': DEFAULT_LANG,
+            'timeStamp': timestamp,
+            'random': random_str,
+            'clientId': CLIENT_ID,
+        }
+        signed = _calc_signature(sign_params)
+        
+        # Add mode-specific parameters
+        signed['deviceSn'] = self.device_serial
+        signed['isParallelBatchSetting'] = str(DEFAULT_IS_PARALLEL_BATCH_SETTING)
+        signed['commAddress'] = MODE_COMM_ADDRESS
+        signed['componentId'] = "|0"  # From HAR capture
+        signed['operType'] = str(DEFAULT_OPER_TYPE)
+        signed['transferId'] = "|"  # From HAR capture
+        signed['value'] = mode_value
+        
+        logger.info("Setting battery mode to %s (value=%s)", mode_name, mode_value)
+        
+        try:
+            headers = {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}
+            response = self._session.post(url, data=signed, headers=headers)
+            response.raise_for_status()
+            
+            result = response.json()
+            err_code = result.get('errCode')
+            
+            if err_code == 0:
+                logger.info("Battery mode set to %s successfully", mode_name)
+                return True
+            else:
+                error_msg = result.get('errMsg', 'Unknown error')
+                logger.error("Failed to set battery mode: code=%s, msg=%s", err_code, error_msg)
+                return False
+                
+        except Exception as e:
+            logger.error("Exception setting battery mode: %s", e)
             return False
