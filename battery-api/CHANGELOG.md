@@ -2,6 +2,11 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.1.1] - 2025-11-28
+
+### Fixed
+- Fixed TypeError in main loop: removed extra `logger` argument from `sleep_with_shutdown_check()` call
+
 ## [0.1.0] - 2025-01-23
 
 ### Added
