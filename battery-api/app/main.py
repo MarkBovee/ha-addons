@@ -331,7 +331,11 @@ class BatteryApiAddon:
         return True
     
     def _cleanup_old_entities(self):
-        """Remove old/deprecated MQTT Discovery entities from previous versions."""
+        """Remove old/deprecated MQTT Discovery entities from previous versions.
+        
+        Publishes empty configs to remove old entities that were renamed or removed.
+        This is idempotent - safe to call even if entities don't exist.
+        """
         if not self.mqtt:
             return
         
@@ -347,8 +351,8 @@ class BatteryApiAddon:
         
         for component, object_id in old_entities:
             try:
-                if self.mqtt.remove_entity(component, object_id):
-                    logger.info("Removed old entity: %s.battery_api_%s", component, object_id)
+                self.mqtt.remove_entity(component, object_id)
+                logger.debug("Sent removal for old entity: %s.battery_api_%s", component, object_id)
             except Exception as e:
                 logger.debug("Could not remove old entity %s.%s: %s", component, object_id, e)
     

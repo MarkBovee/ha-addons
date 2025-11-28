@@ -1,6 +1,6 @@
 name: Battery API
 description: Control SAJ Electric battery inverters via Home Assistant entities - schedule charging and discharging
-version: "0.2.5"
+version: "0.2.6"
 slug: battery_api
 init: false
 homeassistant_api: true
