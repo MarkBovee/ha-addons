@@ -1,6 +1,29 @@
 {
   "name": "Mark Bovee's Home Assistant Addons",
   "url": "https://github.com/MarkBovee/ha-addons",
-  "maintainer": "Mark Bovee"
+  "maintainer": "Mark Bovee",
+  "addons": [
+    {
+      "name": "Charge Amps Monitor",
+      "slug": "charge-amps-monitor",
+      "description": "Monitor and control Charge Amps EV chargers",
+      "version": "1.0.0",
+      "url": "https://github.com/MarkBovee/ha-addons/tree/main/charge-amps-monitor"
+    },
+    {
+      "name": "Energy Prices",
+      "slug": "energy-prices",
+      "description": "Fetch and display Nord Pool electricity prices",
+      "version": "1.0.0",
+      "url": "https://github.com/MarkBovee/ha-addons/tree/main/energy-prices"
+    },
+    {
+      "name": "Battery API",
+      "slug": "battery-api",
+      "description": "Control SAJ Electric inverter battery charge/discharge schedules",
+      "version": "0.1.0",
+      "url": "https://github.com/MarkBovee/ha-addons/tree/main/battery-api"
+    }
+  ]
 }
 

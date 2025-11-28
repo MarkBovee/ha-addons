@@ -1,0 +1,47 @@
+name: Battery API
+description: Control SAJ Electric battery inverters via Home Assistant entities - schedule charging and discharging
+version: "0.1.0"
+slug: battery_api
+init: false
+homeassistant_api: true
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+# Options schema for UI-managed settings
+options:
+  # SAJ Electric Cloud API credentials
+  saj_username: ""
+  saj_password: ""
+  device_serial_number: ""
+  plant_uid: ""
+  
+  # Polling and behavior settings
+  poll_interval_seconds: 60
+  log_level: "info"
+  simulation_mode: false
+  
+  # MQTT settings for Home Assistant Mosquitto broker
+  # Get credentials from Mosquitto add-on configuration
+  mqtt_host: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
+
+# Schema defines the data types for validation
+schema:
+  saj_username: str
+  saj_password: password
+  device_serial_number: str
+  plant_uid: str
+  poll_interval_seconds: int(30,300)?
+  log_level: list(debug|info|warning|error)?
+  simulation_mode: bool?
+  # Advanced: MQTT settings (optional - auto-detects core-mosquitto by default)
+  mqtt_host: str?
+  mqtt_port: int?
+  mqtt_user: str?
+  mqtt_password: str?
