@@ -2,6 +2,13 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.5] - 2025-11-28
+
+### Fixed
+- MQTT subscriptions now automatically re-subscribe on reconnection
+  - Fixes issue where schedule updates were lost after MQTT broker disconnect/reconnect
+  - Command callbacks are stored and re-subscribed in `_on_connect` handler
+
 ## [0.2.4] - 2025-11-28
 
 ### Added

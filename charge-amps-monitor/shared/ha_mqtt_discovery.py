@@ -247,12 +247,21 @@ class MqttDiscovery:
         """Callback when MQTT connection is established.
         
         Note: paho-mqtt 2.x uses ReasonCode objects instead of int return codes.
+        Re-subscribes to all command topics on reconnection to ensure
+        subscriptions are not lost after a disconnect.
         """
         # paho-mqtt 2.x: reason_code is a ReasonCode object
         # Success is when reason_code == 0 or reason_code.is_failure is False
         if reason_code == 0 or (hasattr(reason_code, 'is_failure') and not reason_code.is_failure):
             logger.info("Connected to MQTT broker at %s:%d", self.mqtt_host, self.mqtt_port)
             self._connected = True
+            
+            # Re-subscribe to all command topics on reconnection
+            # This is needed because subscriptions don't persist across disconnects
+            if hasattr(self, '_command_callbacks') and self._command_callbacks:
+                for topic in self._command_callbacks.keys():
+                    self._client.subscribe(topic, qos=1)
+                    logger.info("Re-subscribed to command topic: %s", topic)
         else:
             logger.error("Failed to connect to MQTT broker: %s", reason_code)
             self._connected = False
