@@ -112,6 +112,32 @@ The add-on **SHALL** apply configured schedules to the SAJ inverter when trigger
 
 ---
 
+### Requirement: Dynamic Address Pattern Generation
+
+The add-on **SHALL** dynamically generate SAJ API register addresses based on the number of charge and discharge periods.
+
+#### Scenario: Generate pattern for 1+1 schedule
+- **WHEN** user configures 1 charge period and 1 discharge period
+- **THEN** add-on generates comm_address with header + 1 charge slot + 1 discharge slot
+- **AND** registers used are `3647|3606|3607|3608_3608|361B|361C|361D_361D`
+
+#### Scenario: Generate pattern for multi-period schedule
+- **WHEN** user configures 2 charge periods and 3 discharge periods
+- **THEN** add-on generates comm_address with header + 2 charge slots + 3 discharge slots
+- **AND** each slot uses 3 consecutive Modbus registers
+
+#### Scenario: Validate pattern limits
+- **WHEN** user configures more than 3 charge or 6 discharge periods
+- **THEN** add-on rejects the configuration
+- **AND** error message indicates maximum limits (3 charge, 6 discharge)
+
+#### Scenario: Reject empty schedule
+- **WHEN** user configures 0 charge periods and 0 discharge periods
+- **THEN** add-on rejects the configuration
+- **AND** error message indicates at least 1 period required
+
+---
+
 ### Requirement: Simulation Mode
 
 The add-on **SHALL** support a simulation mode for testing without affecting the real inverter.

@@ -207,42 +207,116 @@ This document captures the technical architecture and design decisions for the B
 
 ## SAJ API Patterns
 
-### Supported Schedule Patterns
+### Decoded Register Mapping (from HAR Analysis)
 
-The SAJ API requires specific combinations of charge and discharge periods:
+The SAJ H2 inverter uses Modbus register addresses for battery schedule configuration. Through HAR file analysis, we've decoded the complete register mapping:
 
-| Pattern | Charges | Discharges | Use Case |
-|---------|---------|------------|----------|
-| 1+1 | 1 | 1 | Standard day (charge overnight, discharge peak) |
-| 1+2 | 1 | 2 | Split discharge (morning + evening peaks) |
-| 2+1 | 2 | 1 | Dual rate charging (night + solar top-up) |
-| 1+0 | 1 | 0 | Charge only (no discharge periods) |
-| 0+1 | 0 | 1 | Discharge only (no charge periods) |
+#### Register Structure
 
-**v1 Implementation:** Support 1+1, 1+0, 0+1 patterns only.
+| Component | Register | Purpose |
+|-----------|----------|----------|
+| **Header** | `0x3647` | Enables time-of-use mode |
+| **Charge Slot 1** | `0x3606`, `0x3607`, `0x3608` | First charge period |
+| **Charge Slot 2** | `0x3609`, `0x360A`, `0x360B` | Second charge period |
+| **Charge Slot 3** | `0x360C`, `0x360D`, `0x360E` | Third charge period |
+| **Discharge Slot 1** | `0x361B`, `0x361C`, `0x361D` | First discharge period |
+| **Discharge Slot 2** | `0x361E`, `0x361F`, `0x3620` | Second discharge period |
+| **Discharge Slot 3** | `0x3621`, `0x3622`, `0x3623` | Third discharge period |
+| **Discharge Slot 4** | `0x3624`, `0x3625`, `0x3626` | Fourth discharge period |
+| **Discharge Slot 5** | `0x3627`, `0x3628`, `0x3629` | Fifth discharge period |
+| **Discharge Slot 6** | `0x362A`, `0x362B`, `0x362C` | Sixth discharge period |
 
-### Address Mapping
+#### Pattern Format
 
-Each pattern requires specific register addresses for the SAJ API:
+Each slot uses 3 consecutive registers formatted as: `XXXX|YYYY|ZZZZ_ZZZZ`
+- First register: Start time (encoded)
+- Second register: End time (encoded)  
+- Third register: Power setting (duplicated with underscore suffix)
+
+**API Fields:**
+- `commAddress`: Header + slot registers joined by `|`
+- `componentId`: `|30|30|30_30` repeated per slot (4 values per register block)
+- `transferId`: `|5|5|2_1` repeated per slot (data type markers)
+
+### Supported Combinations
+
+| Charges | Discharges | Use Case |
+|---------|------------|----------|
+| 0-3 | 0-6 | Any combination with at least 1 total period |
+
+**Maximum:** 3 charge slots + 6 discharge slots
+
+### Dynamic Address Generation (Python)
 
 ```python
-ADDRESS_PATTERNS = {
-    (1, 1): {
-        "comm_address": "3647|3606|3607|3608_3608|361B|361C|361D_361D",
-        "component_id": "|30|30|30_30|30|30|30_30",
-        "transfer_id": "|5|5|2_1|5|5|2_1"
-    },
-    (1, 0): {
-        "comm_address": "3647|3606|3607|3608_3608",
-        "component_id": "|30|30|30_30",
-        "transfer_id": "|5|5|2_1"
-    },
-    (0, 1): {
-        "comm_address": "3647|361B|361C|361D_361D",
-        "component_id": "|30|30|30_30",
-        "transfer_id": "|5|5|2_1"
+# Register base addresses
+HEADER_REGISTER = "3647"
+
+CHARGE_SLOT_REGISTERS = [
+    ["3606", "3607", "3608"],  # Slot 1
+    ["3609", "360A", "360B"],  # Slot 2
+    ["360C", "360D", "360E"],  # Slot 3
+]
+
+DISCHARGE_SLOT_REGISTERS = [
+    ["361B", "361C", "361D"],  # Slot 1
+    ["361E", "361F", "3620"],  # Slot 2
+    ["3621", "3622", "3623"],  # Slot 3
+    ["3624", "3625", "3626"],  # Slot 4
+    ["3627", "3628", "3629"],  # Slot 5
+    ["362A", "362B", "362C"],  # Slot 6
+]
+
+def generate_address_patterns(charge_count: int, discharge_count: int):
+    """Generate SAJ API address patterns dynamically."""
+    if not is_supported_pattern(charge_count, discharge_count):
+        raise ValueError(f"Unsupported: {charge_count} charges + {discharge_count} discharges")
+    
+    comm_parts = [HEADER_REGISTER]
+    component_parts = []
+    transfer_parts = []
+    
+    # Add charge slots
+    for i in range(charge_count):
+        regs = CHARGE_SLOT_REGISTERS[i]
+        comm_parts.append(f"{regs[0]}|{regs[1]}|{regs[2]}_{regs[2]}")
+        component_parts.append("|30|30|30_30")
+        transfer_parts.append("|5|5|2_1")
+    
+    # Add discharge slots
+    for i in range(discharge_count):
+        regs = DISCHARGE_SLOT_REGISTERS[i]
+        comm_parts.append(f"{regs[0]}|{regs[1]}|{regs[2]}_{regs[2]}")
+        component_parts.append("|30|30|30_30")
+        transfer_parts.append("|5|5|2_1")
+    
+    return {
+        "comm_address": "|".join(comm_parts),
+        "component_id": "".join(component_parts),
+        "transfer_id": "".join(transfer_parts)
     }
-}
+
+def is_supported_pattern(charges: int, discharges: int) -> bool:
+    """Check if charge/discharge combination is supported."""
+    return (0 <= charges <= 3 and 
+            0 <= discharges <= 6 and 
+            charges + discharges > 0)
+```
+
+### Example Patterns
+
+**1 Charge + 1 Discharge (1+1):**
+```
+comm_address: 3647|3606|3607|3608_3608|361B|361C|361D_361D
+component_id: |30|30|30_30|30|30|30_30
+transfer_id:  |5|5|2_1|5|5|2_1
+```
+
+**2 Charges + 3 Discharges (2+3):**
+```
+comm_address: 3647|3606|3607|3608_3608|3609|360A|360B_360B|361B|361C|361D_361D|361E|361F|3620_3620|3621|3622|3623_3623
+component_id: |30|30|30_30|30|30|30_30|30|30|30_30|30|30|30_30|30|30|30_30
+transfer_id:  |5|5|2_1|5|5|2_1|5|5|2_1|5|5|2_1|5|5|2_1
 ```
 
 ---

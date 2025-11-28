@@ -1,8 +1,9 @@
 # Proposal: Add Battery API Add-on
 
 **Version:** 1.2  
-**Status:** 0% — Draft  
+**Status:** 10% — Register Mapping Decoded  
 **Created:** 2025-11-25  
+**Updated:** 2025-11-28  
 **Branch:** `feature/add-battery-api-addon`
 
 ---
@@ -76,13 +77,31 @@ This separates the battery API layer from the NetDaemon optimization logic, allo
 
 ---
 
+## Key Technical Discovery
+
+**SAJ API Register Mapping (Decoded 2025-11-28):**
+
+Analyzed HAR files to decode the Modbus register addresses used by the SAJ H2 inverter:
+
+| Component | Base Register | Slots |
+|-----------|---------------|-------|
+| Header (TOU mode) | `0x3647` | 1 |
+| Charge periods | `0x3606` | 3 max |
+| Discharge periods | `0x361B` | 6 max |
+
+Each slot uses 3 consecutive registers. Pattern generation is now dynamic instead of hardcoded, supporting any combination of 0-3 charges + 0-6 discharges.
+
+See `design.md` for full technical details and Python implementation.
+
+---
+
 ## Design Decisions
 
 See `design.md` for technical details on:
 - Entity-based control vs REST API
 - MQTT Discovery entity types
 - SAJ API porting strategy
-- Schedule pattern limitations
+- **SAJ register mapping and dynamic pattern generation**
 
 ---
 

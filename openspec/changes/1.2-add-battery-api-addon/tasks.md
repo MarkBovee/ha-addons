@@ -22,11 +22,21 @@
 - [ ] 2.7 Implement `get_device_status()` for SOC and power data
 - [ ] 2.8 Test authentication against SAJ API (manual validation)
 
-## Phase 3: Schedule Building ⏳ Pending
+## Phase 3: Schedule Building 🟡 In Progress
 
+### Research (COMPLETE)
+- [x] 3.0 **Decode SAJ register mapping from HAR files** — **DONE [2025-11-28]**
+  - Decoded header register: `0x3647` (enables time-of-use mode)
+  - Decoded charge slot registers: `0x3606+` (3 registers per slot, max 3 slots)
+  - Decoded discharge slot registers: `0x361B+` (3 registers per slot, max 6 slots)
+  - Implemented dynamic `generate_address_patterns()` algorithm (replaces hardcoded switch)
+  - Created 20 unit tests verifying pattern generation
+  - Committed to NetDaemonApps: `5fff8d7` (C# reference implementation)
+
+### Implementation
 - [ ] 3.1 Create `app/models.py` with `ChargingPeriod`, `ChargingSchema` classes
 - [ ] 3.2 Implement `ChargingPeriod.to_api_format()` method
-- [ ] 3.3 Implement address pattern lookup for supported patterns (1+1, 1+0, 0+1)
+- [ ] 3.3 Port dynamic `generate_address_patterns()` from C# to Python
 - [ ] 3.4 Implement `build_schedule_parameters()` function
 - [ ] 3.5 Implement `save_schedule()` API call
 - [ ] 3.6 Test schedule application (manual validation with simulation mode)
