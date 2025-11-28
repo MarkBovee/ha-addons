@@ -445,16 +445,6 @@ class BatteryApiAddon:
             )
         )
         
-        # Current Schedule (JSON from inverter - fetched on startup and after apply)
-        self.mqtt.publish_sensor(
-            EntityConfig(
-                object_id="current_schedule",
-                name="Current Schedule",
-                state=self.status.get('current_schedule') or '{}',
-                icon="mdi:calendar-sync",
-            )
-        )
-        
         # API Status
         self.mqtt.publish_sensor(
             EntityConfig(
@@ -703,12 +693,12 @@ class BatteryApiAddon:
         self.mqtt.update_state("sensor", "last_applied", 
                                self.status.get('last_applied') or "never")
         
-        self.mqtt.update_state("sensor", "current_schedule",
-                               self.status.get('current_schedule') or '{}')
-        
-        # Update mode select state (in case it changed)
+        # Update control entities with synced values
         self.mqtt.update_state("select", "battery_mode_setting", 
                                self.battery_mode_setting)
+        
+        self.mqtt.update_state("text", "schedule",
+                               self.schedule_json)
     
     def run(self):
         """Main run loop."""

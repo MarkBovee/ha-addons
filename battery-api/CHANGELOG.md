@@ -11,9 +11,10 @@ All notable changes to the Battery API add-on will be documented in this file.
 
 ### Removed
 - Redundant `sensor.ba_battery_mode` sensor (mode now shown in select entity)
+- Redundant `sensor.ba_current_schedule` sensor (schedule now shown in text entity)
 
 ### Changed
-- Entity count reduced from 12 to 11
+- Entity count reduced from 12 to 10
 
 ## [0.1.1] - 2025-11-28
 

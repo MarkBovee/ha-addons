@@ -79,7 +79,6 @@ mqtt_password: ""
 | `sensor.ba_grid_power` | Sensor | Grid power in watts (+ import, - export) |
 | `sensor.ba_load_power` | Sensor | House load power in watts |
 | `sensor.ba_schedule_status` | Sensor | Schedule validation status |
-| `sensor.ba_current_schedule` | Sensor | Current schedule on inverter (JSON) |
 | `sensor.ba_api_status` | Sensor | API connection status |
 | `sensor.ba_last_applied` | Sensor | Timestamp of last schedule application |
 
