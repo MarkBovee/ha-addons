@@ -252,6 +252,7 @@ class BatteryApiAddon:
             'schedule_status': 'No schedule',
             'last_applied': None,
             'api_status': 'Initializing',
+            'current_schedule': None,  # Fetched on startup and after apply
         }
         
         # Initialize SAJ API client
@@ -300,11 +301,14 @@ class BatteryApiAddon:
         if self.simulation_mode:
             logger.info("SIMULATION MODE: SAJ API calls will be logged but not executed")
             self.status['api_status'] = 'Simulation'
+            self.status['current_schedule'] = '{"mode": "simulation", "charge": [], "discharge": []}'
         else:
             try:
                 if self.saj_client.authenticate():
                     logger.info("SAJ API authentication successful")
                     self.status['api_status'] = 'Connected'
+                    # Fetch current schedule once at startup
+                    self._fetch_current_schedule()
                 else:
                     logger.error("SAJ API authentication failed")
                     self.status['api_status'] = 'Auth Failed'
@@ -384,6 +388,16 @@ class BatteryApiAddon:
                 name="Schedule Status",
                 state=self.status.get('schedule_status', 'No schedule'),
                 icon="mdi:calendar-check",
+            )
+        )
+        
+        # Current Schedule (JSON from inverter - fetched on startup and after apply)
+        self.mqtt.publish_sensor(
+            EntityConfig(
+                object_id="current_schedule",
+                name="Current Schedule",
+                state=self.status.get('current_schedule') or '{}',
+                icon="mdi:calendar-sync",
             )
         )
         
@@ -527,8 +541,29 @@ class BatteryApiAddon:
                 self.status['schedule_status'] = f'Error: {e}'
                 logger.error("Schedule application error: %s", e)
         
+        # Refresh current schedule from inverter after apply
+        if not self.simulation_mode and self.status.get('last_applied'):
+            self._fetch_current_schedule()
+        
         # Update sensors
         self.update_entities()
+    
+    def _fetch_current_schedule(self):
+        """Fetch current schedule from inverter (called on startup and after apply)."""
+        try:
+            schedule = self.saj_client.get_schedule()
+            if schedule:
+                self.status['current_schedule'] = json.dumps(schedule)
+                logger.info("Fetched current schedule: mode=%s, charge=%d, discharge=%d",
+                           schedule.get('mode'), 
+                           len(schedule.get('charge', [])),
+                           len(schedule.get('discharge', [])))
+            else:
+                self.status['current_schedule'] = '{}'
+                logger.warning("Failed to fetch current schedule")
+        except Exception as e:
+            logger.error("Error fetching current schedule: %s", e)
+            self.status['current_schedule'] = '{}'
     
     def poll_status(self):
         """Poll SAJ API for current battery status."""
@@ -567,6 +602,9 @@ class BatteryApiAddon:
         
         self.mqtt.update_state("sensor", "last_applied", 
                                self.status.get('last_applied') or "never")
+        
+        self.mqtt.update_state("sensor", "current_schedule",
+                               self.status.get('current_schedule') or '{}')
         
         # Update mode select state (in case it changed)
         self.mqtt.update_state("select", "battery_mode_setting", 
