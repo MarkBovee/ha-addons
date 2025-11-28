@@ -72,6 +72,100 @@ class EntityConfig:
     enabled_by_default: bool = True
 
 
+@dataclass
+class NumberConfig:
+    """Configuration for a Home Assistant number entity.
+    
+    Attributes:
+        object_id: Unique object ID within the addon
+        name: Human-readable name
+        min_value: Minimum value
+        max_value: Maximum value
+        step: Step increment
+        state: Current value as string
+        unit_of_measurement: Unit (e.g., "W", "min")
+        device_class: HA device class (e.g., "power")
+        mode: Display mode ("auto", "box", "slider")
+        icon: MDI icon
+        entity_category: Entity category ("config", "diagnostic", or None)
+    """
+    object_id: str
+    name: str
+    min_value: float
+    max_value: float
+    step: float = 1.0
+    state: str = "0"
+    unit_of_measurement: Optional[str] = None
+    device_class: Optional[str] = None
+    mode: str = "auto"
+    icon: Optional[str] = None
+    entity_category: Optional[str] = None
+
+
+@dataclass
+class SelectConfig:
+    """Configuration for a Home Assistant select entity.
+    
+    Attributes:
+        object_id: Unique object ID within the addon
+        name: Human-readable name
+        options: List of selectable options
+        state: Currently selected option
+        icon: MDI icon
+        entity_category: Entity category ("config", "diagnostic", or None)
+    """
+    object_id: str
+    name: str
+    options: List[str]
+    state: str
+    icon: Optional[str] = None
+    entity_category: Optional[str] = None
+
+
+@dataclass
+class ButtonConfig:
+    """Configuration for a Home Assistant button entity.
+    
+    Attributes:
+        object_id: Unique object ID within the addon
+        name: Human-readable name
+        device_class: HA device class (e.g., "restart", "update")
+        icon: MDI icon
+        entity_category: Entity category ("config", "diagnostic", or None)
+    """
+    object_id: str
+    name: str
+    device_class: Optional[str] = None
+    icon: Optional[str] = None
+    entity_category: Optional[str] = None
+
+
+@dataclass 
+class TextConfig:
+    """Configuration for a Home Assistant text entity.
+    
+    Attributes:
+        object_id: Unique object ID within the addon
+        name: Human-readable name
+        state: Current text value
+        min_length: Minimum text length (default: 0)
+        max_length: Maximum text length (default: 255)
+        pattern: Regex pattern for validation
+        mode: Text mode ("text" or "password")
+        icon: MDI icon
+        entity_category: Entity category ("config", "diagnostic", or None)
+    """
+    object_id: str
+    name: str
+    state: str = ""
+    min_length: int = 0
+    max_length: int = 255
+    pattern: Optional[str] = None
+    mode: str = "text"
+    icon: Optional[str] = None
+    entity_category: Optional[str] = None
+
+
 class MqttDiscovery:
     """MQTT Discovery client for Home Assistant.
     
@@ -343,6 +437,235 @@ class MqttDiscovery:
         
         return True
     
+    def _command_topic(self, component: str, object_id: str) -> str:
+        """Get command topic for controllable entities."""
+        return f"{self.addon_id}/{component}/{object_id}/set"
+    
+    def publish_number(self, config: NumberConfig, command_callback: Optional[callable] = None) -> bool:
+        """Publish a number entity via MQTT Discovery.
+        
+        Args:
+            config: Number entity configuration
+            command_callback: Optional callback function(value: float) for commands
+            
+        Returns:
+            True if published successfully
+        """
+        unique_id = self._unique_id(config.object_id)
+        state_topic = self._state_topic("number", config.object_id)
+        command_topic = self._command_topic("number", config.object_id)
+        
+        # Build discovery payload
+        discovery_payload = {
+            "name": config.name,
+            "unique_id": unique_id,
+            "state_topic": state_topic,
+            "command_topic": command_topic,
+            "min": config.min_value,
+            "max": config.max_value,
+            "step": config.step,
+            "mode": config.mode,
+            "device": self.device_info,
+        }
+        
+        if config.unit_of_measurement:
+            discovery_payload["unit_of_measurement"] = config.unit_of_measurement
+        if config.device_class:
+            discovery_payload["device_class"] = config.device_class
+        if config.icon:
+            discovery_payload["icon"] = config.icon
+        if config.entity_category:
+            discovery_payload["entity_category"] = config.entity_category
+        
+        # Publish discovery config
+        discovery_topic = self._discovery_topic("number", config.object_id)
+        if not self._publish(discovery_topic, discovery_payload):
+            return False
+        
+        # Publish current state
+        if not self._publish(state_topic, config.state):
+            return False
+        
+        # Subscribe to command topic if callback provided
+        if command_callback and self._client:
+            self._subscribe_command(command_topic, lambda msg: command_callback(float(msg)))
+        
+        self._published_entities.append(f"number.{self.addon_id}_{config.object_id}")
+        logger.debug("Published number entity: %s (unique_id=%s)", config.name, unique_id)
+        
+        return True
+    
+    def publish_select(self, config: SelectConfig, command_callback: Optional[callable] = None) -> bool:
+        """Publish a select entity via MQTT Discovery.
+        
+        Args:
+            config: Select entity configuration
+            command_callback: Optional callback function(option: str) for commands
+            
+        Returns:
+            True if published successfully
+        """
+        unique_id = self._unique_id(config.object_id)
+        state_topic = self._state_topic("select", config.object_id)
+        command_topic = self._command_topic("select", config.object_id)
+        
+        # Build discovery payload
+        discovery_payload = {
+            "name": config.name,
+            "unique_id": unique_id,
+            "state_topic": state_topic,
+            "command_topic": command_topic,
+            "options": config.options,
+            "device": self.device_info,
+        }
+        
+        if config.icon:
+            discovery_payload["icon"] = config.icon
+        if config.entity_category:
+            discovery_payload["entity_category"] = config.entity_category
+        
+        # Publish discovery config
+        discovery_topic = self._discovery_topic("select", config.object_id)
+        if not self._publish(discovery_topic, discovery_payload):
+            return False
+        
+        # Publish current state
+        if not self._publish(state_topic, config.state):
+            return False
+        
+        # Subscribe to command topic if callback provided
+        if command_callback and self._client:
+            self._subscribe_command(command_topic, command_callback)
+        
+        self._published_entities.append(f"select.{self.addon_id}_{config.object_id}")
+        logger.debug("Published select entity: %s (unique_id=%s)", config.name, unique_id)
+        
+        return True
+    
+    def publish_button(self, config: ButtonConfig, press_callback: Optional[callable] = None) -> bool:
+        """Publish a button entity via MQTT Discovery.
+        
+        Args:
+            config: Button entity configuration
+            press_callback: Optional callback function() for button press
+            
+        Returns:
+            True if published successfully
+        """
+        unique_id = self._unique_id(config.object_id)
+        command_topic = self._command_topic("button", config.object_id)
+        
+        # Build discovery payload - buttons don't have state_topic
+        discovery_payload = {
+            "name": config.name,
+            "unique_id": unique_id,
+            "command_topic": command_topic,
+            "device": self.device_info,
+        }
+        
+        if config.device_class:
+            discovery_payload["device_class"] = config.device_class
+        if config.icon:
+            discovery_payload["icon"] = config.icon
+        if config.entity_category:
+            discovery_payload["entity_category"] = config.entity_category
+        
+        # Publish discovery config
+        discovery_topic = self._discovery_topic("button", config.object_id)
+        if not self._publish(discovery_topic, discovery_payload):
+            return False
+        
+        # Subscribe to command topic if callback provided
+        if press_callback and self._client:
+            self._subscribe_command(command_topic, lambda msg: press_callback())
+        
+        self._published_entities.append(f"button.{self.addon_id}_{config.object_id}")
+        logger.debug("Published button entity: %s (unique_id=%s)", config.name, unique_id)
+        
+        return True
+    
+    def publish_text(self, config: TextConfig, command_callback: Optional[callable] = None) -> bool:
+        """Publish a text entity via MQTT Discovery.
+        
+        Args:
+            config: Text entity configuration
+            command_callback: Optional callback function(text: str) for commands
+            
+        Returns:
+            True if published successfully
+        """
+        unique_id = self._unique_id(config.object_id)
+        state_topic = self._state_topic("text", config.object_id)
+        command_topic = self._command_topic("text", config.object_id)
+        
+        # Build discovery payload
+        discovery_payload = {
+            "name": config.name,
+            "unique_id": unique_id,
+            "state_topic": state_topic,
+            "command_topic": command_topic,
+            "min": config.min_length,
+            "max": config.max_length,
+            "mode": config.mode,
+            "device": self.device_info,
+        }
+        
+        if config.pattern:
+            discovery_payload["pattern"] = config.pattern
+        if config.icon:
+            discovery_payload["icon"] = config.icon
+        if config.entity_category:
+            discovery_payload["entity_category"] = config.entity_category
+        
+        # Publish discovery config
+        discovery_topic = self._discovery_topic("text", config.object_id)
+        if not self._publish(discovery_topic, discovery_payload):
+            return False
+        
+        # Publish current state
+        if not self._publish(state_topic, config.state):
+            return False
+        
+        # Subscribe to command topic if callback provided
+        if command_callback and self._client:
+            self._subscribe_command(command_topic, command_callback)
+        
+        self._published_entities.append(f"text.{self.addon_id}_{config.object_id}")
+        logger.debug("Published text entity: %s (unique_id=%s)", config.name, unique_id)
+        
+        return True
+    
+    def _subscribe_command(self, topic: str, callback: callable):
+        """Subscribe to a command topic with a callback.
+        
+        Args:
+            topic: MQTT topic to subscribe to
+            callback: Function to call with message payload (str)
+        """
+        if not self._client:
+            return
+        
+        # Store callback for this topic
+        if not hasattr(self, '_command_callbacks'):
+            self._command_callbacks: Dict[str, callable] = {}
+            # Set up the message handler
+            self._client.on_message = self._on_message
+        
+        self._command_callbacks[topic] = callback
+        self._client.subscribe(topic, qos=1)
+        logger.debug("Subscribed to command topic: %s", topic)
+    
+    def _on_message(self, client, userdata, message):
+        """Handle incoming MQTT messages."""
+        topic = message.topic
+        payload = message.payload.decode('utf-8')
+        
+        if hasattr(self, '_command_callbacks') and topic in self._command_callbacks:
+            try:
+                self._command_callbacks[topic](payload)
+            except Exception as e:
+                logger.error("Error handling command on %s: %s", topic, e)
+
     def update_state(self, component: str, object_id: str, state: str, attributes: Optional[Dict[str, Any]] = None) -> bool:
         """Update state for an existing entity.
         
