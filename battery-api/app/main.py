@@ -1,14 +1,13 @@
 """Battery API add-on main entry point.
 
 Controls SAJ Electric battery inverters via Home Assistant entities.
-Provides charge/discharge scheduling through JSON-based text entities.
+Provides charge/discharge scheduling through a single JSON text entity.
 """
 
 import json
 import logging
 import os
 import sys
-import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -32,9 +31,6 @@ from .models import BatteryChargeType, ChargingPeriod
 # Configure logging
 logger = setup_logging(name=__name__)
 
-# Entity prefix for all battery-api entities
-ENTITY_PREFIX = "ba"
-
 # Battery API configuration defaults
 BA_CONFIG_DEFAULTS = {
     'poll_interval_seconds': 60,
@@ -45,10 +41,14 @@ BA_CONFIG_DEFAULTS = {
 BA_REQUIRED_FIELDS = ['saj_username', 'saj_password', 'device_serial_number', 'plant_uid']
 
 # Example schedule JSON for documentation
-SCHEDULE_EXAMPLE = '''[
-  {"start": "02:00", "power": 3000, "duration": 180},
-  {"start": "14:00", "power": 2000, "duration": 60}
-]'''
+SCHEDULE_EXAMPLE = '''{
+  "charge": [
+    {"start": "02:00", "power": 3000, "duration": 180}
+  ],
+  "discharge": [
+    {"start": "17:00", "power": 2500, "duration": 120}
+  ]
+}'''
 
 
 def load_config() -> dict:
@@ -71,86 +71,144 @@ def load_config() -> dict:
     return config
 
 
-def parse_schedule_json(json_str: str) -> List[Dict[str, Any]]:
-    """Parse and validate schedule JSON.
-    
-    Expected format:
-    [
-      {"start": "HH:MM", "power": 3000, "duration": 180},
-      ...
-    ]
+class ScheduleValidationError(Exception):
+    """Raised when schedule validation fails."""
+    pass
+
+
+def validate_period(period: dict, index: int, period_type: str) -> Dict[str, Any]:
+    """Validate a single period object.
     
     Args:
-        json_str: JSON string (or empty string for no schedule)
+        period: Period dictionary to validate
+        index: Index in the array (for error messages)
+        period_type: 'charge' or 'discharge' (for error messages)
         
     Returns:
-        List of period dictionaries
+        Validated period with normalized values
         
     Raises:
-        ValueError: If JSON is invalid or periods are malformed
+        ScheduleValidationError: If validation fails
     """
-    if not json_str or json_str.strip() in ('', '[]'):
-        return []
+    if not isinstance(period, dict):
+        raise ScheduleValidationError(f"{period_type}[{index}] must be an object")
     
+    # Required fields
+    if 'start' not in period:
+        raise ScheduleValidationError(f"{period_type}[{index}] missing 'start' (format: 'HH:MM')")
+    if 'power' not in period:
+        raise ScheduleValidationError(f"{period_type}[{index}] missing 'power' (watts)")
+    if 'duration' not in period:
+        raise ScheduleValidationError(f"{period_type}[{index}] missing 'duration' (minutes)")
+    
+    # Validate start time format
+    start = period['start']
+    if not isinstance(start, str) or len(start) != 5 or start[2] != ':':
+        raise ScheduleValidationError(f"{period_type}[{index}] 'start' must be 'HH:MM' format")
     try:
-        periods = json.loads(json_str)
+        hour, minute = int(start[:2]), int(start[3:])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise ScheduleValidationError(f"{period_type}[{index}] invalid time: {start}")
+    
+    # Validate power
+    power = period['power']
+    if not isinstance(power, (int, float)) or power < 0 or power > 10000:
+        raise ScheduleValidationError(f"{period_type}[{index}] 'power' must be 0-10000 watts")
+    
+    # Validate duration
+    duration = period['duration']
+    if not isinstance(duration, (int, float)) or duration < 0 or duration > 1440:
+        raise ScheduleValidationError(f"{period_type}[{index}] 'duration' must be 0-1440 minutes")
+    
+    return {
+        'start': start,
+        'power': int(power),
+        'duration': int(duration),
+    }
+
+
+def validate_schedule(json_str: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Validate complete schedule JSON.
+    
+    Expected format:
+    {
+      "charge": [
+        {"start": "HH:MM", "power": 3000, "duration": 180},
+        ...
+      ],
+      "discharge": [
+        {"start": "HH:MM", "power": 2500, "duration": 120},
+        ...
+      ]
+    }
+    
+    Args:
+        json_str: JSON string (or empty/null for clearing)
+        
+    Returns:
+        Validated schedule dict with 'charge' and 'discharge' lists
+        
+    Raises:
+        ScheduleValidationError: If validation fails
+    """
+    # Handle empty/clear cases
+    if not json_str or json_str.strip() in ('', '{}', 'null', 'clear'):
+        return {'charge': [], 'discharge': []}
+    
+    # Parse JSON
+    try:
+        schedule = json.loads(json_str)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON: {e}")
+        raise ScheduleValidationError(f"Invalid JSON: {e}")
     
-    if not isinstance(periods, list):
-        raise ValueError("Schedule must be a JSON array")
+    if not isinstance(schedule, dict):
+        raise ScheduleValidationError("Schedule must be a JSON object with 'charge' and/or 'discharge' arrays")
     
-    validated = []
-    for i, period in enumerate(periods):
-        if not isinstance(period, dict):
-            raise ValueError(f"Period {i} must be an object")
-        
-        # Required fields
-        if 'start' not in period:
-            raise ValueError(f"Period {i} missing 'start' field (format: 'HH:MM')")
-        if 'power' not in period:
-            raise ValueError(f"Period {i} missing 'power' field (watts)")
-        if 'duration' not in period:
-            raise ValueError(f"Period {i} missing 'duration' field (minutes)")
-        
-        # Validate start time format
-        start = period['start']
-        if not isinstance(start, str) or len(start) != 5 or start[2] != ':':
-            raise ValueError(f"Period {i} 'start' must be 'HH:MM' format")
-        try:
-            hour, minute = int(start[:2]), int(start[3:])
-            if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                raise ValueError()
-        except (ValueError, TypeError):
-            raise ValueError(f"Period {i} 'start' has invalid time: {start}")
-        
-        # Validate power
-        power = period['power']
-        if not isinstance(power, (int, float)) or power < 0 or power > 10000:
-            raise ValueError(f"Period {i} 'power' must be 0-10000 watts")
-        
-        # Validate duration
-        duration = period['duration']
-        if not isinstance(duration, (int, float)) or duration < 0 or duration > 1440:
-            raise ValueError(f"Period {i} 'duration' must be 0-1440 minutes")
-        
-        validated.append({
-            'start': start,
-            'power': int(power),
-            'duration': int(duration),
-        })
+    result = {'charge': [], 'discharge': []}
     
-    return validated
+    # Validate charge periods
+    if 'charge' in schedule:
+        charge_list = schedule['charge']
+        if not isinstance(charge_list, list):
+            raise ScheduleValidationError("'charge' must be an array")
+        if len(charge_list) > 3:
+            raise ScheduleValidationError(f"Maximum 3 charge periods allowed (got {len(charge_list)})")
+        for i, period in enumerate(charge_list):
+            result['charge'].append(validate_period(period, i, 'charge'))
+    
+    # Validate discharge periods
+    if 'discharge' in schedule:
+        discharge_list = schedule['discharge']
+        if not isinstance(discharge_list, list):
+            raise ScheduleValidationError("'discharge' must be an array")
+        if len(discharge_list) > 6:
+            raise ScheduleValidationError(f"Maximum 6 discharge periods allowed (got {len(discharge_list)})")
+        for i, period in enumerate(discharge_list):
+            result['discharge'].append(validate_period(period, i, 'discharge'))
+    
+    # Check for overlapping time periods within same type
+    for period_type in ('charge', 'discharge'):
+        periods = result[period_type]
+        for i, p1 in enumerate(periods):
+            start1 = int(p1['start'][:2]) * 60 + int(p1['start'][3:])
+            end1 = start1 + p1['duration']
+            for j, p2 in enumerate(periods[i+1:], i+1):
+                start2 = int(p2['start'][:2]) * 60 + int(p2['start'][3:])
+                end2 = start2 + p2['duration']
+                # Check overlap (handling midnight wrap would need more logic)
+                if start1 < end2 and start2 < end1:
+                    raise ScheduleValidationError(
+                        f"{period_type}[{i}] and {period_type}[{j}] overlap "
+                        f"({p1['start']} +{p1['duration']}min vs {p2['start']} +{p2['duration']}min)"
+                    )
+    
+    return result
 
 
 class BatteryApiAddon:
-    """Main add-on class for Battery API.
-    
-    Manages the lifecycle of the add-on:
-    - SAJ API client for inverter communication
-    - MQTT entities for control and status
-    - Main polling loop
-    """
+    """Main add-on class for Battery API."""
     
     def __init__(self, config: dict, shutdown_event):
         """Initialize the add-on."""
@@ -158,15 +216,15 @@ class BatteryApiAddon:
         self.shutdown_event = shutdown_event
         self.simulation_mode = config.get('simulation_mode', False)
         
-        # Schedule state (JSON strings)
-        self.charge_schedule_json = "[]"
-        self.discharge_schedule_json = "[]"
+        # Schedule state
+        self.schedule_json = "{}"
+        self.validated_schedule: Optional[Dict[str, List]] = None
         
         # Status (updated from SAJ API)
         self.status = {
             'battery_soc': None,
             'battery_mode': None,
-            'active_schedule': None,
+            'schedule_status': 'No schedule',
             'last_applied': None,
             'api_status': 'Initializing',
         }
@@ -216,7 +274,7 @@ class BatteryApiAddon:
         # Test SAJ API connection
         if self.simulation_mode:
             logger.info("SIMULATION MODE: SAJ API calls will be logged but not executed")
-            self.status['api_status'] = 'Simulation Mode'
+            self.status['api_status'] = 'Simulation'
         else:
             try:
                 if self.saj_client.authenticate():
@@ -224,7 +282,7 @@ class BatteryApiAddon:
                     self.status['api_status'] = 'Connected'
                 else:
                     logger.error("SAJ API authentication failed")
-                    self.status['api_status'] = 'Authentication Failed'
+                    self.status['api_status'] = 'Auth Failed'
             except Exception as e:
                 logger.error("SAJ API connection error: %s", e)
                 self.status['api_status'] = f'Error: {e}'
@@ -238,34 +296,20 @@ class BatteryApiAddon:
         
         logger.info("Publishing MQTT Discovery configs...")
         
-        # ===== Schedule Input Entities =====
+        # ===== Schedule Input Entity =====
         
-        # Charge Schedule (JSON text input)
+        # Battery Schedule (unified JSON input)
         self.mqtt.publish_text(
             TextConfig(
-                object_id="charge_schedule",
-                name="Charge Schedule",
-                state=self.charge_schedule_json,
+                object_id="schedule",
+                name="Battery Schedule",
+                state=self.schedule_json,
                 min_length=0,
-                max_length=1024,
-                icon="mdi:battery-charging-high",
+                max_length=2048,
+                icon="mdi:battery-clock",
                 entity_category="config",
             ),
-            command_callback=self._handle_charge_schedule,
-        )
-        
-        # Discharge Schedule (JSON text input)
-        self.mqtt.publish_text(
-            TextConfig(
-                object_id="discharge_schedule",
-                name="Discharge Schedule",
-                state=self.discharge_schedule_json,
-                min_length=0,
-                max_length=1024,
-                icon="mdi:battery-arrow-down",
-                entity_category="config",
-            ),
-            command_callback=self._handle_discharge_schedule,
+            command_callback=self._handle_schedule_input,
         )
         
         # ===== Status Entities (read-only sensors) =====
@@ -274,7 +318,7 @@ class BatteryApiAddon:
         self.mqtt.publish_sensor(
             EntityConfig(
                 object_id="battery_soc",
-                name="Battery State of Charge",
+                name="Battery SOC",
                 state=str(self.status.get('battery_soc', 0)) if self.status.get('battery_soc') is not None else "unknown",
                 unit_of_measurement="%",
                 device_class="battery",
@@ -293,13 +337,13 @@ class BatteryApiAddon:
             )
         )
         
-        # Active Schedule (JSON showing current schedule)
+        # Schedule Status (shows validation result or active schedule summary)
         self.mqtt.publish_sensor(
             EntityConfig(
-                object_id="active_schedule",
-                name="Active Schedule",
-                state=self.status.get('active_schedule') or "none",
-                icon="mdi:calendar-clock",
+                object_id="schedule_status",
+                name="Schedule Status",
+                state=self.status.get('schedule_status', 'No schedule'),
+                icon="mdi:calendar-check",
             )
         )
         
@@ -318,7 +362,7 @@ class BatteryApiAddon:
         self.mqtt.publish_sensor(
             EntityConfig(
                 object_id="last_applied",
-                name="Last Schedule Applied",
+                name="Last Applied",
                 state=self.status.get('last_applied', 'never') or "never",
                 icon="mdi:clock-check-outline",
                 entity_category="diagnostic",
@@ -327,54 +371,45 @@ class BatteryApiAddon:
         
         logger.info("Published %d entities", len(self.mqtt.get_published_entities()))
     
-    def _handle_charge_schedule(self, json_str: str):
-        """Handle charge schedule JSON input - validates and applies immediately."""
-        logger.info("Received charge schedule: %s", json_str[:100] if json_str else "(empty)")
+    def _handle_schedule_input(self, json_str: str):
+        """Handle schedule JSON input - validates and applies if valid."""
+        logger.info("Received schedule input: %s", json_str[:200] if json_str else "(empty)")
         
+        # Step 1: Validate
         try:
-            periods = parse_schedule_json(json_str)
-            self.charge_schedule_json = json_str if json_str else "[]"
-            logger.info("Parsed %d charge periods", len(periods))
+            validated = validate_schedule(json_str)
+            self.validated_schedule = validated
+            self.schedule_json = json_str if json_str else "{}"
             
-            # Apply schedule immediately
-            self._apply_schedules()
+            charge_count = len(validated['charge'])
+            discharge_count = len(validated['discharge'])
             
-        except ValueError as e:
-            logger.error("Invalid charge schedule: %s", e)
-            self.status['api_status'] = f'Invalid schedule: {e}'
+            if charge_count == 0 and discharge_count == 0:
+                self.status['schedule_status'] = 'Cleared'
+                logger.info("Schedule cleared")
+            else:
+                self.status['schedule_status'] = f'Valid: {charge_count} charge, {discharge_count} discharge'
+                logger.info("Validated: %d charge, %d discharge periods", charge_count, discharge_count)
+            
+        except ScheduleValidationError as e:
+            self.status['schedule_status'] = f'Invalid: {e}'
+            logger.error("Schedule validation failed: %s", e)
             self.update_entities()
-    
-    def _handle_discharge_schedule(self, json_str: str):
-        """Handle discharge schedule JSON input - validates and applies immediately."""
-        logger.info("Received discharge schedule: %s", json_str[:100] if json_str else "(empty)")
+            return  # Don't apply invalid schedule
         
-        try:
-            periods = parse_schedule_json(json_str)
-            self.discharge_schedule_json = json_str if json_str else "[]"
-            logger.info("Parsed %d discharge periods", len(periods))
-            
-            # Apply schedule immediately
-            self._apply_schedules()
-            
-        except ValueError as e:
-            logger.error("Invalid discharge schedule: %s", e)
-            self.status['api_status'] = f'Invalid schedule: {e}'
-            self.update_entities()
+        # Step 2: Apply valid schedule
+        self._apply_schedule()
     
-    def _apply_schedules(self):
-        """Apply both charge and discharge schedules to the inverter."""
-        # Parse both schedules
-        try:
-            charge_periods = parse_schedule_json(self.charge_schedule_json)
-            discharge_periods = parse_schedule_json(self.discharge_schedule_json)
-        except ValueError as e:
-            logger.error("Schedule parse error: %s", e)
+    def _apply_schedule(self):
+        """Apply the validated schedule to the inverter."""
+        if self.validated_schedule is None:
+            logger.warning("No validated schedule to apply")
             return
         
         # Convert to ChargingPeriod objects
         periods: List[ChargingPeriod] = []
         
-        for p in charge_periods[:3]:  # Max 3 charge slots
+        for p in self.validated_schedule['charge']:
             periods.append(ChargingPeriod(
                 charge_type=BatteryChargeType.CHARGE,
                 start_time=p['start'],
@@ -382,7 +417,7 @@ class BatteryApiAddon:
                 power_w=p['power'],
             ))
         
-        for p in discharge_periods[:6]:  # Max 6 discharge slots
+        for p in self.validated_schedule['discharge']:
             periods.append(ChargingPeriod(
                 charge_type=BatteryChargeType.DISCHARGE,
                 start_time=p['start'],
@@ -391,29 +426,18 @@ class BatteryApiAddon:
             ))
         
         if not periods:
-            logger.info("No schedule periods defined - clearing schedule")
-            # Build summary for active_schedule sensor
-            self.status['active_schedule'] = "none"
+            logger.info("Clearing schedule (no periods)")
         else:
-            logger.info("Applying schedule with %d periods:", len(periods))
+            logger.info("Applying %d periods to inverter:", len(periods))
             for p in periods:
-                logger.info("  %s: %s for %d min at %dW", 
+                logger.info("  %s: %s for %d min @ %dW", 
                            p.charge_type.value, p.start_time, p.duration_minutes, p.power_w)
-            
-            # Build summary for active_schedule sensor
-            summary = {
-                'charge': [{'start': p.start_time, 'power': p.power_w, 'duration': p.duration_minutes} 
-                          for p in periods if p.charge_type == BatteryChargeType.CHARGE],
-                'discharge': [{'start': p.start_time, 'power': p.power_w, 'duration': p.duration_minutes} 
-                             for p in periods if p.charge_type == BatteryChargeType.DISCHARGE],
-            }
-            self.status['active_schedule'] = json.dumps(summary, separators=(',', ':'))
         
         # Apply to inverter
         if self.simulation_mode:
             logger.info("SIMULATION: Schedule would be applied")
             self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.status['api_status'] = 'Simulation Mode'
+            self.status['api_status'] = 'Simulation'
         else:
             try:
                 success = self.saj_client.save_schedule(periods)
@@ -423,9 +447,11 @@ class BatteryApiAddon:
                     logger.info("Schedule applied successfully")
                 else:
                     self.status['api_status'] = 'Apply Failed'
+                    self.status['schedule_status'] = 'Apply failed'
                     logger.error("Failed to apply schedule")
             except Exception as e:
                 self.status['api_status'] = f'Error: {e}'
+                self.status['schedule_status'] = f'Error: {e}'
                 logger.error("Schedule application error: %s", e)
         
         # Update sensors
@@ -434,21 +460,16 @@ class BatteryApiAddon:
     def poll_status(self):
         """Poll SAJ API for current battery status."""
         if self.simulation_mode:
-            # Simulated status
             self.status['battery_soc'] = 75
             self.status['battery_mode'] = 'TimeOfUse'
             logger.debug("SIMULATION: Status poll (SOC=75%%, mode=TimeOfUse)")
             return
         
         try:
-            # Get user mode
             mode_result = self.saj_client.get_user_mode()
             if mode_result:
                 self.status['battery_mode'] = mode_result
                 self.status['api_status'] = 'Connected'
-            
-            # TODO: Add SOC polling when we decode that API endpoint
-            
         except Exception as e:
             logger.error("Status poll failed: %s", e)
             self.status['api_status'] = f'Poll Error: {e}'
@@ -458,22 +479,21 @@ class BatteryApiAddon:
         if not self.mqtt:
             return
         
-        # Update status sensors
         soc = self.status.get('battery_soc')
         self.mqtt.update_state("sensor", "battery_soc", 
                                str(soc) if soc is not None else "unknown")
         
-        mode = self.status.get('battery_mode')
-        self.mqtt.update_state("sensor", "battery_mode", mode or "unknown")
+        self.mqtt.update_state("sensor", "battery_mode", 
+                               self.status.get('battery_mode') or "unknown")
         
-        active = self.status.get('active_schedule')
-        self.mqtt.update_state("sensor", "active_schedule", active or "none")
+        self.mqtt.update_state("sensor", "schedule_status", 
+                               self.status.get('schedule_status') or "No schedule")
         
-        api_status = self.status.get('api_status')
-        self.mqtt.update_state("sensor", "api_status", api_status or "unknown")
+        self.mqtt.update_state("sensor", "api_status", 
+                               self.status.get('api_status') or "unknown")
         
-        last_applied = self.status.get('last_applied')
-        self.mqtt.update_state("sensor", "last_applied", last_applied or "never")
+        self.mqtt.update_state("sensor", "last_applied", 
+                               self.status.get('last_applied') or "never")
     
     def run(self):
         """Main run loop."""
@@ -485,14 +505,11 @@ class BatteryApiAddon:
         first_run = True
         while not self.shutdown_event.is_set():
             try:
-                # Poll status
                 self.poll_status()
-                
-                # Update entities
                 self.update_entities()
                 
                 if first_run:
-                    logger.info("Initial status: SOC=%s, mode=%s, api=%s",
+                    logger.info("Ready: SOC=%s, mode=%s, api=%s",
                                self.status.get('battery_soc'),
                                self.status.get('battery_mode'),
                                self.status.get('api_status'))
@@ -502,10 +519,9 @@ class BatteryApiAddon:
                 logger.error("Error in main loop: %s", e)
             
             if run_once:
-                logger.info("RUN_ONCE mode: exiting after first iteration")
+                logger.info("RUN_ONCE mode: exiting")
                 break
             
-            # Sleep until next poll (checking for shutdown)
             if not sleep_with_shutdown_check(self.shutdown_event, poll_interval, logger):
                 break
         
@@ -527,17 +543,14 @@ def main():
     logger.info("Battery API Add-on Starting")
     logger.info("=" * 60)
     
-    # Setup signal handlers for graceful shutdown
     shutdown_event = setup_signal_handlers(logger)
     
-    # Load configuration
     try:
         config = load_config()
     except Exception as e:
         logger.error("Failed to load configuration: %s", e)
         sys.exit(1)
     
-    # Create and run add-on
     addon = BatteryApiAddon(config, shutdown_event)
     
     try:
