@@ -213,6 +213,19 @@ def validate_schedule(json_str: str) -> Dict[str, List[Dict[str, Any]]]:
                         f"({p1['start']} +{p1['duration']}min vs {p2['start']} +{p2['duration']}min)"
                     )
     
+    # Check for overlapping time periods across charge and discharge
+    for i, p1 in enumerate(result['charge']):
+        start1 = int(p1['start'][:2]) * 60 + int(p1['start'][3:])
+        end1 = start1 + p1['duration']
+        for j, p2 in enumerate(result['discharge']):
+            start2 = int(p2['start'][:2]) * 60 + int(p2['start'][3:])
+            end2 = start2 + p2['duration']
+            if start1 < end2 and start2 < end1:
+                raise ScheduleValidationError(
+                    f"charge[{i}] and discharge[{j}] overlap "
+                    f"({p1['start']} +{p1['duration']}min vs {p2['start']} +{p2['duration']}min)"
+                )
+    
     return result
 
 
