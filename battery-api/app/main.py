@@ -496,7 +496,9 @@ class BatteryApiAddon:
     
     def _handle_mode_select(self, mode: str):
         """Handle battery mode selection."""
-        logger.info("Received mode selection: %s", mode)
+        logger.info("=" * 40)
+        logger.info("MODE CHANGE: %s -> %s", self.battery_mode_setting, mode)
+        logger.info("=" * 40)
         
         if mode not in BATTERY_MODE_OPTIONS:
             logger.error("Invalid mode: %s (expected one of %s)", mode, BATTERY_MODE_OPTIONS)
@@ -529,7 +531,10 @@ class BatteryApiAddon:
 
     def _handle_schedule_input(self, json_str: str):
         """Handle schedule JSON input - validates and applies if valid."""
-        logger.info("Received schedule input: %s", json_str[:200] if json_str else "(empty)")
+        logger.info("=" * 40)
+        logger.info("SCHEDULE INPUT RECEIVED")
+        logger.info("=" * 40)
+        logger.info("Schedule JSON: %s", json_str[:500] if json_str else "(empty)")
         
         # Step 1: Validate
         try:
@@ -732,18 +737,26 @@ class BatteryApiAddon:
         
         logger.info("Starting main loop (poll every %ds)", poll_interval)
         
-        first_run = True
         while not self.shutdown_event.is_set():
             try:
                 self.poll_status()
                 self.update_entities()
                 
-                if first_run:
-                    logger.info("Ready: SOC=%s, mode=%s, api=%s",
-                               self.status.get('battery_soc'),
-                               self.battery_mode_setting,
-                               self.status.get('api_status'))
-                    first_run = False
+                # Log status every poll
+                soc = self.status.get('battery_soc')
+                bat_power = self.status.get('battery_power', 0)
+                pv_power = self.status.get('pv_power', 0)
+                grid_power = self.status.get('grid_power', 0)
+                load_power = self.status.get('load_power', 0)
+                
+                logger.info("Poll: SOC=%s%%, Bat=%dW, PV=%dW, Grid=%dW, Load=%dW, Mode=%s, API=%s",
+                           soc if soc is not None else '?',
+                           int(bat_power) if bat_power else 0,
+                           int(pv_power) if pv_power else 0,
+                           int(grid_power) if grid_power else 0,
+                           int(load_power) if load_power else 0,
+                           self.battery_mode_setting,
+                           self.status.get('api_status', 'unknown'))
                 
             except Exception as e:
                 logger.error("Error in main loop: %s", e)
