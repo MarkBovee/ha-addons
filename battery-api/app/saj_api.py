@@ -40,9 +40,10 @@ BASE_URL = "https://eop.saj-electric.com"
 
 # Battery mode register address (from HAR analysis)
 MODE_COMM_ADDRESS = "3647|3647"
-# Mode values: 0 = Self-consumption, 1 = Time-of-use
+# Mode values: 0 = Self-consumption, 1 = Time-of-use, 12 = AI mode
 MODE_VALUE_SELF_CONSUMPTION = "0|0"
 MODE_VALUE_TIME_OF_USE = "1|1"
+MODE_VALUE_AI = "12|12"
 
 # Token refresh buffer (refresh 24h before expiry)
 REFRESH_BEFORE_EXPIRY = timedelta(hours=24)
@@ -767,11 +768,17 @@ class SajApiClient:
         if mode_lower in ("self_consumption", "selfconsumption"):
             mode_value = MODE_VALUE_SELF_CONSUMPTION
             mode_name = "Self-consumption"
+            component_id = "|0"
         elif mode_lower in ("time_of_use", "timeofuse", "tou"):
             mode_value = MODE_VALUE_TIME_OF_USE
             mode_name = "Time-of-use"
+            component_id = "|0"
+        elif mode_lower in ("ai", "ai_mode", "aimode"):
+            mode_value = MODE_VALUE_AI
+            mode_name = "AI"
+            component_id = "|36"  # AI mode uses different componentId (from HAR)
         else:
-            logger.error("Unknown battery mode: %s (expected 'self_consumption' or 'time_of_use')", mode)
+            logger.error("Unknown battery mode: %s (expected 'self_consumption', 'time_of_use', or 'ai')", mode)
             return False
         
         if self.simulation_mode:
@@ -801,7 +808,7 @@ class SajApiClient:
         signed['deviceSn'] = self.device_serial
         signed['isParallelBatchSetting'] = str(DEFAULT_IS_PARALLEL_BATCH_SETTING)
         signed['commAddress'] = MODE_COMM_ADDRESS
-        signed['componentId'] = "|0"  # From HAR capture
+        signed['componentId'] = component_id
         signed['operType'] = str(DEFAULT_OPER_TYPE)
         signed['transferId'] = "|"  # From HAR capture
         signed['value'] = mode_value

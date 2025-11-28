@@ -52,10 +52,11 @@ SCHEDULE_EXAMPLE = '''{
 }'''
 
 # Battery mode options for the select entity
-BATTERY_MODE_OPTIONS = ["Self-consumption", "Time-of-use"]
+BATTERY_MODE_OPTIONS = ["Self-consumption", "Time-of-use", "AI"]
 BATTERY_MODE_API_MAP = {
     "Self-consumption": "self_consumption",
     "Time-of-use": "time_of_use",
+    "AI": "ai",
 }
 BATTERY_MODE_REVERSE_MAP = {v: k for k, v in BATTERY_MODE_API_MAP.items()}
 

@@ -66,23 +66,29 @@ mqtt_password: ""
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `number.battery_api_charge_power` | Number | Charge power in watts (0-10000W) |
-| `number.battery_api_charge_duration` | Number | Charge duration in minutes |
-| `text.battery_api_charge_start_time` | Text | Charge start time (HH:MM format) |
-| `number.battery_api_discharge_power` | Number | Discharge power in watts (0-10000W) |
-| `number.battery_api_discharge_duration` | Number | Discharge duration in minutes |
-| `text.battery_api_discharge_start_time` | Text | Discharge start time (HH:MM format) |
-| `select.battery_api_schedule_type` | Select | Schedule type (Charge Only, Discharge Only, Both, Clear) |
-| `button.battery_api_apply_schedule` | Button | Apply the configured schedule |
+| `select.ba_battery_mode_setting` | Select | Battery mode (Self-consumption, Time-of-use, AI) |
+| `text.ba_schedule` | Text | Schedule JSON input |
 
 ### Status Entities (read-only)
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `sensor.battery_api_battery_soc` | Sensor | Current battery state of charge (%) |
-| `sensor.battery_api_battery_mode` | Sensor | Current battery operation mode |
-| `sensor.battery_api_api_status` | Sensor | API connection status |
-| `sensor.battery_api_last_applied` | Sensor | Timestamp of last schedule application |
+| `sensor.ba_battery_soc` | Sensor | Current battery state of charge (%) |
+| `sensor.ba_battery_power` | Sensor | Battery power in watts (+ charging, - discharging) |
+| `sensor.ba_pv_power` | Sensor | Solar PV power in watts |
+| `sensor.ba_grid_power` | Sensor | Grid power in watts (+ import, - export) |
+| `sensor.ba_load_power` | Sensor | House load power in watts |
+| `sensor.ba_battery_mode` | Sensor | Current battery operation mode |
+| `sensor.ba_schedule_status` | Sensor | Schedule validation status |
+| `sensor.ba_current_schedule` | Sensor | Current schedule on inverter (JSON) |
+| `sensor.ba_api_status` | Sensor | API connection status |
+| `sensor.ba_last_applied` | Sensor | Timestamp of last schedule application |
+
+### Battery Modes
+
+- **Self-consumption**: Battery charges from excess solar, discharges to reduce grid import
+- **Time-of-use**: Battery follows configured charge/discharge schedule
+- **AI**: Inverter's AI-driven optimization mode
 
 ## Usage Example
 
