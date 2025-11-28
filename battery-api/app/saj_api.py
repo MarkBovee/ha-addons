@@ -436,6 +436,186 @@ class SajApiClient:
             logger.error("Exception getting user mode: %s", e)
             return None
     
+    def get_schedule(self) -> Dict[str, Any]:
+        """Get the current battery schedule from the inverter.
+        
+        Returns schedule in the same format as the input JSON:
+        {
+            "mode": "time-of-use" | "self-consumption",
+            "charge": [{"start": "HH:MM", "power": watts, "duration": minutes}, ...],
+            "discharge": [{"start": "HH:MM", "power": watts, "duration": minutes}, ...]
+        }
+        
+        Returns:
+            Schedule dict, or empty dict on failure
+        """
+        if self.simulation_mode:
+            logger.info("SIMULATION: Would get schedule from SAJ API")
+            return {"mode": "time-of-use", "charge": [], "discharge": []}
+        
+        self._ensure_authenticated()
+        
+        url = f"{self.base_url}/dev-api/api/v1/remote/client/getLeafMenu"
+        
+        # Parent ID for "Working modes" menu (from HAR capture)
+        working_modes_parent_id = "8E3CEA8A-E149-4F72-AB50-3406B39F5ADB"
+        
+        # Prepare signing parameters
+        client_date = datetime.utcnow().strftime('%Y-%m-%d')
+        timestamp = str(int(time.time() * 1000))
+        random_str = _generate_random_alphanumeric(32)
+        
+        params = {
+            'deviceSn': self.device_serial,
+            'parentId': working_modes_parent_id,
+            'isParallelBatchSetting': '0',
+            'appProjectName': DEFAULT_APP_PROJECT_NAME,
+            'clientDate': client_date,
+            'lang': DEFAULT_LANG,
+            'timeStamp': timestamp,
+            'random': random_str,
+            'clientId': CLIENT_ID,
+        }
+        signed = _calc_signature(params)
+        
+        try:
+            headers = {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}
+            response = self._session.post(url, data=signed, headers=headers)
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            if result.get('errCode') != 0:
+                error_msg = result.get('errMsg', 'Unknown error')
+                logger.error("Failed to get schedule: %s", error_msg)
+                return {}
+            
+            return self._parse_schedule_response(result)
+            
+        except Exception as e:
+            logger.error("Exception getting schedule: %s", e)
+            return {}
+    
+    def _parse_schedule_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse the getLeafMenu response into schedule format.
+        
+        Args:
+            data: Raw API response
+            
+        Returns:
+            Schedule dict with mode, charge, and discharge lists
+        """
+        result = {
+            'mode': None,
+            'charge': [],
+            'discharge': [],
+        }
+        
+        items = data.get('data', [])
+        
+        for item in items:
+            if item.get('commAddress') != '3647':
+                continue
+                
+            meta_list = item.get('menuMetaList', [])
+            if not meta_list:
+                continue
+                
+            meta = meta_list[0]
+            
+            # Parse mode
+            mode_val = meta.get('actualVal_')
+            if mode_val == '0':
+                result['mode'] = 'self-consumption'
+            elif mode_val == '1':
+                result['mode'] = 'time-of-use'
+            else:
+                result['mode'] = meta.get('actualName_', 'unknown')
+            
+            # Parse periods from menuMetaDetailList
+            detail_list = meta.get('menuMetaDetailList', [])
+            
+            for detail in detail_list:
+                # Only parse visible (active) periods with ifShow=1
+                if detail.get('ifShow') not in ('1', 1):
+                    continue
+                
+                sub_details = detail.get('menuMetaDetailList', [])
+                if not sub_details:
+                    continue
+                
+                period = self._parse_period_details(sub_details)
+                if period:
+                    period_type = period.pop('type', None)
+                    if period_type == 'charge':
+                        result['charge'].append(period)
+                    elif period_type == 'discharge':
+                        result['discharge'].append(period)
+        
+        logger.debug("Parsed schedule: mode=%s, charge=%d, discharge=%d",
+                    result['mode'], len(result['charge']), len(result['discharge']))
+        
+        return result
+    
+    def _parse_period_details(self, sub_details: List[Dict]) -> Optional[Dict]:
+        """Parse period details from sub-menu items.
+        
+        Args:
+            sub_details: List of sub-detail items
+            
+        Returns:
+            Period dict with start, power, duration, type or None
+        """
+        start_time = None
+        end_time = None
+        power = 0
+        period_type = None
+        
+        for sub in sub_details:
+            title = sub.get('title_', '')
+            actual_val = sub.get('actualVal_', '')
+            
+            if 'Charge Time' in title:
+                if not start_time:
+                    start_time = actual_val
+                period_type = 'charge'
+            elif 'Discharge Time' in title:
+                if not start_time:
+                    start_time = actual_val
+                period_type = 'discharge'
+            elif title == '' and actual_val and ':' in actual_val:
+                # End time (has no title)
+                end_time = actual_val
+            elif 'Power' in title:
+                try:
+                    power = int(actual_val) if actual_val else 0
+                except ValueError:
+                    power = 0
+        
+        if not start_time or not period_type:
+            return None
+        
+        # Calculate duration from start/end times
+        duration = 60  # Default to 60 minutes
+        if start_time and end_time:
+            try:
+                start_parts = start_time.split(':')
+                end_parts = end_time.split(':')
+                start_min = int(start_parts[0]) * 60 + int(start_parts[1])
+                end_min = int(end_parts[0]) * 60 + int(end_parts[1])
+                if end_min <= start_min:
+                    end_min += 24 * 60  # Handle midnight crossing
+                duration = end_min - start_min
+            except (ValueError, IndexError):
+                duration = 60
+        
+        return {
+            'type': period_type,
+            'start': start_time,
+            'power': power,
+            'duration': duration,
+        }
+    
     def save_schedule(self, periods: List[ChargingPeriod]) -> bool:
         """Save a battery schedule to the inverter.
         
