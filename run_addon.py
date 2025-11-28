@@ -2,12 +2,29 @@
 import argparse
 import os
 import re
+import shutil
 import sys
 import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).parent.resolve()
+
+
+def sync_shared():
+    """Sync shared modules to target add-on directory."""
+    shared_src = ROOT / 'shared'
+    if not shared_src.exists():
+        return
+    
+    addons_needing_shared = ['charge-amps-monitor', 'energy-prices']
+    for addon_name in addons_needing_shared:
+        addon_dir = ROOT / addon_name
+        if addon_dir.exists():
+            shared_dst = addon_dir / 'shared'
+            if shared_dst.exists():
+                shutil.rmtree(shared_dst)
+            shutil.copytree(shared_src, shared_dst)
 
 
 def find_addons():
@@ -188,6 +205,9 @@ def main():
     if args.once:
         os.environ["RUN_ONCE"] = "1"
         print("Running in single-iteration mode (--once)")
+
+    # Sync shared modules before running
+    sync_shared()
 
     rc = run_addon(target)
     return rc

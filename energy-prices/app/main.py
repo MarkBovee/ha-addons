@@ -1,12 +1,9 @@
 """Energy Prices add-on main entry point."""
 
 import logging
-import signal
 import time
-import json
 import os
-import requests
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from zoneinfo import ZoneInfo
 
@@ -14,91 +11,67 @@ from .nordpool_api import NordPoolApi
 from .models import PriceInterval
 from .price_calculator import PriceCalculator
 
-# Try to import MQTT Discovery module
+# Import shared modules
+from shared.addon_base import setup_logging, setup_signal_handlers, sleep_with_shutdown_check
+from shared.ha_api import HomeAssistantApi, get_ha_api_config
+from shared.config_loader import load_addon_config, get_run_once_mode
+from shared.mqtt_setup import setup_mqtt_client, is_mqtt_available
+
+# Try to import MQTT Discovery for entity publishing
 try:
-    from shared.ha_mqtt_discovery import MqttDiscovery, EntityConfig, get_mqtt_config_from_env
-    MQTT_AVAILABLE = True
+    from shared.ha_mqtt_discovery import EntityConfig
+    MQTT_ENTITY_CONFIG_AVAILABLE = True
 except ImportError:
-    MQTT_AVAILABLE = False
+    MQTT_ENTITY_CONFIG_AVAILABLE = False
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Shutdown flag for graceful termination
-shutdown_flag = False
+logger = setup_logging(name=__name__)
 
 
-def signal_handler(signum, frame):
-    """Handle SIGTERM and SIGINT for graceful shutdown."""
-    global shutdown_flag
-    logger.info("Received signal %d, initiating graceful shutdown...", signum)
-    shutdown_flag = True
+# Energy Prices specific configuration defaults
+EP_CONFIG_DEFAULTS = {
+    'delivery_area': 'NL',
+    'currency': 'EUR',
+    'timezone': 'CET',
+    'fetch_interval_minutes': 60,
+    'import_vat_multiplier': 1.21,
+    'import_markup': 0.0248,
+    'import_energy_tax': 0.1228,
+    'export_vat_multiplier': 1.21,
+    'export_markup': 0.0248,
+    'export_energy_tax': 0.1228,
+}
+
+EP_REQUIRED_FIELDS = ['delivery_area', 'currency', 'timezone', 'fetch_interval_minutes']
+
+# Old entities to clean up on startup (REST API mode only)
+OLD_ENTITIES = [
+    'sensor.ep_price_import',
+    'sensor.ep_price_export', 
+    'sensor.ep_price_level',
+    'sensor.energy_price_import',
+    'sensor.energy_price_export',
+    'sensor.energy_price_level',
+]
 
 
 def load_config() -> dict:
-    """Load configuration from /data/options.json (HA Supervisor pattern).
+    """Load Energy Prices configuration.
     
     Returns:
         Configuration dictionary
-        
-    Raises:
-        FileNotFoundError: If config file doesn't exist
-        json.JSONDecodeError: If config is invalid JSON
-        KeyError: If required fields are missing
     """
-    config_path = '/data/options.json'
-    
-    # For local development, allow override via environment
-    if not os.path.exists(config_path):
-        logger.warning("Config file %s not found, using environment variables", config_path)
-        config = {
-            'delivery_area': os.getenv('DELIVERY_AREA', 'NL'),
-            'currency': os.getenv('CURRENCY', 'EUR'),
-            'timezone': os.getenv('TIMEZONE', 'CET'),
-            'import_vat_multiplier': float(os.getenv('IMPORT_VAT_MULTIPLIER', '1.21')),
-            'import_markup': float(os.getenv('IMPORT_MARKUP', '0.0248')),
-            'import_energy_tax': float(os.getenv('IMPORT_ENERGY_TAX', '0.1228')),
-            'export_vat_multiplier': float(os.getenv('EXPORT_VAT_MULTIPLIER', '1.21')),
-            'export_markup': float(os.getenv('EXPORT_MARKUP', '0.0248')),
-            'export_energy_tax': float(os.getenv('EXPORT_ENERGY_TAX', '0.1228')),
-            'fetch_interval_minutes': int(os.getenv('FETCH_INTERVAL_MINUTES', '60'))
-        }
-        logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
-                   config['delivery_area'], config['currency'], config['timezone'], 
-                   config['fetch_interval_minutes'])
-        logger.info("Import: VAT=%.2f, markup=%.2f, tax=%.2f",
-                   config['import_vat_multiplier'], config['import_markup'], config['import_energy_tax'])
-        logger.info("Export: VAT=%.2f, markup=%.2f, tax=%.2f",
-                   config['export_vat_multiplier'], config['export_markup'], config['export_energy_tax'])
-        return config
-    
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-    
-    # Validate required fields (only base fields are strictly required)
-    required = ['delivery_area', 'currency', 'timezone', 'fetch_interval_minutes']
-    for field in required:
-        if field not in config:
-            raise KeyError(f"Required config field missing: {field}")
-    
-    # Set defaults for optional price component fields (values in EUR/kWh)
-    config.setdefault('import_vat_multiplier', 1.21)
-    config.setdefault('import_markup', 0.0248)
-    config.setdefault('import_energy_tax', 0.1228)
-    config.setdefault('export_vat_multiplier', 1.21)
-    config.setdefault('export_markup', 0.0248)
-    config.setdefault('export_energy_tax', 0.1228)
+    config = load_addon_config(
+        defaults=EP_CONFIG_DEFAULTS,
+        required_fields=EP_REQUIRED_FIELDS
+    )
     
     logger.info("Loaded configuration: area=%s, currency=%s, timezone=%s, interval=%dm",
                config['delivery_area'], config['currency'], config['timezone'], 
                config['fetch_interval_minutes'])
-    logger.info("Import: VAT=%.2f, markup=%.2f, tax=%.2f",
+    logger.info("Import: VAT=%.2f, markup=%.4f, tax=%.4f",
                config['import_vat_multiplier'], config['import_markup'], config['import_energy_tax'])
-    logger.info("Export: VAT=%.2f, markup=%.2f, tax=%.2f",
+    logger.info("Export: VAT=%.2f, markup=%.4f, tax=%.4f",
                config['export_vat_multiplier'], config['export_markup'], config['export_energy_tax'])
     
     return config
@@ -120,110 +93,6 @@ def calculate_final_price(market_price: float, vat_multiplier: float, markup: fl
     """
     result = (market_price * vat_multiplier) + markup + energy_tax
     return round(result, 4)
-
-
-def get_ha_api_config() -> tuple[str, str]:
-    """Get Home Assistant API base URL and token.
-
-    Prefers explicit HA_API_URL if set (for local/dev runs), otherwise
-    falls back to the Supervisor core API URL.
-
-    Returns:
-        Tuple of (base_url, token)
-    """
-    token = os.getenv('HA_API_TOKEN') or os.getenv('SUPERVISOR_TOKEN', '')
-    base_url = os.getenv('HA_API_URL') or 'http://supervisor/core/api'
-    return base_url.rstrip('/'), token
-
-
-def delete_entity(entity_id: str, base_url: str, token: str) -> bool:
-    """Delete a Home Assistant entity.
-    
-    Args:
-        entity_id: Entity ID to delete
-        base_url: Base URL for HA API
-        token: API token for authentication
-        
-    Returns:
-        True if deleted, False otherwise
-    """
-    try:
-        url = f"{base_url}/states/{entity_id}"
-        headers = {
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json'
-        }
-        response = requests.delete(url, headers=headers, timeout=10)
-        # 200 = deleted, 404 = not found (already gone)
-        if response.status_code == 200:
-            logger.info("Deleted entity: %s", entity_id)
-            return True
-        elif response.status_code == 404:
-            logger.debug("Entity %s not found (already deleted)", entity_id)
-            return False
-        else:
-            logger.debug("Delete %s returned %d: %s", entity_id, response.status_code, response.text[:100])
-            return False
-    except Exception as e:
-        logger.debug("Exception deleting entity %s: %s", entity_id, e)
-        return False
-
-
-def delete_old_entities(base_url: str, token: str):
-    """Delete old entities that may have been created with different naming.
-    
-    This ensures clean state on startup and prevents duplicate entities.
-    """
-    old_entities = [
-        # Current entity names (delete to recreate fresh)
-        'sensor.ep_price_import',
-        'sensor.ep_price_export', 
-        'sensor.ep_price_level',
-        # Any legacy names from development
-        'sensor.energy_price_import',
-        'sensor.energy_price_export',
-        'sensor.energy_price_level',
-    ]
-    
-    logger.info("Cleaning up old entities...")
-    deleted_count = 0
-    for entity_id in old_entities:
-        if delete_entity(entity_id, base_url, token):
-            deleted_count += 1
-    
-    if deleted_count > 0:
-        logger.info("Deleted %d old entities", deleted_count)
-    else:
-        logger.info("No old entities found to delete")
-
-
-def create_or_update_entity(entity_id: str, state: str, attributes: dict, base_url: str, token: str, log_success: bool = True):
-    """Create or update a Home Assistant entity.
-    
-    Args:
-        entity_id: Entity ID (e.g., sensor.ep_price_import)
-        state: Entity state value
-        attributes: Entity attributes dictionary
-        base_url: Base URL for HA API (e.g. http://supervisor/core/api or http://host:8123/api)
-        token: API token for authentication
-        
-    Raises:
-        requests.HTTPError: If API request fails
-    """
-    url = f"{base_url}/states/{entity_id}"
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
-    payload = {
-        'state': state,
-        'attributes': attributes
-    }
-    
-    response = requests.post(url, json=payload, headers=headers, timeout=10)
-    response.raise_for_status()
-    if log_success:
-        logger.debug("Updated entity %s: state=%s", entity_id, state)
 
 
 def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[dict]:
@@ -340,18 +209,17 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         return None
 
 
-def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = False):
+def update_ha_entities(data: dict, ha_api: HomeAssistantApi, first_run: bool = False):
     """Update Home Assistant entities with price data.
     
     Args:
         data: Processed price data dictionary
-        base_url: Base URL for HA API
-        token: API token
+        ha_api: HomeAssistantApi instance
         first_run: If True, log entity creation details (only on first run)
     """
     try:
         # Update sensor.ep_price_import
-        create_or_update_entity(
+        ha_api.create_or_update_entity(
             'sensor.ep_price_import',
             str(data['current_import']),
             {
@@ -362,13 +230,11 @@ def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = 
                 'percentiles': data['percentiles'],
                 'last_update': data['last_update']
             },
-            base_url,
-            token,
             log_success=first_run
         )
         
         # Update sensor.ep_price_export
-        create_or_update_entity(
+        ha_api.create_or_update_entity(
             'sensor.ep_price_export',
             str(data['current_export']),
             {
@@ -378,13 +244,11 @@ def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = 
                 'price_curve': data['price_curve_export'],
                 'last_update': data['last_update']
             },
-            base_url,
-            token,
             log_success=first_run
         )
         
         # Update sensor.ep_price_level
-        create_or_update_entity(
+        ha_api.create_or_update_entity(
             'sensor.ep_price_level',
             data['price_level'],
             {
@@ -395,8 +259,6 @@ def update_ha_entities(data: dict, base_url: str, token: str, first_run: bool = 
                 'p60': data['percentiles']['p60'],
                 'classification_rules': 'None: <P20, Low: P20-P40, Medium: P40-P60, High: >=P60'
             },
-            base_url,
-            token,
             log_success=first_run
         )
         
@@ -504,60 +366,12 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
         logger.error("Failed to update HA entities via MQTT: %s", e, exc_info=True)
 
 
-def setup_mqtt_client(config: dict) -> Optional['MqttDiscovery']:
-    """Set up MQTT Discovery client if available.
-    
-    Args:
-        config: Configuration dictionary
-        
-    Returns:
-        MqttDiscovery client if connected, None otherwise
-    """
-    if not MQTT_AVAILABLE:
-        logger.info("MQTT Discovery not available (paho-mqtt not installed)")
-        return None
-    
-    mqtt_config = get_mqtt_config_from_env()
-    
-    # Allow config override - treat empty strings as "not configured"
-    mqtt_host = config.get('mqtt_host') or mqtt_config['mqtt_host']
-    mqtt_port = config.get('mqtt_port') or mqtt_config['mqtt_port']
-    mqtt_user = config.get('mqtt_user') or mqtt_config['mqtt_user']
-    mqtt_password = config.get('mqtt_password') or mqtt_config['mqtt_password']
-    
-    logger.info("Attempting MQTT Discovery connection to %s:%d...", mqtt_host, mqtt_port)
-    
-    try:
-        mqtt_client = MqttDiscovery(
-            addon_name="Energy Prices",
-            addon_id="energy_prices",
-            mqtt_host=mqtt_host,
-            mqtt_port=mqtt_port,
-            mqtt_user=mqtt_user,
-            mqtt_password=mqtt_password,
-            manufacturer="HA Addons",
-            model="Nord Pool Price Monitor"
-        )
-        
-        if mqtt_client.connect(timeout=10.0):
-            logger.info("MQTT Discovery connected - entities will have unique_id")
-            return mqtt_client
-        else:
-            logger.warning("MQTT connection failed, falling back to REST API")
-            return None
-            
-    except Exception as e:
-        logger.warning("MQTT setup failed (%s), falling back to REST API", e)
-        return None
-
-
 def main():
     """Main entry point for the add-on."""
     logger.info("Energy Prices add-on starting...")
     
-    # Register signal handlers
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
+    # Register signal handlers using shared module
+    shutdown_event = setup_signal_handlers(logger)
     
     mqtt_client = None
     
@@ -569,20 +383,31 @@ def main():
         nordpool = NordPoolApi()
         
         # Try MQTT Discovery first (provides unique_id for UI management)
-        mqtt_client = setup_mqtt_client(config)
+        mqtt_client = setup_mqtt_client(
+            addon_name="Energy Prices",
+            addon_id="energy_prices",
+            config=config,
+            manufacturer="HA Addons",
+            model="Nord Pool Price Monitor"
+        )
         use_mqtt = mqtt_client is not None
         
-        # Get HA API config as fallback
-        ha_base_url, ha_token = get_ha_api_config()
+        # Initialize HA API client as fallback
+        ha_api = HomeAssistantApi()
         if not use_mqtt:
-            if not ha_token:
+            if not ha_api.token:
                 logger.warning("No HA API token set (SUPERVISOR_TOKEN/HA_API_TOKEN), entity updates will fail")
-            logger.info("Using REST API fallback: %s", ha_base_url)
+            logger.info("Using REST API fallback: %s", ha_api.base_url)
             # Delete old entities on startup to ensure clean state (REST API only)
-            delete_old_entities(ha_base_url, ha_token)
+            logger.info("Cleaning up old entities...")
+            deleted = ha_api.delete_entities(OLD_ENTITIES)
+            if deleted > 0:
+                logger.info("Deleted %d old entities", deleted)
+            else:
+                logger.info("No old entities found to delete")
         
         fetch_interval = config['fetch_interval_minutes'] * 60
-        run_once = os.getenv('RUN_ONCE', '').lower() in ('1', 'true', 'yes')
+        run_once = get_run_once_mode()
         
         if run_once:
             logger.info("Running single iteration (RUN_ONCE mode)")
@@ -594,7 +419,7 @@ def main():
         first_run = True
         
         # Main loop
-        while not shutdown_flag:
+        while not shutdown_event.is_set():
             try:
                 # Fetch and process prices
                 data = fetch_and_process_prices(nordpool, config)
@@ -604,7 +429,7 @@ def main():
                     if use_mqtt and mqtt_client and mqtt_client.is_connected():
                         update_ha_entities_mqtt(data, mqtt_client, first_run=first_run)
                     else:
-                        update_ha_entities(data, ha_base_url, ha_token, first_run=first_run)
+                        update_ha_entities(data, ha_api, first_run=first_run)
                     first_run = False  # Only log creation details once
                 else:
                     logger.warning("No price data to update entities")
@@ -617,11 +442,9 @@ def main():
                 logger.info("Single iteration complete, exiting")
                 break
             
-            # Sleep with shutdown check every second
-            for _ in range(fetch_interval):
-                if shutdown_flag:
-                    break
-                time.sleep(1)
+            # Sleep with shutdown check
+            if not sleep_with_shutdown_check(shutdown_event, fetch_interval):
+                break
         
     except Exception as e:
         logger.error("Fatal error in main: %s", e, exc_info=True)
