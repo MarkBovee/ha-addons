@@ -248,11 +248,16 @@ class BatteryApiAddon:
         # Status (updated from SAJ API)
         self.status = {
             'battery_soc': None,
-            'battery_mode': None,  # Reported mode from inverter
+            'battery_power': None,  # W (positive=charging, negative=discharging)
+            'pv_power': None,       # W
+            'grid_power': None,     # W (positive=importing, negative=exporting)
+            'load_power': None,     # W
+            'battery_mode': None,   # Reported mode from inverter
             'schedule_status': 'No schedule',
             'last_applied': None,
             'api_status': 'Initializing',
             'current_schedule': None,  # Fetched on startup and after apply
+            'last_update': None,    # Timestamp from inverter
         }
         
         # Initialize SAJ API client
@@ -368,6 +373,58 @@ class BatteryApiAddon:
                 device_class="battery",
                 state_class="measurement",
                 icon="mdi:battery",
+            )
+        )
+        
+        # Battery Power (charging/discharging)
+        self.mqtt.publish_sensor(
+            EntityConfig(
+                object_id="battery_power",
+                name="Battery Power",
+                state=str(int(self.status.get('battery_power', 0))) if self.status.get('battery_power') is not None else "unknown",
+                unit_of_measurement="W",
+                device_class="power",
+                state_class="measurement",
+                icon="mdi:battery-charging",
+            )
+        )
+        
+        # PV Power (solar production)
+        self.mqtt.publish_sensor(
+            EntityConfig(
+                object_id="pv_power",
+                name="PV Power",
+                state=str(int(self.status.get('pv_power', 0))) if self.status.get('pv_power') is not None else "unknown",
+                unit_of_measurement="W",
+                device_class="power",
+                state_class="measurement",
+                icon="mdi:solar-power",
+            )
+        )
+        
+        # Grid Power (import/export)
+        self.mqtt.publish_sensor(
+            EntityConfig(
+                object_id="grid_power",
+                name="Grid Power",
+                state=str(int(self.status.get('grid_power', 0))) if self.status.get('grid_power') is not None else "unknown",
+                unit_of_measurement="W",
+                device_class="power",
+                state_class="measurement",
+                icon="mdi:transmission-tower",
+            )
+        )
+        
+        # Load Power (consumption)
+        self.mqtt.publish_sensor(
+            EntityConfig(
+                object_id="load_power",
+                name="Load Power",
+                state=str(int(self.status.get('load_power', 0))) if self.status.get('load_power') is not None else "unknown",
+                unit_of_measurement="W",
+                device_class="power",
+                state_class="measurement",
+                icon="mdi:home-lightning-bolt",
             )
         )
         
@@ -569,14 +626,25 @@ class BatteryApiAddon:
         """Poll SAJ API for current battery status."""
         if self.simulation_mode:
             self.status['battery_soc'] = 75
+            self.status['battery_power'] = 500
+            self.status['pv_power'] = 3000
+            self.status['grid_power'] = -200
+            self.status['load_power'] = 2500
             self.status['battery_mode'] = 'TimeOfUse'
-            logger.debug("SIMULATION: Status poll (SOC=75%%, mode=TimeOfUse)")
+            self.status['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            logger.debug("SIMULATION: Status poll (SOC=75%%, bat=500W, pv=3000W)")
             return
         
         try:
-            mode_result = self.saj_client.get_user_mode()
-            if mode_result:
-                self.status['battery_mode'] = mode_result
+            flow_data = self.saj_client.get_energy_flow_data()
+            if flow_data:
+                self.status['battery_soc'] = flow_data.get('battery_soc')
+                self.status['battery_power'] = flow_data.get('battery_power')
+                self.status['pv_power'] = flow_data.get('pv_power')
+                self.status['grid_power'] = flow_data.get('grid_power')
+                self.status['load_power'] = flow_data.get('load_power')
+                self.status['battery_mode'] = flow_data.get('user_mode')
+                self.status['last_update'] = flow_data.get('update_time')
                 self.status['api_status'] = 'Connected'
         except Exception as e:
             logger.error("Status poll failed: %s", e)
@@ -587,10 +655,32 @@ class BatteryApiAddon:
         if not self.mqtt:
             return
         
+        # Battery SOC
         soc = self.status.get('battery_soc')
         self.mqtt.update_state("sensor", "battery_soc", 
                                str(soc) if soc is not None else "unknown")
         
+        # Battery Power (charging/discharging)
+        bat_power = self.status.get('battery_power')
+        self.mqtt.update_state("sensor", "battery_power",
+                               str(int(bat_power)) if bat_power is not None else "unknown")
+        
+        # PV Power
+        pv_power = self.status.get('pv_power')
+        self.mqtt.update_state("sensor", "pv_power",
+                               str(int(pv_power)) if pv_power is not None else "unknown")
+        
+        # Grid Power
+        grid_power = self.status.get('grid_power')
+        self.mqtt.update_state("sensor", "grid_power",
+                               str(int(grid_power)) if grid_power is not None else "unknown")
+        
+        # Load Power
+        load_power = self.status.get('load_power')
+        self.mqtt.update_state("sensor", "load_power",
+                               str(int(load_power)) if load_power is not None else "unknown")
+        
+        # Battery Mode
         self.mqtt.update_state("sensor", "battery_mode", 
                                self.status.get('battery_mode') or "unknown")
         

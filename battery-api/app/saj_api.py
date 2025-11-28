@@ -385,15 +385,33 @@ class SajApiClient:
             error_msg = result.get('errMsg', 'Unknown error')
             raise Exception(f"Authentication failed: {error_msg}")
     
-    def get_user_mode(self) -> Optional[str]:
-        """Get the current user mode from the inverter.
+    def get_energy_flow_data(self) -> Dict[str, Any]:
+        """Get energy flow data from the inverter (battery, solar, grid, load).
         
-        Returns:
-            User mode string (e.g., 'EMS', 'TimeOfUse'), or None on failure
+        Returns dict with:
+            - battery_soc: Battery state of charge (%)
+            - battery_power: Battery power (W, positive=charging)
+            - battery_direction: 1=charging, -1=discharging, 0=idle
+            - pv_power: Solar PV power (W)
+            - grid_power: Grid power (W, positive=importing)
+            - grid_direction: 1=importing, -1=exporting, 0=none
+            - load_power: Total load power (W)
+            - user_mode: Mode name string
+            - update_time: Last update timestamp
         """
         if self.simulation_mode:
-            logger.info("SIMULATION: Would get user mode from SAJ API")
-            return "TimeOfUse"
+            logger.info("SIMULATION: Would get energy flow from SAJ API")
+            return {
+                'battery_soc': 75,
+                'battery_power': 500,
+                'battery_direction': 1,
+                'pv_power': 3000,
+                'grid_power': 0,
+                'grid_direction': 0,
+                'load_power': 2500,
+                'user_mode': 'TimeOfUse',
+                'update_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }
         
         self._ensure_authenticated()
         
@@ -424,17 +442,56 @@ class SajApiClient:
             
             if result.get('errCode') == 0:
                 data = result.get('data', {})
-                user_mode = data.get('userModeName')
-                logger.debug("Retrieved user mode: %s", user_mode)
-                return user_mode
+                
+                # Parse battery direction for signed power
+                bat_direction = data.get('batteryDirection', 0)
+                bat_power_raw = data.get('batPower', 0) or 0
+                # Make power negative when discharging
+                battery_power = bat_power_raw if bat_direction >= 0 else -bat_power_raw
+                
+                # Parse grid direction for signed power  
+                grid_direction = data.get('gridDirection', 0)
+                grid_power_raw = data.get('sysGridPowerwatt', 0) or 0
+                # gridDirection: 1=importing, -1=exporting
+                grid_power = grid_power_raw if grid_direction >= 0 else -grid_power_raw
+                
+                flow_data = {
+                    'battery_soc': data.get('batEnergyPercent'),
+                    'battery_power': battery_power,
+                    'battery_direction': bat_direction,
+                    'pv_power': data.get('totalPvPower', 0) or 0,
+                    'grid_power': grid_power,
+                    'grid_direction': grid_direction,
+                    'load_power': data.get('totalLoadPowerwatt', 0) or 0,
+                    'user_mode': data.get('userModeName'),
+                    'update_time': data.get('updateDate'),
+                }
+                
+                logger.debug("Energy flow: SOC=%.1f%%, bat=%.0fW, pv=%.0fW, grid=%.0fW, load=%.0fW",
+                            flow_data['battery_soc'] or 0,
+                            flow_data['battery_power'],
+                            flow_data['pv_power'],
+                            flow_data['grid_power'],
+                            flow_data['load_power'])
+                return flow_data
             else:
                 error_msg = result.get('errMsg', 'Unknown error')
-                logger.error("Failed to get user mode: %s", error_msg)
-                return None
+                logger.error("Failed to get energy flow: %s", error_msg)
+                return {}
                 
         except Exception as e:
-            logger.error("Exception getting user mode: %s", e)
-            return None
+            logger.error("Exception getting energy flow: %s", e)
+            return {}
+    
+    def get_user_mode(self) -> Optional[str]:
+        """Get the current user mode from the inverter.
+        
+        Returns:
+            User mode string (e.g., 'EMS', 'TimeOfUse'), or None on failure
+        """
+        # Use the energy flow data which includes mode
+        data = self.get_energy_flow_data()
+        return data.get('user_mode')
     
     def get_schedule(self) -> Dict[str, Any]:
         """Get the current battery schedule from the inverter.
