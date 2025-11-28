@@ -4,9 +4,10 @@ Control SAJ Electric inverter battery charge/discharge schedules from Home Assis
 
 ## Features
 
-- **Entity-based control**: Use Home Assistant number, select, and button entities to configure schedules
+- **Entity-based monitoring**: Real-time battery SOC, power values, and status via MQTT Discovery
+- **Mode control**: Change battery mode (Self-consumption, Time-of-use, AI) via select entity
+- **Schedule control**: Accept JSON schedules via MQTT for integration with other automations
 - **MQTT Discovery**: Entities are automatically created with proper unique_id support
-- **Schedule types**: Charge only, Discharge only, Both, or Clear
 - **Simulation mode**: Test without affecting actual inverter
 
 ## Requirements
@@ -62,25 +63,24 @@ mqtt_password: ""
 
 ## Entities Created
 
-### Control Entities (inputs)
+### Control Entities
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `select.ba_battery_mode_setting` | Select | Battery mode (Self-consumption, Time-of-use, AI) |
-| `text.ba_schedule` | Text | Schedule JSON input |
+| `select.battery_api_battery_mode` | Select | Battery mode (Self-consumption, Time-of-use, AI) |
 
 ### Status Entities (read-only)
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `sensor.ba_battery_soc` | Sensor | Current battery state of charge (%) |
-| `sensor.ba_battery_power` | Sensor | Battery power in watts (+ charging, - discharging) |
-| `sensor.ba_pv_power` | Sensor | Solar PV power in watts |
-| `sensor.ba_grid_power` | Sensor | Grid power in watts (+ import, - export) |
-| `sensor.ba_load_power` | Sensor | House load power in watts |
-| `sensor.ba_schedule_status` | Sensor | Schedule validation status |
-| `sensor.ba_api_status` | Sensor | API connection status |
-| `sensor.ba_last_applied` | Sensor | Timestamp of last schedule application |
+| `sensor.battery_api_battery_soc` | Sensor | Current battery state of charge (%) |
+| `sensor.battery_api_battery_power` | Sensor | Battery power in watts (+ charging, - discharging) |
+| `sensor.battery_api_pv_power` | Sensor | Solar PV power in watts |
+| `sensor.battery_api_grid_power` | Sensor | Grid power in watts (+ import, - export) |
+| `sensor.battery_api_load_power` | Sensor | House load power in watts |
+| `sensor.battery_api_schedule_status` | Sensor | Schedule validation/sync status |
+| `sensor.battery_api_api_status` | Sensor | API connection status |
+| `sensor.battery_api_last_applied` | Sensor | Timestamp of last schedule application |
 
 ### Battery Modes
 
@@ -88,60 +88,70 @@ mqtt_password: ""
 - **Time-of-use**: Battery follows configured charge/discharge schedule
 - **AI**: Inverter's AI-driven optimization mode
 
-## Usage Example
+## Schedule Control via MQTT
 
-### Dashboard Card
+The add-on listens for schedule commands on the MQTT topic: `battery_api/text/schedule/set`
+
+### Schedule JSON Format
+
+```json
+{
+  "charge": [
+    {"start": "02:00", "duration": 180, "power": 6000}
+  ],
+  "discharge": [
+    {"start": "17:00", "duration": 120, "power": 3000}
+  ]
+}
+```
+
+- `start`: Start time in HH:MM format
+- `duration`: Duration in minutes
+- `power`: Power in watts
+
+### Sending a Schedule via Home Assistant
+
+```yaml
+service: mqtt.publish
+data:
+  topic: "battery_api/text/schedule/set"
+  payload: >
+    {
+      "charge": [{"start": "02:00", "duration": 180, "power": 6000}],
+      "discharge": [{"start": "17:00", "duration": 120, "power": 2500}]
+    }
+```
+
+### SAJ API Limits
+
+- Maximum 3 charge periods per day
+- Maximum 6 discharge periods per day
+- Periods cannot overlap
+
+## Integration with NetDaemon
+
+This add-on is designed to work with NetDaemon for automated battery management. NetDaemon calculates optimal charge/discharge schedules based on electricity prices and solar forecasts, then publishes them to this add-on via MQTT.
+
+The add-on then:
+1. Validates the schedule
+2. Applies it to the SAJ inverter via the eSolar API
+3. Updates the `sensor.battery_api_schedule_status` with the result
+
+## Dashboard Card Example
 
 ```yaml
 type: entities
-title: Battery Schedule Control
+title: Battery Status
 entities:
-  - entity: select.battery_api_schedule_type
-  - entity: number.battery_api_charge_power
-  - entity: number.battery_api_charge_duration
-  - entity: text.battery_api_charge_start_time
-  - entity: number.battery_api_discharge_power
-  - entity: number.battery_api_discharge_duration
-  - entity: text.battery_api_discharge_start_time
-  - entity: button.battery_api_apply_schedule
-  - type: divider
   - entity: sensor.battery_api_battery_soc
-  - entity: sensor.battery_api_battery_mode
+  - entity: sensor.battery_api_battery_power
+  - entity: sensor.battery_api_pv_power
+  - entity: sensor.battery_api_grid_power
+  - entity: sensor.battery_api_load_power
+  - type: divider
+  - entity: select.battery_api_battery_mode
+  - entity: sensor.battery_api_schedule_status
   - entity: sensor.battery_api_api_status
-```
-
-### Automation Example
-
-```yaml
-automation:
-  - alias: "Schedule battery charge for cheap hours"
-    trigger:
-      - platform: time
-        at: "22:00:00"
-    action:
-      - service: number.set_value
-        target:
-          entity_id: number.battery_api_charge_power
-        data:
-          value: 6000
-      - service: number.set_value
-        target:
-          entity_id: number.battery_api_charge_duration
-        data:
-          value: 180
-      - service: text.set_value
-        target:
-          entity_id: text.battery_api_charge_start_time
-        data:
-          value: "02:00"
-      - service: select.select_option
-        target:
-          entity_id: select.battery_api_schedule_type
-        data:
-          option: "Charge Only"
-      - service: button.press
-        target:
-          entity_id: button.battery_api_apply_schedule
 ```
 
 ## Troubleshooting
@@ -151,6 +161,7 @@ automation:
 1. Check that MQTT broker is running (Mosquitto add-on)
 2. Verify MQTT credentials in add-on configuration
 3. Check add-on logs for connection errors
+4. Restart the add-on after MQTT broker is running
 
 ### Authentication Failures
 
@@ -161,8 +172,20 @@ automation:
 ### Schedule Not Applied
 
 1. Ensure simulation mode is disabled
-2. Check API status sensor for errors
-3. Review add-on logs for SAJ API errors
+2. Check `sensor.battery_api_schedule_status` for validation errors
+3. Check `sensor.battery_api_api_status` shows "Connected"
+4. Review add-on logs for SAJ API errors
+
+### Clearing a Schedule
+
+To clear all charge/discharge periods, send an empty schedule:
+
+```yaml
+service: mqtt.publish
+data:
+  topic: "battery_api/text/schedule/set"
+  payload: '{"charge": [], "discharge": []}'
+```
 
 ## Development
 
@@ -180,7 +203,17 @@ SAJ_PASSWORD=your_password
 SAJ_DEVICE_SERIAL=your_serial
 SAJ_PLANT_UID=your_plant_uid
 SIMULATION_MODE=true
+HA_API_URL=http://your-ha-ip:8123
+HA_API_TOKEN=your-long-lived-token
+MQTT_HOST=your-mqtt-broker
+MQTT_USERNAME=mqtt-user
+MQTT_PASSWORD=mqtt-password
 ```
+
+### Test Scripts
+
+- `test_schedule.py` - Test sending schedules via MQTT
+- `cleanup_mqtt_entities.py` - Remove all MQTT discovery entities (for debugging)
 
 ## Changelog
 

@@ -2,6 +2,24 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.4] - 2025-11-28
+
+### Added
+- Verbose logging every poll cycle (SOC, power values, mode, API status)
+- Prominent log banners for mode changes and schedule updates
+- MQTT topic `battery_api/text/schedule/set` for receiving schedules
+
+### Fixed
+- Schedule delivery now works via direct MQTT subscription (text entity discovery unreliable in HA)
+
+### Changed
+- NetDaemon integration now uses MQTT publish instead of text entity service call
+
+## [0.2.3] - 2025-11-28
+
+### Added
+- Debug logging for mode changes and schedule input
+
 ## [0.2.0] - 2025-11-28
 
 ### Added
