@@ -2,6 +2,14 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.10] - 2025-11-29
+
+### Fixed
+- Added thread safety for SAJ API operations
+  - MQTT callbacks (schedule, mode) and main poll loop now use a shared lock
+  - Prevents race conditions when schedule arrives during poll cycle
+  - Protects `self.status` dict from concurrent modification
+
 ## [0.2.9] - 2025-11-29
 
 ### Added

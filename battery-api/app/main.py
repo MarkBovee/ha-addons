@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -245,6 +246,10 @@ class BatteryApiAddon:
         self.config = config
         self.shutdown_event = shutdown_event
         self.simulation_mode = config.get('simulation_mode', False)
+        
+        # Thread lock for protecting SAJ API calls and status updates
+        # MQTT callbacks run in a separate thread, so we need to synchronize
+        self._api_lock = threading.Lock()
         
         # Schedule state
         self.schedule_json = "{}"
@@ -520,37 +525,41 @@ class BatteryApiAddon:
         logger.info("Published %d entities", len(self.mqtt.get_published_entities()))
     
     def _handle_mode_select(self, mode: str):
-        """Handle battery mode selection."""
+        """Handle battery mode selection.
+        
+        Uses _api_lock to prevent concurrent SAJ API calls.
+        """
         logger.info("Mode change: %s -> %s", self.battery_mode_setting, mode)
         
         if mode not in BATTERY_MODE_OPTIONS:
             logger.error("Invalid mode: %s (expected one of %s)", mode, BATTERY_MODE_OPTIONS)
             return
         
-        # Store the setting
-        self.battery_mode_setting = mode
-        
-        # Apply to inverter
-        api_mode = BATTERY_MODE_API_MAP.get(mode, "self_consumption")
-        
-        if self.simulation_mode:
-            logger.info("SIMULATION: Would set mode to %s", mode)
-            self.status['api_status'] = 'Simulation'
-        else:
-            try:
-                success = self.saj_client.set_battery_mode(api_mode)
-                if success:
-                    self.status['api_status'] = 'Connected'
-                    logger.info("Mode set to %s successfully", mode)
-                else:
-                    self.status['api_status'] = 'Mode Set Failed'
-                    logger.error("Failed to set mode to %s", mode)
-            except Exception as e:
-                self.status['api_status'] = f'Error: {e}'
-                logger.error("Mode setting error: %s", e)
-        
-        # Update entities
-        self.update_entities()
+        with self._api_lock:
+            # Store the setting
+            self.battery_mode_setting = mode
+            
+            # Apply to inverter
+            api_mode = BATTERY_MODE_API_MAP.get(mode, "self_consumption")
+            
+            if self.simulation_mode:
+                logger.info("SIMULATION: Would set mode to %s", mode)
+                self.status['api_status'] = 'Simulation'
+            else:
+                try:
+                    success = self.saj_client.set_battery_mode(api_mode)
+                    if success:
+                        self.status['api_status'] = 'Connected'
+                        logger.info("Mode set to %s successfully", mode)
+                    else:
+                        self.status['api_status'] = 'Mode Set Failed'
+                        logger.error("Failed to set mode to %s", mode)
+                except Exception as e:
+                    self.status['api_status'] = f'Error: {e}'
+                    logger.error("Mode setting error: %s", e)
+            
+            # Update entities
+            self.update_entities()
 
     def _format_periods_compact(self, validated: dict) -> str:
         """Format validated schedule periods into a compact single-line summary."""
@@ -591,69 +600,73 @@ class BatteryApiAddon:
         self._apply_schedule()
     
     def _apply_schedule(self):
-        """Apply the validated schedule to the inverter."""
+        """Apply the validated schedule to the inverter.
+        
+        Uses _api_lock to prevent concurrent SAJ API calls from main loop.
+        """
         if self.validated_schedule is None:
             logger.warning("No validated schedule to apply")
             return
         
-        # Determine weekday mask based on config
-        schedule_days = self.config.get('schedule_days', 'today')
-        if schedule_days == 'today':
-            weekdays = get_today_weekday_mask()
-        else:
-            weekdays = "1,1,1,1,1,1,1"  # All days
-        
-        # Convert to ChargingPeriod objects
-        periods: List[ChargingPeriod] = []
-        
-        for p in self.validated_schedule['charge']:
-            periods.append(ChargingPeriod(
-                charge_type=BatteryChargeType.CHARGE,
-                start_time=p['start'],
-                duration_minutes=p['duration'],
-                power_w=p['power'],
-                weekdays=weekdays,
-            ))
-        
-        for p in self.validated_schedule['discharge']:
-            periods.append(ChargingPeriod(
-                charge_type=BatteryChargeType.DISCHARGE,
-                start_time=p['start'],
-                duration_minutes=p['duration'],
-                power_w=p['power'],
-                weekdays=weekdays,
-            ))
-        
-        if not periods:
-            logger.debug("Clearing schedule (no periods)")
-        
-        # Apply to inverter
-        if self.simulation_mode:
-            logger.info("SIMULATION: Schedule would be applied")
-            self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.status['api_status'] = 'Simulation'
-        else:
-            try:
-                success = self.saj_client.save_schedule(periods)
-                if success:
-                    self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    self.status['api_status'] = 'Connected'
-                    logger.debug("Schedule applied to inverter")
-                else:
-                    self.status['api_status'] = 'Apply Failed'
-                    self.status['schedule_status'] = 'Apply failed'
-                    logger.error("Failed to apply schedule")
-            except Exception as e:
-                self.status['api_status'] = f'Error: {e}'
-                self.status['schedule_status'] = f'Error: {e}'
-                logger.error("Schedule application error: %s", e)
-        
-        # Refresh current schedule from inverter after apply
-        if not self.simulation_mode and self.status.get('last_applied'):
-            self._fetch_current_schedule()
-        
-        # Update sensors
-        self.update_entities()
+        with self._api_lock:
+            # Determine weekday mask based on config
+            schedule_days = self.config.get('schedule_days', 'today')
+            if schedule_days == 'today':
+                weekdays = get_today_weekday_mask()
+            else:
+                weekdays = "1,1,1,1,1,1,1"  # All days
+            
+            # Convert to ChargingPeriod objects
+            periods: List[ChargingPeriod] = []
+            
+            for p in self.validated_schedule['charge']:
+                periods.append(ChargingPeriod(
+                    charge_type=BatteryChargeType.CHARGE,
+                    start_time=p['start'],
+                    duration_minutes=p['duration'],
+                    power_w=p['power'],
+                    weekdays=weekdays,
+                ))
+            
+            for p in self.validated_schedule['discharge']:
+                periods.append(ChargingPeriod(
+                    charge_type=BatteryChargeType.DISCHARGE,
+                    start_time=p['start'],
+                    duration_minutes=p['duration'],
+                    power_w=p['power'],
+                    weekdays=weekdays,
+                ))
+            
+            if not periods:
+                logger.debug("Clearing schedule (no periods)")
+            
+            # Apply to inverter
+            if self.simulation_mode:
+                logger.info("SIMULATION: Schedule would be applied")
+                self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.status['api_status'] = 'Simulation'
+            else:
+                try:
+                    success = self.saj_client.save_schedule(periods)
+                    if success:
+                        self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        self.status['api_status'] = 'Connected'
+                        logger.debug("Schedule applied to inverter")
+                    else:
+                        self.status['api_status'] = 'Apply Failed'
+                        self.status['schedule_status'] = 'Apply failed'
+                        logger.error("Failed to apply schedule")
+                except Exception as e:
+                    self.status['api_status'] = f'Error: {e}'
+                    self.status['schedule_status'] = f'Error: {e}'
+                    logger.error("Schedule application error: %s", e)
+            
+            # Refresh current schedule from inverter after apply
+            if not self.simulation_mode and self.status.get('last_applied'):
+                self._fetch_current_schedule()
+            
+            # Update sensors
+            self.update_entities()
     
     def _fetch_current_schedule(self):
         """Fetch current schedule from inverter and sync controls (called on startup and after apply)."""
@@ -898,10 +911,12 @@ class BatteryApiAddon:
         
         while not self.shutdown_event.is_set():
             try:
-                self.poll_status()
-                self.update_entities()
+                # Use lock to prevent concurrent API access with MQTT callbacks
+                with self._api_lock:
+                    self.poll_status()
+                    self.update_entities()
                 
-                # Log status every poll
+                # Log status every poll (outside lock - just reading)
                 soc = self.status.get('battery_soc')
                 bat_power = self.status.get('battery_power', 0)
                 pv_power = self.status.get('pv_power', 0)
