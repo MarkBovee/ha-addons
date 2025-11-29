@@ -703,6 +703,12 @@ class SajApiClient:
             logger.warning("No periods provided to save_schedule")
             return False
         
+        # Log periods being saved
+        for i, p in enumerate(periods):
+            logger.debug("Period %d: %s-%s, charge=%s, discharge=%s, power=%dW, weekdays=%s",
+                        i+1, p.start_time, p.end_time, p.enable_charge, p.enable_discharge, 
+                        p.power_watts, p.weekdays_mask)
+        
         # Build schedule parameters
         try:
             params = build_schedule_parameters(periods)
@@ -746,26 +752,36 @@ class SajApiClient:
         signed['transferId'] = params.transfer_id
         signed['value'] = params.value
         
-        logger.debug("Saving schedule to SAJ API...")
+        logger.info("Saving schedule to SAJ API: %s periods", len(periods))
         logger.debug("  CommAddress: %s", params.comm_address)
         logger.debug("  Value: %s", params.value)
         
         try:
             headers = {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}
             response = self._session.post(url, data=signed, headers=headers)
+            
+            # Log response details
+            logger.debug("Response status: %s", response.status_code)
+            logger.debug("Response body: %s", response.text[:500] if response.text else "(empty)")
+            
             response.raise_for_status()
             
             result = response.json()
             err_code = result.get('errCode')
             
             if err_code == 0:
-                logger.debug("Schedule saved to inverter")
+                logger.info("Schedule saved to inverter successfully")
                 return True
             else:
                 error_msg = result.get('errMsg', 'Unknown error')
-                logger.error("Failed to save schedule: code=%s, msg=%s", err_code, error_msg)
+                logger.error("Failed to save schedule: errCode=%s, errMsg=%s", err_code, error_msg)
+                logger.error("Full response: %s", result)
                 return False
                 
+        except requests.exceptions.HTTPError as e:
+            logger.error("HTTP error saving schedule: %s", e)
+            logger.error("Response body: %s", e.response.text if e.response else "(no response)")
+            return False
         except Exception as e:
             logger.error("Exception saving schedule: %s", e)
             return False

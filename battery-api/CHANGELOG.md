@@ -2,6 +2,16 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.13] - 2025-11-29
+
+### Improved
+- Enhanced logging for schedule save operations:
+  - Log each period being saved (start/end time, charge/discharge, power, weekdays)
+  - Log API response status and body on both success and failure
+  - Log full response JSON on errCode failures
+  - Separate HTTPError handling with response body logging
+  - Promoted "Saving schedule" log to INFO level for visibility
+
 ## [0.2.12] - 2025-11-29
 
 ### Changed
