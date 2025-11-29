@@ -2,6 +2,14 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.15] - 2025-11-29
+
+### Changed
+- Reduced lock contention for faster MQTT schedule response
+  - Lock is now held only during API calls, not during status processing
+  - MQTT schedule callbacks no longer wait for entire poll cycle
+  - Schedule commands now apply immediately when received
+
 ## [0.2.14] - 2025-11-29
 
 ### Fixed

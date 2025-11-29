@@ -723,7 +723,10 @@ class BatteryApiAddon:
             return
         
         try:
-            flow_data = self.saj_client.get_energy_flow_data()
+            # Use lock only for the API call itself
+            with self._api_lock:
+                flow_data = self.saj_client.get_energy_flow_data()
+            
             if flow_data:
                 # Core power values
                 self.status['battery_soc'] = flow_data.get('battery_soc')
@@ -914,12 +917,11 @@ class BatteryApiAddon:
         
         while not self.shutdown_event.is_set():
             try:
-                # Use lock to prevent concurrent API access with MQTT callbacks
-                with self._api_lock:
-                    self.poll_status()
-                    self.update_entities()
+                # Poll status - uses lock internally only for API calls
+                self.poll_status()
+                self.update_entities()
                 
-                # Log status every poll (outside lock - just reading)
+                # Log status every poll
                 soc = self.status.get('battery_soc')
                 bat_power = self.status.get('battery_power', 0)
                 pv_power = self.status.get('pv_power', 0)
