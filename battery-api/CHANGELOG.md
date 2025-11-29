@@ -2,6 +2,14 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.12] - 2025-11-29
+
+### Changed
+- Removed unnecessary API call after schedule apply
+  - Previously fetched schedule back from inverter after applying
+  - Now updates local state directly from the schedule we just sent
+  - Reduces API calls and improves responsiveness
+
 ## [0.2.11] - 2025-11-29
 
 ### Fixed

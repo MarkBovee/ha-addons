@@ -645,12 +645,16 @@ class BatteryApiAddon:
                 logger.info("SIMULATION: Schedule would be applied")
                 self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 self.status['api_status'] = 'Simulation'
+                # Update local schedule state (simulation)
+                self.status['current_schedule'] = self.schedule_json
             else:
                 try:
                     success = self.saj_client.save_schedule(periods)
                     if success:
                         self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         self.status['api_status'] = 'Connected'
+                        # Update local schedule state - no need to re-fetch from API
+                        self.status['current_schedule'] = self.schedule_json
                         logger.debug("Schedule applied to inverter")
                     else:
                         self.status['api_status'] = 'Apply Failed'
@@ -660,10 +664,6 @@ class BatteryApiAddon:
                     self.status['api_status'] = f'Error: {e}'
                     self.status['schedule_status'] = f'Error: {e}'
                     logger.error("Schedule application error: %s", e)
-            
-            # Refresh current schedule from inverter after apply
-            if not self.simulation_mode and self.status.get('last_applied'):
-                self._fetch_current_schedule()
             
             # Update sensors
             self.update_entities()
