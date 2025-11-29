@@ -705,9 +705,9 @@ class SajApiClient:
         
         # Log periods being saved
         for i, p in enumerate(periods):
-            logger.debug("Period %d: %s-%s, charge=%s, discharge=%s, power=%dW, weekdays=%s",
-                        i+1, p.start_time, p.end_time, p.enable_charge, p.enable_discharge, 
-                        p.power_watts, p.weekdays_mask)
+            logger.debug("Period %d: %s-%s, type=%s, power=%dW, weekdays=%s",
+                        i+1, p.start_time, p.end_time, p.charge_type.name, 
+                        p.power_w, p.weekdays)
         
         # Build schedule parameters
         try:

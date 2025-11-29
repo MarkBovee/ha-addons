@@ -2,6 +2,12 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.14] - 2025-11-29
+
+### Fixed
+- Fixed AttributeError in schedule logging (`enable_charge` → `charge_type`)
+  - ChargingPeriod uses `charge_type`, `power_w`, `weekdays` not the old attribute names
+
 ## [0.2.13] - 2025-11-29
 
 ### Improved
