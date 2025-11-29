@@ -257,14 +257,32 @@ class BatteryApiAddon:
         self.status = {
             'battery_soc': None,
             'battery_power': None,  # W (positive=charging, negative=discharging)
+            'battery_direction': None,  # 1=charging, -1=discharging, 0=idle
+            'battery_capacity': None,
+            'battery_current': None,
+            'battery_charge_today': None,
+            'battery_discharge_today': None,
+            'battery_charge_total': None,
+            'battery_discharge_total': None,
             'pv_power': None,       # W
+            'pv_direction': None,
+            'solar_power': None,
             'grid_power': None,     # W (positive=importing, negative=exporting)
+            'grid_direction': None,  # 1=importing, -1=exporting, 0=none
             'load_power': None,     # W
+            'home_load_power': None,
+            'backup_load_power': None,
+            'input_output_power': None,
+            'output_direction': None,
             'schedule_status': 'No schedule',
             'last_applied': None,
             'api_status': 'Initializing',
             'current_schedule': None,  # Fetched on startup and after apply
             'last_update': None,    # Timestamp from inverter
+            'user_mode': None,      # Current inverter mode
+            'plant_name': None,
+            'inverter_model': None,
+            'inverter_sn': None,
         }
         
         # Initialize SAJ API client
@@ -399,7 +417,7 @@ class BatteryApiAddon:
         
         # ===== Status Entities (read-only sensors) =====
         
-        # Battery SOC
+        # Battery SOC - with rich attributes showing all power flow data
         self.mqtt.publish_sensor(
             EntityConfig(
                 object_id="battery_soc",
@@ -409,6 +427,7 @@ class BatteryApiAddon:
                 device_class="battery",
                 state_class="measurement",
                 icon="mdi:battery",
+                attributes=self._build_power_attributes(),
             )
         )
         
@@ -422,6 +441,7 @@ class BatteryApiAddon:
                 device_class="power",
                 state_class="measurement",
                 icon="mdi:battery-charging",
+                attributes={'direction': self._battery_direction_str()},
             )
         )
         
@@ -448,6 +468,7 @@ class BatteryApiAddon:
                 device_class="power",
                 state_class="measurement",
                 icon="mdi:transmission-tower",
+                attributes={'direction': self._grid_direction_str()},
             )
         )
         
@@ -673,41 +694,168 @@ class BatteryApiAddon:
         if self.simulation_mode:
             self.status['battery_soc'] = 75
             self.status['battery_power'] = 500
+            self.status['battery_direction'] = 1
             self.status['pv_power'] = 3000
             self.status['grid_power'] = -200
+            self.status['grid_direction'] = -1
             self.status['load_power'] = 2500
             self.status['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            self.status['user_mode'] = 'EMS'
+            self.status['battery_capacity'] = 50
+            self.status['battery_current'] = 2.5
+            self.status['plant_name'] = 'Simulation'
+            self.status['inverter_model'] = 'HS2-8K-T2'
+            self.status['inverter_sn'] = 'SIM123456'
             logger.debug("SIMULATION: Status poll (SOC=75%%, bat=500W, pv=3000W)")
             return
         
         try:
             flow_data = self.saj_client.get_energy_flow_data()
             if flow_data:
+                # Core power values
                 self.status['battery_soc'] = flow_data.get('battery_soc')
                 self.status['battery_power'] = flow_data.get('battery_power')
+                self.status['battery_direction'] = flow_data.get('battery_direction')
                 self.status['pv_power'] = flow_data.get('pv_power')
                 self.status['grid_power'] = flow_data.get('grid_power')
+                self.status['grid_direction'] = flow_data.get('grid_direction')
                 self.status['load_power'] = flow_data.get('load_power')
+                
+                # Extended battery info
+                self.status['battery_capacity'] = flow_data.get('battery_capacity')
+                self.status['battery_current'] = flow_data.get('battery_current')
+                self.status['battery_charge_today'] = flow_data.get('battery_charge_today')
+                self.status['battery_discharge_today'] = flow_data.get('battery_discharge_today')
+                self.status['battery_charge_total'] = flow_data.get('battery_charge_total')
+                self.status['battery_discharge_total'] = flow_data.get('battery_discharge_total')
+                
+                # Extended power info
+                self.status['pv_direction'] = flow_data.get('pv_direction')
+                self.status['solar_power'] = flow_data.get('solar_power')
+                self.status['home_load_power'] = flow_data.get('home_load_power')
+                self.status['backup_load_power'] = flow_data.get('backup_load_power')
+                self.status['input_output_power'] = flow_data.get('input_output_power')
+                self.status['output_direction'] = flow_data.get('output_direction')
+                
+                # Device info
+                self.status['plant_name'] = flow_data.get('plant_name')
+                self.status['inverter_model'] = flow_data.get('inverter_model')
+                self.status['inverter_sn'] = flow_data.get('inverter_sn')
+                
                 self.status['last_update'] = flow_data.get('update_time')
+                self.status['user_mode'] = flow_data.get('user_mode')
                 self.status['api_status'] = 'Connected'
         except Exception as e:
             logger.error("Status poll failed: %s", e)
             self.status['api_status'] = f'Poll Error: {e}'
+    
+    def _battery_direction_str(self) -> str:
+        """Convert battery direction code to human-readable string."""
+        direction = self.status.get('battery_direction')
+        if direction is None:
+            return "Unknown"
+        if direction > 0:
+            return "Charging"
+        if direction < 0:
+            return "Discharging"
+        return "Idle"
+    
+    def _grid_direction_str(self) -> str:
+        """Convert grid direction code to human-readable string."""
+        direction = self.status.get('grid_direction')
+        if direction is None:
+            return "Unknown"
+        if direction > 0:
+            return "Importing"
+        if direction < 0:
+            return "Exporting"
+        return "Standby"
+    
+    def _pv_direction_str(self) -> str:
+        """Convert PV direction code to human-readable string."""
+        direction = self.status.get('pv_direction')
+        if direction is None:
+            return "Unknown"
+        if direction != 0:
+            return "Exporting"
+        return "Idle"
+    
+    def _output_direction_str(self) -> str:
+        """Convert output direction code to human-readable string."""
+        direction = self.status.get('output_direction')
+        if direction is None:
+            return "Unknown"
+        return str(direction)
+    
+    def _build_power_attributes(self) -> dict:
+        """Build comprehensive attributes dict for the main battery SOC sensor.
+        
+        Mirrors the attributes from the SAJ integration's sensor.
+        """
+        attrs = {
+            # Device info
+            'plant_name': self.status.get('plant_name'),
+            'plant_uid': self.config.get('plant_uid'),
+            'inverter_model': self.status.get('inverter_model'),
+            'inverter_sn': self.status.get('inverter_sn'),
+            
+            # Battery info
+            'battery_capacity': self.status.get('battery_capacity'),
+            'battery_current': self.status.get('battery_current'),
+            'battery_power': self.status.get('battery_power'),
+            'battery_direction': self._battery_direction_str(),
+            
+            # Grid info
+            'grid_power': self.status.get('grid_power'),
+            'grid_direction': self._grid_direction_str(),
+            
+            # Solar/PV info
+            'photovoltaics_power': self.status.get('pv_power'),
+            'photovoltaics_direction': self._pv_direction_str(),
+            'solar_power': self.status.get('solar_power'),
+            
+            # Load info
+            'total_load_power': self.status.get('load_power'),
+            'home_load_power': self.status.get('home_load_power'),
+            'backup_load_power': self.status.get('backup_load_power'),
+            
+            # I/O
+            'input_output_power': self.status.get('input_output_power'),
+            'output_direction': self._output_direction_str(),
+            
+            # Energy totals
+            'battery_charge_today_energy': self.status.get('battery_charge_today'),
+            'battery_discharge_today_energy': self.status.get('battery_discharge_today'),
+            'battery_charge_total_energy': self.status.get('battery_charge_total'),
+            'battery_discharge_total_energy': self.status.get('battery_discharge_total'),
+            
+            # Mode and timing
+            'user_mode': self.status.get('user_mode'),
+            'last_update': self.status.get('last_update'),
+        }
+        
+        # Filter out None values for cleaner output
+        return {k: v for k, v in attrs.items() if v is not None}
     
     def update_entities(self):
         """Publish updated status to MQTT entities."""
         if not self.mqtt:
             return
         
-        # Battery SOC
+        # Build common attributes for power sensors
+        power_attrs = self._build_power_attributes()
+        
+        # Battery SOC - with all attributes
         soc = self.status.get('battery_soc')
         self.mqtt.update_state("sensor", "battery_soc", 
-                               str(soc) if soc is not None else "unknown")
+                               str(soc) if soc is not None else "unknown",
+                               attributes=power_attrs)
         
         # Battery Power (charging/discharging)
         bat_power = self.status.get('battery_power')
         self.mqtt.update_state("sensor", "battery_power",
-                               str(int(bat_power)) if bat_power is not None else "unknown")
+                               str(int(bat_power)) if bat_power is not None else "unknown",
+                               attributes={'direction': self._battery_direction_str()})
         
         # PV Power
         pv_power = self.status.get('pv_power')
@@ -717,7 +865,8 @@ class BatteryApiAddon:
         # Grid Power
         grid_power = self.status.get('grid_power')
         self.mqtt.update_state("sensor", "grid_power",
-                               str(int(grid_power)) if grid_power is not None else "unknown")
+                               str(int(grid_power)) if grid_power is not None else "unknown",
+                               attributes={'direction': self._grid_direction_str()})
         
         # Load Power
         load_power = self.status.get('load_power')

@@ -2,6 +2,20 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.9] - 2025-11-29
+
+### Added
+- Rich attributes on Battery SOC sensor (mirrors SAJ integration):
+  - Device info: plant_name, plant_uid, inverter_model, inverter_sn
+  - Battery info: battery_capacity, battery_current, battery_power, battery_direction
+  - Grid info: grid_power, grid_direction (Importing/Exporting/Standby)
+  - Solar info: photovoltaics_power, photovoltaics_direction, solar_power
+  - Load info: total_load_power, home_load_power, backup_load_power
+  - Energy totals: battery_charge/discharge_today_energy, battery_charge/discharge_total_energy
+  - I/O: input_output_power, output_direction, user_mode, last_update
+- Direction attribute on Battery Power sensor (Charging/Discharging/Idle)
+- Direction attribute on Grid Power sensor (Importing/Exporting/Standby)
+
 ## [0.2.8] - 2025-11-29
 
 ### Added

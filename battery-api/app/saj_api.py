@@ -460,12 +460,28 @@ class SajApiClient:
                     'battery_soc': data.get('batEnergyPercent'),
                     'battery_power': battery_power,
                     'battery_direction': bat_direction,
+                    'battery_capacity': data.get('batCapacity'),
+                    'battery_current': data.get('batCurrent'),
+                    'battery_charge_today': data.get('batChargeToday'),  # Wh
+                    'battery_discharge_today': data.get('batDischargeToday'),  # Wh
+                    'battery_charge_total': data.get('batChargeTotal'),  # Wh
+                    'battery_discharge_total': data.get('batDischargeTotal'),  # Wh
                     'pv_power': data.get('totalPvPower', 0) or 0,
+                    'pv_direction': data.get('pvDirection'),
+                    'solar_power': data.get('solarPower'),  # Alternative PV field
                     'grid_power': grid_power,
                     'grid_direction': grid_direction,
                     'load_power': data.get('totalLoadPowerwatt', 0) or 0,
+                    'home_load_power': data.get('homeLoadPower'),
+                    'backup_load_power': data.get('backupLoadPower'),
+                    'input_output_power': data.get('inputOutputPower'),
+                    'output_direction': data.get('outputDirection'),
                     'user_mode': data.get('userModeName'),
                     'update_time': data.get('updateDate'),
+                    # Device info
+                    'plant_name': data.get('plantName'),
+                    'inverter_model': data.get('devModel'),
+                    'inverter_sn': data.get('devSn'),
                 }
                 
                 logger.debug("Energy flow: SOC=%.1f%%, bat=%.0fW, pv=%.0fW, grid=%.0fW, load=%.0fW",
