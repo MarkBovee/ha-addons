@@ -447,7 +447,7 @@ class SajApiClient:
                 # Parse battery direction for signed power
                 bat_direction = data.get('batteryDirection', 0)
                 bat_power_raw = data.get('batPower', 0) or 0
-                # Make power negative when discharging
+                # batteryDirection > 0 = discharging (positive), < 0 = charging (negative)
                 battery_power = bat_power_raw if bat_direction >= 0 else -bat_power_raw
                 
                 # Parse grid direction for signed power  

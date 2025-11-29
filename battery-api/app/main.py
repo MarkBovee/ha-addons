@@ -763,14 +763,17 @@ class BatteryApiAddon:
             self.status['api_status'] = f'Poll Error: {e}'
     
     def _battery_direction_str(self) -> str:
-        """Convert battery direction code to human-readable string."""
+        """Convert battery direction code to human-readable string.
+        
+        SAJ API: batteryDirection > 0 = discharging, < 0 = charging, 0 = idle
+        """
         direction = self.status.get('battery_direction')
         if direction is None:
             return "Unknown"
         if direction > 0:
-            return "Charging"
-        if direction < 0:
             return "Discharging"
+        if direction < 0:
+            return "Charging"
         return "Idle"
     
     def _grid_direction_str(self) -> str:

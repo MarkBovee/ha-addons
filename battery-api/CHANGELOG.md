@@ -2,6 +2,13 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.11] - 2025-11-29
+
+### Fixed
+- Battery direction was inverted (showed "Charging" when discharging)
+  - SAJ API: direction > 0 = discharging, < 0 = charging
+  - Now correctly displays "Discharging" when battery power is positive
+
 ## [0.2.10] - 2025-11-29
 
 ### Fixed
