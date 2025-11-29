@@ -743,7 +743,7 @@ class SajApiClient:
             err_code = result.get('errCode')
             
             if err_code == 0:
-                logger.info("Schedule saved successfully")
+                logger.debug("Schedule saved to inverter")
                 return True
             else:
                 error_msg = result.get('errMsg', 'Unknown error')

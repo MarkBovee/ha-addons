@@ -27,7 +27,7 @@ from shared.ha_mqtt_discovery import (
 
 # Import local modules
 from .saj_api import SajApiClient
-from .models import BatteryChargeType, ChargingPeriod
+from .models import BatteryChargeType, ChargingPeriod, get_today_weekday_mask
 
 # Configure logging
 logger = setup_logging(name=__name__)
@@ -500,9 +500,7 @@ class BatteryApiAddon:
     
     def _handle_mode_select(self, mode: str):
         """Handle battery mode selection."""
-        logger.info("=" * 40)
-        logger.info("MODE CHANGE: %s -> %s", self.battery_mode_setting, mode)
-        logger.info("=" * 40)
+        logger.info("Mode change: %s -> %s", self.battery_mode_setting, mode)
         
         if mode not in BATTERY_MODE_OPTIONS:
             logger.error("Invalid mode: %s (expected one of %s)", mode, BATTERY_MODE_OPTIONS)
@@ -533,13 +531,17 @@ class BatteryApiAddon:
         # Update entities
         self.update_entities()
 
+    def _format_periods_compact(self, validated: dict) -> str:
+        """Format validated schedule periods into a compact single-line summary."""
+        parts = []
+        for p in validated.get('charge', []):
+            parts.append(f"CHG {p['start']} {p['power']}W/{p['duration']}m")
+        for p in validated.get('discharge', []):
+            parts.append(f"DIS {p['start']} {p['power']}W/{p['duration']}m")
+        return ", ".join(parts) if parts else "empty"
+
     def _handle_schedule_input(self, json_str: str):
         """Handle schedule JSON input - validates and applies if valid."""
-        logger.info("=" * 40)
-        logger.info("SCHEDULE INPUT RECEIVED")
-        logger.info("=" * 40)
-        logger.info("Schedule JSON: %s", json_str[:500] if json_str else "(empty)")
-        
         # Step 1: Validate
         try:
             validated = validate_schedule(json_str)
@@ -551,10 +553,12 @@ class BatteryApiAddon:
             
             if charge_count == 0 and discharge_count == 0:
                 self.status['schedule_status'] = 'Cleared'
-                logger.info("Schedule cleared")
+                logger.info("Schedule received: cleared")
             else:
                 self.status['schedule_status'] = f'Valid: {charge_count} charge, {discharge_count} discharge'
-                logger.info("Validated: %d charge, %d discharge periods", charge_count, discharge_count)
+                # Build compact period summary
+                period_summary = self._format_periods_compact(validated)
+                logger.info("Schedule received: %s", period_summary)
             
         except ScheduleValidationError as e:
             self.status['schedule_status'] = f'Invalid: {e}'
@@ -571,6 +575,13 @@ class BatteryApiAddon:
             logger.warning("No validated schedule to apply")
             return
         
+        # Determine weekday mask based on config
+        schedule_days = self.config.get('schedule_days', 'today')
+        if schedule_days == 'today':
+            weekdays = get_today_weekday_mask()
+        else:
+            weekdays = "1,1,1,1,1,1,1"  # All days
+        
         # Convert to ChargingPeriod objects
         periods: List[ChargingPeriod] = []
         
@@ -580,6 +591,7 @@ class BatteryApiAddon:
                 start_time=p['start'],
                 duration_minutes=p['duration'],
                 power_w=p['power'],
+                weekdays=weekdays,
             ))
         
         for p in self.validated_schedule['discharge']:
@@ -588,15 +600,11 @@ class BatteryApiAddon:
                 start_time=p['start'],
                 duration_minutes=p['duration'],
                 power_w=p['power'],
+                weekdays=weekdays,
             ))
         
         if not periods:
-            logger.info("Clearing schedule (no periods)")
-        else:
-            logger.info("Applying %d periods to inverter:", len(periods))
-            for p in periods:
-                logger.info("  %s: %s for %d min @ %dW", 
-                           p.charge_type.value, p.start_time, p.duration_minutes, p.power_w)
+            logger.debug("Clearing schedule (no periods)")
         
         # Apply to inverter
         if self.simulation_mode:
@@ -609,7 +617,7 @@ class BatteryApiAddon:
                 if success:
                     self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     self.status['api_status'] = 'Connected'
-                    logger.info("Schedule applied successfully")
+                    logger.debug("Schedule applied to inverter")
                 else:
                     self.status['api_status'] = 'Apply Failed'
                     self.status['schedule_status'] = 'Apply failed'
@@ -632,7 +640,7 @@ class BatteryApiAddon:
             schedule = self.saj_client.get_schedule()
             if schedule:
                 self.status['current_schedule'] = json.dumps(schedule)
-                logger.info("Fetched current schedule: mode=%s, charge=%d, discharge=%d",
+                logger.debug("Fetched schedule from inverter: mode=%s, charge=%d, discharge=%d",
                            schedule.get('mode'), 
                            len(schedule.get('charge', [])),
                            len(schedule.get('discharge', [])))
@@ -641,7 +649,6 @@ class BatteryApiAddon:
                 api_mode = schedule.get('mode')
                 if api_mode and api_mode in API_MODE_TO_SELECT:
                     self.battery_mode_setting = API_MODE_TO_SELECT[api_mode]
-                    logger.info("Synced battery mode setting to: %s", self.battery_mode_setting)
                 
                 # Sync schedule JSON (rebuild from fetched data)
                 schedule_for_input = {
@@ -654,7 +661,6 @@ class BatteryApiAddon:
                     charge_count = len(schedule_for_input['charge'])
                     discharge_count = len(schedule_for_input['discharge'])
                     self.status['schedule_status'] = f'Synced: {charge_count} charge, {discharge_count} discharge'
-                    logger.info("Synced schedule input from inverter")
             else:
                 self.status['current_schedule'] = '{}'
                 logger.warning("Failed to fetch current schedule")
@@ -786,9 +792,7 @@ class BatteryApiAddon:
 
 def main():
     """Main entry point for the Battery API add-on."""
-    logger.info("=" * 60)
     logger.info("Battery API Add-on Starting")
-    logger.info("=" * 60)
     
     shutdown_event = setup_signal_handlers(logger)
     

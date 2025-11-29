@@ -2,6 +2,17 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.8] - 2025-11-29
+
+### Added
+- `schedule_days` config option: "today" (default) applies schedule only to current weekday, "all" applies to all days Mon-Sun
+- MQTT password now masked in config UI (changed to `password` type)
+
+### Changed
+- Reduced log verbosity: removed banner lines, consolidated to single-line logs
+- Mode changes now log as single line instead of multi-line banner
+- Startup log simplified to single line
+
 ## [0.2.5] - 2025-11-28
 
 ### Fixed

@@ -9,6 +9,21 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 
+def get_today_weekday_mask() -> str:
+    """Get weekday bitmask for today only.
+    
+    SAJ API uses Monday=0 to Sunday=6 format.
+    Python weekday() also uses Monday=0 to Sunday=6.
+    
+    Returns:
+        Weekday bitmask string like "1,0,0,0,0,0,0" for Monday
+    """
+    today = datetime.now().weekday()  # 0=Monday, 6=Sunday
+    mask = ["0"] * 7
+    mask[today] = "1"
+    return ",".join(mask)
+
+
 class BatteryChargeType(Enum):
     """Type of battery charging operation."""
     CHARGE = "Charge"
