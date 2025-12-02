@@ -1,5 +1,48 @@
 # Design: Water Heater Scheduler Add-on
 
+## User Settings (config.yaml)
+
+### Entity Selection
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `price_sensor_entity_id` | select | `sensor.ep_price_import` | Energy price sensor with price_curve attribute |
+| `water_heater_entity_id` | select | – (required) | Target water_heater entity to control |
+| `away_mode_entity_id` | select | `switch.our_home_away_mode` | Away mode source switch/input_boolean |
+| `bath_mode_entity_id` | select | `input_boolean.bath` | Bath override toggle |
+| `status_text_entity_id` | string | `input_text.heating_schedule_status` | Status output text entity |
+
+### Schedule Settings
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `schedule_interval_minutes` | integer | `5` | Frequency of re-evaluation (1-60) |
+| `night_window_start` | string | `00:00` | Night window start time (HH:MM) |
+| `night_window_end` | string | `06:00` | Night window end time (HH:MM) |
+| `legionella_day_of_week` | select | `Saturday` | Day to run legionella protection |
+| `legionella_duration_hours` | integer | `3` | Length of legionella boost (1-6) |
+| `heating_duration_hours` | integer | `1` | Standard program duration (1-4) |
+| `next_day_price_check` | boolean | `true` | Compare tomorrow's price before day program |
+
+### Temperature Settings
+| Key | Type | Default | Range | Description |
+|-----|------|---------|-------|-------------|
+| `temp_idle` | integer | `35` | 30-45 | Idle/standby temperature |
+| `temp_night_program` | integer | `56` | 45-65 | Target for night charge |
+| `temp_night_program_low` | integer | `52` | 45-60 | Night target when night > day price |
+| `temp_day_program` | integer | `58` | 50-70 | Target for daytime heating |
+| `temp_day_program_max` | integer | `70` | 60-75 | Max temp for very low prices |
+| `temp_legionella` | integer | `62` | 60-70 | Legionella cycle target |
+| `temp_legionella_max` | integer | `70` | 65-75 | Legionella at very low prices |
+| `temp_away_legionella` | integer | `60` | 55-66 | Away-mode legionella (expensive) |
+| `temp_away_legionella_cheap` | integer | `66` | 60-70 | Away-mode legionella (cheap price) |
+| `temp_bath_threshold` | integer | `50` | 45-60 | Auto-disable bath above this temp |
+
+### Advanced Settings
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `wait_cycles_limit` | integer | `10` | Cycles before forcing idle (5-20) |
+| `cheap_price_threshold` | float | `0.20` | EUR/kWh threshold for "cheap" classification |
+| `log_level` | select | `info` | Logging verbosity (debug/info/warning/error) |
+
 ## Architecture Overview
 
 ```
@@ -63,18 +106,21 @@ Ported from `WaterHeater.cs`, the scheduling follows this decision tree:
 
 ## Temperature Decision Matrix
 
-| Program | Condition | Target Temp |
-|---------|-----------|-------------|
-| Night | night_price < day_price | 56°C |
-| Night | night_price >= day_price | 52°C |
-| Day | price_level == None | 70°C |
-| Day | price_level == Low/Medium/High | 58°C |
-| Day | tomorrow_night < current AND price_level > Medium | idle (35°C) |
-| Legionella | price_level == None | 70°C |
-| Legionella | otherwise | 62°C |
-| Away + Legionella | current_price < 0.2 | 66°C |
-| Away + Legionella | current_price >= 0.2 | 60°C |
-| Idle | always | 35°C |
+All temperatures are configurable via settings. Defaults shown:
+
+| Program | Condition | Config Key | Default |
+|---------|-----------|------------|---------|
+| Night | night_price < day_price | `temp_night_program` | 56°C |
+| Night | night_price >= day_price | `temp_night_program_low` | 52°C |
+| Day | price_level == None | `temp_day_program_max` | 70°C |
+| Day | price_level == Low/Medium/High | `temp_day_program` | 58°C |
+| Day | tomorrow cheaper & price > Medium | `temp_idle` | 35°C |
+| Legionella | price_level == None | `temp_legionella_max` | 70°C |
+| Legionella | otherwise | `temp_legionella` | 62°C |
+| Away + Legionella | price < `cheap_price_threshold` | `temp_away_legionella_cheap` | 66°C |
+| Away + Legionella | price >= `cheap_price_threshold` | `temp_away_legionella` | 60°C |
+| Idle | always | `temp_idle` | 35°C |
+| Bath auto-off | current_temp > threshold | `temp_bath_threshold` | 50°C |
 
 ## Price Data Contract
 

@@ -5,49 +5,101 @@ Schedule domestic hot water heating based on electricity price curves, optimizin
 
 ## ADDED Requirements
 
+### Requirement: User-Configurable Entity Selection
+The system SHALL allow users to select target entities via the add-on configuration UI.
+
+#### Scenario: Configure water heater entity
+- **WHEN** the user sets `water_heater_entity_id` to `water_heater.my_heat_pump`
+- **THEN** the system controls that specific water heater entity
+- **AND** reads current temperature from its attributes
+- **AND** sets operation mode and target temperature via HA services
+
+#### Scenario: Configure price sensor entity
+- **WHEN** the user sets `price_sensor_entity_id` to `sensor.ep_price_import`
+- **THEN** the system reads price curves from that sensor's attributes
+- **AND** uses the `price_curve` and `price_level` attributes for scheduling decisions
+
+#### Scenario: Configure auxiliary entities
+- **WHEN** the user configures `away_mode_entity_id`, `bath_mode_entity_id`, and `status_text_entity_id`
+- **THEN** the system uses those entities for away mode detection, bath mode control, and status display
+
+### Requirement: User-Configurable Temperature Settings
+The system SHALL allow users to configure all temperature thresholds via the add-on configuration UI.
+
+#### Scenario: Custom night program temperature
+- **WHEN** the user sets `temp_night_program` to 54
+- **AND** night prices are cheaper than day prices
+- **THEN** the system uses 54°C as the night program target (instead of default 56°C)
+
+#### Scenario: Custom idle temperature
+- **WHEN** the user sets `temp_idle` to 40
+- **THEN** the system uses 40°C as the idle/standby temperature (instead of default 35°C)
+
+#### Scenario: Custom bath threshold
+- **WHEN** the user sets `temp_bath_threshold` to 55
+- **AND** bath mode is enabled
+- **AND** current water temperature exceeds 55°C
+- **THEN** the system auto-disables bath mode
+
+### Requirement: User-Configurable Schedule Settings
+The system SHALL allow users to configure scheduling parameters via the add-on configuration UI.
+
+#### Scenario: Custom night window
+- **WHEN** the user sets `night_window_start` to "23:00" and `night_window_end` to "07:00"
+- **THEN** the system uses 23:00-07:00 as the night price window (instead of default 00:00-06:00)
+
+#### Scenario: Custom legionella day
+- **WHEN** the user sets `legionella_day_of_week` to "Sunday"
+- **THEN** the system runs legionella protection on Sundays (instead of default Saturday)
+
+#### Scenario: Custom evaluation interval
+- **WHEN** the user sets `schedule_interval_minutes` to 10
+- **THEN** the system evaluates the schedule every 10 minutes (instead of default 5)
+
 ### Requirement: Price-Based Night Program Scheduling
-The system SHALL schedule water heating during the lowest-priced 15-minute interval within the night window (default 00:00-06:00).
+The system SHALL schedule water heating during the lowest-priced 15-minute interval within the configured night window.
 
 #### Scenario: Night program with cheaper night prices
-- **WHEN** the current time is before 06:00
-- **AND** the lowest night price (22.54 cents/kWh) is lower than the lowest day price (28.12 cents/kWh)
+- **WHEN** the current time is within the night window
+- **AND** the lowest night price is lower than the lowest day price
 - **THEN** the system schedules heating at the night price window
-- **AND** sets target temperature to 56°C
+- **AND** sets target temperature to configured `temp_night_program` (default 56°C)
 - **AND** updates status to "Night program planned at: HH:MM"
 
 #### Scenario: Night program with expensive night prices
-- **WHEN** the current time is before 06:00
+- **WHEN** the current time is within the night window
 - **AND** the lowest night price is higher than the lowest day price
 - **THEN** the system schedules heating at the night price window
-- **AND** sets target temperature to 52°C (reduced)
+- **AND** sets target temperature to configured `temp_night_program_low` (default 52°C)
 
 ### Requirement: Price-Based Day Program Scheduling
-The system SHALL schedule water heating during the lowest-priced interval in the day window (06:00-24:00) when not in night mode or legionella mode.
+The system SHALL schedule water heating during the lowest-priced interval in the day window when not in night mode or legionella mode.
 
 #### Scenario: Day program with very low price
-- **WHEN** the current time is 06:00 or later
+- **WHEN** the current time is outside the night window
 - **AND** the price level is "None" (below P20 percentile)
-- **THEN** the system sets target temperature to 70°C (maximum heating)
+- **THEN** the system sets target temperature to configured `temp_day_program_max` (default 70°C)
 
 #### Scenario: Day program with normal price
-- **WHEN** the current time is 06:00 or later
+- **WHEN** the current time is outside the night window
 - **AND** the price level is "Low", "Medium", or "High"
-- **THEN** the system sets target temperature to 58°C
+- **THEN** the system sets target temperature to configured `temp_day_program` (default 58°C)
 
 #### Scenario: Day program deferred due to cheaper tomorrow
-- **WHEN** the current price level is above Medium
+- **WHEN** `next_day_price_check` is enabled (default true)
+- **AND** the current price level is above Medium
 - **AND** tomorrow's night price is lower than current price
 - **THEN** the system defers heating to tomorrow
-- **AND** sets target temperature to idle (35°C)
+- **AND** sets target temperature to configured `temp_idle` (default 35°C)
 
 ### Requirement: Legionella Protection Cycle
-The system SHALL run a high-temperature cycle on the configured day of week (default Saturday) to prevent legionella bacteria growth.
+The system SHALL run a high-temperature cycle on the configured day of week to prevent legionella bacteria growth.
 
-#### Scenario: Legionella cycle on Saturday
-- **WHEN** the current day is Saturday (or configured legionella day)
-- **AND** the current time is 06:00 or later
-- **THEN** the system schedules a 3-hour heating cycle
-- **AND** sets target temperature to 62-70°C based on price level
+#### Scenario: Legionella cycle on configured day
+- **WHEN** the current day matches configured `legionella_day_of_week` (default Saturday)
+- **AND** the current time is outside the night window
+- **THEN** the system schedules a heating cycle for configured `legionella_duration_hours` (default 3)
+- **AND** sets target temperature to configured `temp_legionella` or `temp_legionella_max` based on price level
 
 #### Scenario: Legionella start time optimization
 - **WHEN** scheduling a legionella cycle
@@ -58,25 +110,25 @@ The system SHALL run a high-temperature cycle on the configured day of week (def
 ### Requirement: Away Mode Temperature Reduction
 The system SHALL use reduced temperatures when away mode is active, while maintaining legionella protection.
 
-#### Scenario: Away mode with legionella protection
-- **WHEN** away mode switch is "on"
-- **AND** it is legionella day (Saturday)
-- **AND** current price is below 0.20 EUR/kWh
-- **THEN** the system sets target temperature to 66°C
-
-#### Scenario: Away mode with legionella protection (expensive)
-- **WHEN** away mode switch is "on"
+#### Scenario: Away mode with legionella protection (cheap price)
+- **WHEN** configured away mode entity is "on"
 - **AND** it is legionella day
-- **AND** current price is 0.20 EUR/kWh or higher
-- **THEN** the system sets target temperature to 60°C
+- **AND** current price is below configured `cheap_price_threshold` (default 0.20 EUR/kWh)
+- **THEN** the system sets target temperature to configured `temp_away_legionella_cheap` (default 66°C)
+
+#### Scenario: Away mode with legionella protection (expensive price)
+- **WHEN** configured away mode entity is "on"
+- **AND** it is legionella day
+- **AND** current price is at or above configured `cheap_price_threshold`
+- **THEN** the system sets target temperature to configured `temp_away_legionella` (default 60°C)
 
 ### Requirement: Bath Mode Auto-Disable
-The system SHALL automatically disable bath mode when water temperature exceeds the bath threshold.
+The system SHALL automatically disable bath mode when water temperature exceeds the configured bath threshold.
 
 #### Scenario: Bath mode auto-disable at threshold
-- **WHEN** bath mode input_boolean is "on"
-- **AND** current water temperature exceeds 50°C (configurable)
-- **THEN** the system turns off bath mode input_boolean
+- **WHEN** configured bath mode entity is "on"
+- **AND** current water temperature exceeds configured `temp_bath_threshold` (default 50°C)
+- **THEN** the system turns off the bath mode entity
 - **AND** logs the auto-disable action
 
 ### Requirement: Wait Cycle Transition Smoothing
@@ -84,14 +136,14 @@ The system SHALL use wait cycles to prevent rapid toggling between heating progr
 
 #### Scenario: Wait cycle countdown
 - **WHEN** a heating program ends
-- **AND** target temperature is above idle (35°C)
-- **THEN** the system sets wait_cycles to 10 (configurable)
-- **AND** decrements wait_cycles each 5-minute evaluation
+- **AND** target temperature is above configured `temp_idle`
+- **THEN** the system sets wait_cycles to configured `wait_cycles_limit` (default 10)
+- **AND** decrements wait_cycles each evaluation interval
 - **AND** only transitions to idle when wait_cycles reaches 0
 
 #### Scenario: Wait cycle reset on new program
 - **WHEN** a new heating program starts during wait cycle countdown
-- **THEN** the system resets wait_cycles to 10
+- **THEN** the system resets wait_cycles to configured `wait_cycles_limit`
 - **AND** applies the new program's target temperature
 
 ### Requirement: Status Entity Updates
