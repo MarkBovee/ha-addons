@@ -23,6 +23,13 @@
       "description": "Control SAJ Electric inverter battery charge/discharge schedules",
       "version": "0.1.0",
       "url": "https://github.com/MarkBovee/ha-addons/tree/main/battery-api"
+    },
+    {
+      "name": "Water Heater Scheduler",
+      "slug": "water-heater-scheduler",
+      "description": "Schedule domestic hot water heating based on electricity prices",
+      "version": "1.0.0",
+      "url": "https://github.com/MarkBovee/ha-addons/tree/main/water-heater-scheduler"
     }
   ]
 }

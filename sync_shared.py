@@ -25,6 +25,7 @@ ADDONS = [
     'battery-api',
     'charge-amps-monitor',
     'energy-prices',
+    'water-heater-scheduler',
 ]
 
 

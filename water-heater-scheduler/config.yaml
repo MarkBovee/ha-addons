@@ -1,0 +1,90 @@
+name: Water Heater Scheduler
+description: Schedule domestic hot water heating based on electricity prices - optimizes for cost while maintaining comfort and legionella protection
+version: "1.0.0"
+slug: water_heater_scheduler
+init: false
+homeassistant_api: true
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+# Options schema for UI-managed settings
+options:
+  # Entity Selection (required)
+  water_heater_entity_id: ""
+  
+  # Entity Selection (optional - auto-detected if energy-prices installed)
+  price_sensor_entity_id: "sensor.ep_price_import"
+  
+  # Entity Selection (optional - features disabled if not set)
+  away_mode_entity_id: ""
+  bath_mode_entity_id: ""
+  
+  # Schedule Settings
+  evaluation_interval_minutes: 5
+  night_window_start: "00:00"
+  night_window_end: "06:00"
+  heating_duration_hours: 1
+  legionella_day: "Saturday"
+  legionella_duration_hours: 3
+  bath_auto_off_temp: 50
+  
+  # Temperature Preset (eco/comfort/performance/custom)
+  temperature_preset: "comfort"
+  
+  # Custom Temperature Overrides (only used when preset=custom)
+  night_preheat_temp: 56
+  night_minimal_temp: 52
+  day_preheat_temp: 58
+  day_minimal_temp: 35
+  legionella_temp: 62
+  
+  # Advanced Settings
+  min_cycle_gap_minutes: 50
+  log_level: "info"
+  
+  # MQTT settings for Home Assistant Mosquitto broker
+  mqtt_host: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
+
+# Schema defines the data types for validation
+schema:
+  # Entity Selection
+  water_heater_entity_id: str
+  price_sensor_entity_id: str?
+  away_mode_entity_id: str?
+  bath_mode_entity_id: str?
+  
+  # Schedule Settings
+  evaluation_interval_minutes: int(1,60)
+  night_window_start: str
+  night_window_end: str
+  heating_duration_hours: int(1,4)
+  legionella_day: list(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)
+  legionella_duration_hours: int(1,6)
+  bath_auto_off_temp: int(40,60)
+  
+  # Temperature Preset
+  temperature_preset: list(eco|comfort|performance|custom)
+  
+  # Custom Temperature Overrides
+  night_preheat_temp: int(45,65)?
+  night_minimal_temp: int(40,60)?
+  day_preheat_temp: int(50,70)?
+  day_minimal_temp: int(30,50)?
+  legionella_temp: int(60,70)?
+  
+  # Advanced Settings
+  min_cycle_gap_minutes: int(10,180)?
+  log_level: list(debug|info|warning|error)?
+  
+  # MQTT settings (optional)
+  mqtt_host: str?
+  mqtt_port: int?
+  mqtt_user: str?
+  mqtt_password: str?

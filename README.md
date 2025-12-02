@@ -20,6 +20,7 @@ ha-addons/
 │   └── mqtt_setup.py         # MQTT Discovery client setup
 ├── charge-amps-monitor/      # Charge Amps EV Charger Monitor addon
 ├── energy-prices/            # Nord Pool-based Energy Prices addon
+├── water-heater-scheduler/   # Price-based water heater scheduling
 └── [future-addons]/          # Additional addons will be added here
 ```
 
@@ -78,6 +79,29 @@ Fetch Nord Pool day-ahead electricity prices and calculate final import/export c
 5. Click **Start**
 
 For detailed documentation, see [energy-prices/README.md](energy-prices/README.md)
+
+### Water Heater Scheduler
+
+Schedule domestic hot water heating based on electricity prices to optimize costs while maintaining comfort and safety.
+
+**Features:**
+- Price-based scheduling using Energy Prices add-on data
+- Temperature presets (eco, comfort, performance, custom)
+- Night/Day programs with smart price comparison
+- Weekly legionella protection cycle
+- Away mode support for minimal heating when absent
+- Bath mode with auto-disable when target reached
+- Cycle gap protection to prevent rapid toggling
+
+**Installation:**
+1. Add this repository (see above)
+2. Install **Energy Prices** add-on first (required for price data)
+3. Find **Water Heater Scheduler** in the Add-on Store
+4. Click **Install**
+5. Configure your water heater entity and preferences
+6. Click **Start**
+
+For detailed documentation, see [water-heater-scheduler/README.md](water-heater-scheduler/README.md)
 
 ## Development
 

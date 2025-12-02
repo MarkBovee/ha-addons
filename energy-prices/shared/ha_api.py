@@ -152,6 +152,62 @@ class HomeAssistantApi:
                 deleted_count += 1
         return deleted_count
     
+    def get_entity_state(self, entity_id: str) -> Optional[Dict]:
+        """Get current state of an entity.
+        
+        Args:
+            entity_id: Entity ID to query
+            
+        Returns:
+            State dict with 'state' and 'attributes' keys, or None if not found
+        """
+        try:
+            url = f"{self.base_url}/states/{entity_id}"
+            response = requests.get(url, headers=self._headers, timeout=10)
+            
+            if response.ok:
+                return response.json()
+            elif response.status_code == 404:
+                logger.debug("Entity %s not found", entity_id)
+                return None
+            else:
+                logger.warning(
+                    "Failed to get state for %s: %d - %s",
+                    entity_id, response.status_code, response.text[:100]
+                )
+                return None
+        except Exception as e:
+            logger.error("Exception getting state for %s: %s", entity_id, e)
+            return None
+    
+    def call_service(self, domain: str, service: str, data: Dict) -> bool:
+        """Call a Home Assistant service.
+        
+        Args:
+            domain: Service domain (e.g., 'water_heater', 'switch')
+            service: Service name (e.g., 'set_temperature', 'turn_off')
+            data: Service data dictionary
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            url = f"{self.base_url}/services/{domain}/{service}"
+            response = requests.post(url, json=data, headers=self._headers, timeout=10)
+            
+            if response.ok:
+                logger.debug("Called %s.%s with %s", domain, service, data)
+                return True
+            else:
+                logger.error(
+                    "Failed to call %s.%s: %d - %s",
+                    domain, service, response.status_code, response.text[:200]
+                )
+                return False
+        except Exception as e:
+            logger.error("Exception calling %s.%s: %s", domain, service, e)
+            return False
+    
     def test_connection(self) -> bool:
         """Test API connection by fetching states endpoint.
         
