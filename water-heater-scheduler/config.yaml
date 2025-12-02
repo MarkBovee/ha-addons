@@ -1,6 +1,6 @@
 name: Water Heater Scheduler
 description: Schedule domestic hot water heating based on electricity prices - optimizes for cost while maintaining comfort and legionella protection
-version: "1.0.0"
+version: "1.1.0"
 slug: water_heater_scheduler
 init: false
 homeassistant_api: true
@@ -45,6 +45,7 @@ options:
   # Advanced Settings
   min_cycle_gap_minutes: 50
   log_level: "info"
+  dynamic_window_mode: false
   
   # MQTT settings for Home Assistant Mosquitto broker
   mqtt_host: "core-mosquitto"
@@ -82,6 +83,7 @@ schema:
   # Advanced Settings
   min_cycle_gap_minutes: int(10,180)?
   log_level: list(debug|info|warning|error)?
+  dynamic_window_mode: bool?
   
   # MQTT settings (optional)
   mqtt_host: str?

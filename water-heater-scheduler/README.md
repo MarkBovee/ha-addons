@@ -7,6 +7,7 @@ Schedule domestic hot water heating based on electricity prices. This add-on opt
 - **Price-based scheduling**: Heat water during cheapest electricity periods
 - **Temperature presets**: Choose from eco, comfort, performance, or custom profiles
 - **Night/Day programs**: Automatically selects optimal heating times
+- **Dynamic window mode**: Optional automatic selection of day vs night based on prices
 - **Legionella protection**: Weekly high-temperature sanitization cycle
 - **Away mode**: Minimal heating while you're away
 - **Bath mode**: Boost heating before baths with auto-disable
@@ -90,7 +91,18 @@ legionella_temp: 65
 ```yaml
 min_cycle_gap_minutes: 50  # Minimum time between heating cycles (10-180)
 log_level: "info"          # debug/info/warning/error
+dynamic_window_mode: false # When true, pick the cheapest day or night window automatically
 ```
+
+### Dynamic Window Mode
+
+When `dynamic_window_mode: true`, the scheduler no longer relies on the current time of day to decide between the night or day program. Instead, it compares the full price curve every cycle and:
+
+1. Picks the cheaper window (night or day) for the next heating run
+2. Plans the run for the cheapest slot inside that window
+3. Updates `sensor.wh_status` with the selected window and lowest price
+
+This keeps the add-on independent from the Price Helper while still adjusting automatically between “winter nights” and “summer days.” The option defaults to `false` to preserve legacy behavior.
 
 ## How It Works
 
@@ -131,7 +143,7 @@ To prevent the water heater from toggling rapidly:
 |--------|-------------|
 | `sensor.wh_program` | Current program (Night/Day/Legionella/Bath/Away/Idle) |
 | `sensor.wh_target_temp` | Current target temperature in °C |
-| `sensor.wh_status` | Human-readable status message |
+| `sensor.wh_status` | Human-readable status message (planned window, target, reason) |
 
 ## Local Testing
 

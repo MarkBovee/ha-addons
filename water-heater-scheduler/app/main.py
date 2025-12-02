@@ -40,6 +40,7 @@ WH_CONFIG_DEFAULTS = {
     'temperature_preset': 'comfort',
     'min_cycle_gap_minutes': 50,
     'log_level': 'info',
+    'dynamic_window_mode': False,
 }
 
 WH_REQUIRED_FIELDS = ['water_heater_entity_id']
@@ -82,6 +83,7 @@ def load_config() -> ScheduleConfig:
     logger.info("  Preset: %s", config.temperature_preset)
     logger.info("  Legionella: %s, %dh duration", config.legionella_day, config.legionella_duration_hours)
     logger.info("  Cycle gap: %d minutes", config.min_cycle_gap_minutes)
+    logger.info("  Dynamic window mode: %s", "enabled" if config.dynamic_window_mode else "disabled")
     
     if config.away_mode_entity_id:
         logger.info("  Away mode entity: %s", config.away_mode_entity_id)
@@ -108,7 +110,13 @@ def load_config() -> ScheduleConfig:
     return config
 
 
-def create_sensors(ha_api: HomeAssistantApi, program: ProgramType, target_temp: int, status_msg: str):
+def create_sensors(
+    ha_api: HomeAssistantApi,
+    program: ProgramType,
+    target_temp: int,
+    status_msg: str,
+    status_icon: str = "mdi:information-outline"
+):
     """Create/update water heater status sensors.
     
     Args:
@@ -147,7 +155,7 @@ def create_sensors(ha_api: HomeAssistantApi, program: ProgramType, target_temp: 
         state=status_msg,
         attributes={
             "friendly_name": "Water Heater Status",
-            "icon": "mdi:information-outline",
+            "icon": status_icon,
         },
         log_success=False
     )
@@ -208,12 +216,14 @@ def run_evaluation_cycle(
     
     # 5. Create scheduler and select program
     scheduler = Scheduler(config, price_analyzer, state)
-    program, target_temp, status_msg = scheduler.select_program(
+    decision = scheduler.select_program(
         away_mode_on=away_mode_on,
         bath_mode_on=bath_mode_on,
         current_water_temp=current_temp,
         now=now
     )
+    program = decision.program
+    target_temp = decision.target_temp
     
     # 6. Get program window for scheduling
     window = scheduler.get_program_window(program, now)
@@ -249,7 +259,6 @@ def run_evaluation_cycle(
             if current_target != idle_temp:
                 heater_controller.apply_program(idle_temp)
                 
-            status_msg = f"Next: {program.value} at {start_time.strftime('%H:%M')}"
     else:
         # No specific window (Bath/Away/NegativePrice/Idle) - apply immediately
         if target_temp != current_target:
@@ -261,8 +270,16 @@ def run_evaluation_cycle(
             if program not in (ProgramType.IDLE,):
                 logger.info("Applied %s: %d°C", program.value, target_temp)
     
+    status_msg = scheduler.build_status_message(decision, window, now)
+    if program == ProgramType.DAY:
+        status_icon = "mdi:weather-sunny"
+    elif program == ProgramType.NIGHT:
+        status_icon = "mdi:snowflake"
+    else:
+        status_icon = "mdi:information-outline"
+    
     # 7. Update sensors
-    create_sensors(ha_api, program, target_temp, status_msg)
+    create_sensors(ha_api, program, target_temp, status_msg, status_icon)
     
     # Log cycle summary
     if first_run:
