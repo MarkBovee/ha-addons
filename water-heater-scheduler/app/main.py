@@ -173,7 +173,8 @@ def run_evaluation_cycle(
         entity_reader: Entity state reader
         first_run: If True, log more details
     """
-    now = datetime.now()
+    # Align evaluation timestamp with price analyzer timezone to avoid naive vs aware comparisons
+    now = datetime.now(price_analyzer.timezone)
     
     # 1. Update price data
     price_state = entity_reader.get_sensor_state(config.price_sensor_entity_id)

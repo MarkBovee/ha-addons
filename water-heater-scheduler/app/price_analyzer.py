@@ -40,17 +40,33 @@ class PriceAnalyzer:
             
             # Get price curve from attributes
             attributes = sensor_state.get("attributes", {})
-            price_curve_raw = attributes.get("price_curve", {})
+            price_curve_raw = attributes.get("price_curve")
             
             if not price_curve_raw:
                 logger.warning("No price_curve in sensor attributes")
                 return False
-            
-            # Parse price curve into datetime keys
+
+            # Parse price curve into datetime keys (support dict or list structures)
             self._price_curve = {}
-            for time_str, price in price_curve_raw.items():
+            if isinstance(price_curve_raw, dict):
+                source_iterable = price_curve_raw.items()
+            else:
+                # Expect list of entries with `start` and `price`
+                source_iterable = []
+                for entry in price_curve_raw:
+                    if not isinstance(entry, dict):
+                        logger.debug("Skipping price entry with unexpected type: %s", type(entry))
+                        continue
+                    start = entry.get("start") or entry.get("time")
+                    price = entry.get("price")
+                    if start is None or price is None:
+                        logger.debug("Skipping price entry missing start/price: %s", entry)
+                        continue
+                    source_iterable.append((start, price))
+            
+            for time_str, price in source_iterable:
                 try:
-                    dt = datetime.fromisoformat(time_str)
+                    dt = datetime.fromisoformat(str(time_str))
                     self._price_curve[dt] = float(price)
                 except (ValueError, TypeError) as e:
                     logger.debug("Failed to parse price entry %s: %s", time_str, e)
