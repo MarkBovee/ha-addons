@@ -3,45 +3,90 @@
 ## User Settings (config.yaml)
 
 ### Entity Selection
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `price_sensor_entity_id` | select | `sensor.ep_price_import` | Energy price sensor with price_curve attribute |
-| `water_heater_entity_id` | select | – (required) | Target water_heater entity to control |
-| `away_mode_entity_id` | select | `switch.our_home_away_mode` | Away mode source switch/input_boolean |
-| `bath_mode_entity_id` | select | `input_boolean.bath` | Bath override toggle |
-| `status_text_entity_id` | string | `input_text.heating_schedule_status` | Status output text entity |
+
+| Key | Type | Default | Required | Description |
+|-----|------|---------|----------|-------------|
+| `water_heater_entity_id` | string | – | **Yes** | Target water_heater entity to control |
+| `price_sensor_entity_id` | string | `sensor.ep_price_import` | No | Auto-detected if energy-prices add-on installed |
+| `away_mode_entity_id` | string | – | No | Optional: away mode switch/input_boolean |
+| `bath_mode_entity_id` | string | – | No | Optional: bath mode input_boolean |
+
+**Smart Entity Detection:**
+- Price sensor: Auto-detects `sensor.ep_price_import` if energy-prices add-on is present
+- Water heater: Suggests entities matching `water_heater.*hot_water*` or `water_heater.*domestic*`
+- If optional entities not configured, those features are simply disabled
 
 ### Schedule Settings
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `schedule_interval_minutes` | integer | `5` | Frequency of re-evaluation (1-60) |
-| `night_window_start` | string | `00:00` | Night window start time (HH:MM) |
-| `night_window_end` | string | `06:00` | Night window end time (HH:MM) |
-| `legionella_day_of_week` | select | `Saturday` | Day to run legionella protection |
-| `legionella_duration_hours` | integer | `3` | Length of legionella boost (1-6) |
+| `evaluation_interval_minutes` | integer | `5` | How often to re-evaluate (1-60) |
+| `night_window_start` | string | `00:00` | Night program start time (HH:MM) |
+| `night_window_end` | string | `06:00` | Night program end time (HH:MM) |
 | `heating_duration_hours` | integer | `1` | Standard program duration (1-4) |
-| `next_day_price_check` | boolean | `true` | Compare tomorrow's price before day program |
+| `legionella_day` | select | `Saturday` | Day for weekly legionella cycle |
+| `legionella_duration_hours` | integer | `3` | Legionella program duration (1-6) |
+| `bath_auto_off_temp` | integer | `50` | Auto-disable bath mode above this °C |
 
-### Temperature Settings
+### Temperature Presets
+
+| Key | Type | Default | Options | Description |
+|-----|------|---------|---------|-------------|
+| `temperature_preset` | select | `comfort` | eco, comfort, performance, custom | Temperature profile |
+
+**Preset Values:**
+
+| Setting | Eco | Comfort (Legacy) | Performance |
+|---------|-----|------------------|-------------|
+| `night_preheat` | 52°C | 56°C | 60°C |
+| `night_minimal` | 48°C | 52°C | 56°C |
+| `day_preheat` | 55°C | 58°C | 60°C |
+| `day_minimal` | 35°C | 35°C | 45°C |
+| `legionella` | 60°C | 62°C | 66°C |
+
+**Fixed Temperatures (all presets):**
+| Condition | Temperature | Rationale |
+|-----------|-------------|-----------|
+| Negative/zero price | 70°C | Free energy - maximize heating |
+| Bath mode active | 58°C | Comfortable bath temperature |
+| Away mode | 35°C | Safe minimum while absent |
+| Idle (between programs) | 35°C | Standby temperature |
+
+### Custom Temperature Overrides
+
+Only used when `temperature_preset: custom`:
+
 | Key | Type | Default | Range | Description |
 |-----|------|---------|-------|-------------|
-| `temp_idle` | integer | `35` | 30-45 | Idle/standby temperature |
-| `temp_night_program` | integer | `56` | 45-65 | Target for night charge |
-| `temp_night_program_low` | integer | `52` | 45-60 | Night target when night > day price |
-| `temp_day_program` | integer | `58` | 50-70 | Target for daytime heating |
-| `temp_day_program_max` | integer | `70` | 60-75 | Max temp for very low prices |
-| `temp_legionella` | integer | `62` | 60-70 | Legionella cycle target |
-| `temp_legionella_max` | integer | `70` | 65-75 | Legionella at very low prices |
-| `temp_away_legionella` | integer | `60` | 55-66 | Away-mode legionella (expensive) |
-| `temp_away_legionella_cheap` | integer | `66` | 60-70 | Away-mode legionella (cheap price) |
-| `temp_bath_threshold` | integer | `50` | 45-60 | Auto-disable bath above this temp |
+| `night_preheat_temp` | integer | 56 | 45-65 | Night cheaper than day → heat more |
+| `night_minimal_temp` | integer | 52 | 40-60 | Day cheaper → heat less at night |
+| `day_preheat_temp` | integer | 58 | 50-70 | Today cheaper than tomorrow → heat more |
+| `day_minimal_temp` | integer | 35 | 30-50 | Tomorrow cheaper → minimal heating |
+| `legionella_temp` | integer | 62 | 60-70 | Weekly anti-bacterial target |
 
 ### Advanced Settings
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `wait_cycles_limit` | integer | `10` | Cycles before forcing idle (5-20) |
-| `cheap_price_threshold` | float | `0.20` | EUR/kWh threshold for "cheap" classification |
+| `min_cycle_gap_minutes` | integer | `50` | Minimum time between heating cycles (prevents rapid toggling) |
 | `log_level` | select | `info` | Logging verbosity (debug/info/warning/error) |
+
+**Cycle Gap Explained:**
+The add-on tracks when the last heating cycle ended. A new program won't start until `min_cycle_gap_minutes` has passed. This prevents the heater from toggling on/off rapidly when prices fluctuate near thresholds.
+- Default 50 minutes = ~10 evaluation cycles at 5-minute intervals (matches legacy `wait_cycles=10`)
+- Set higher (90-120 min) for more stability, lower (30 min) for more responsiveness
+
+### Configuration Validation
+
+The add-on validates settings on startup and logs warnings:
+
+| Check | Warning Message |
+|-------|-----------------|
+| `legionella_temp < 60` | "Legionella temp below 60°C may not be effective for sanitization" |
+| `night_preheat < night_minimal` | "night_preheat should be higher than night_minimal" |
+| `day_preheat < day_minimal` | "day_preheat should be higher than day_minimal" |
+| Price sensor unavailable | "Price sensor not found - will retry each cycle" |
+| Water heater unavailable | "Water heater entity not found - cannot start" |
 
 ## Architecture Overview
 
@@ -50,20 +95,21 @@
 │                    water-heater-scheduler                    │
 ├─────────────────────────────────────────────────────────────┤
 │  main.py (orchestration)                                    │
-│    ├── 5-minute evaluation loop                             │
+│    ├── Evaluation loop (configurable interval)              │
 │    ├── Signal handlers (graceful shutdown)                  │
-│    └── Entity creation/updates                              │
+│    └── Sensor creation/updates                              │
 ├─────────────────────────────────────────────────────────────┤
 │  scheduler.py (program selection)                           │
-│    ├── Determine program type (Night/Day/Legionella/Away)   │
-│    ├── Calculate start/end times                            │
-│    └── Apply temperature rules                              │
+│    ├── Select program (Night/Day/Legionella/Bath/Away)      │
+│    ├── Calculate target temperature from preset             │
+│    ├── Apply cycle gap protection                           │
+│    └── Track last cycle end time                            │
 ├─────────────────────────────────────────────────────────────┤
-│  price_analyzer.py (price window detection)                 │
-│    ├── Parse price_curve from energy-prices sensor          │
-│    ├── Find lowest night price (00:00-06:00)                │
-│    ├── Find lowest day price (06:00-24:00)                  │
-│    └── Compare tomorrow vs today prices                     │
+│  price_analyzer.py (price intelligence)                     │
+│    ├── Parse price_curve from price sensor                  │
+│    ├── Find lowest price in night/day windows               │
+│    ├── Compare today vs tomorrow prices                     │
+│    └── Detect negative/zero prices                          │
 ├─────────────────────────────────────────────────────────────┤
 │  water_heater_controller.py (HA entity control)             │
 │    ├── Set operation mode (Manual)                          │
@@ -71,56 +117,51 @@
 │    └── Read current temperature                             │
 ├─────────────────────────────────────────────────────────────┤
 │  models.py (data structures)                                │
-│    ├── ScheduleConfig (user settings)                       │
+│    ├── ScheduleConfig (user settings + presets)             │
 │    ├── ProgramType enum                                     │
-│    ├── HeaterState (persistence)                            │
-│    └── PriceWindow (start, end, price)                      │
+│    ├── TemperaturePreset dataclass                          │
+│    └── HeaterState (persistence)                            │
 └─────────────────────────────────────────────────────────────┘
             │                           │
             ▼                           ▼
 ┌───────────────────────┐   ┌───────────────────────────────┐
 │  energy-prices addon  │   │  Home Assistant Supervisor    │
-│  sensor.ep_price_*    │   │  water_heater.*, input_*.*   │
-│  (price_curve attr)   │   │  REST API /api/states/       │
+│  sensor.ep_price_*    │   │  water_heater.*, switch.*     │
+│  (auto-detected)      │   │  REST API /api/states/        │
 └───────────────────────┘   └───────────────────────────────┘
 ```
 
-## Program Selection Logic
+## Programs
 
-Ported from `WaterHeater.cs`, the scheduling follows this decision tree:
+| Program | When Active | Purpose |
+|---------|-------------|---------|
+| **Night** | 00:00 - 06:00 (configurable) | Heat during off-peak hours |
+| **Day** | 06:00 - 24:00 | Maintain comfort during daytime |
+| **Legionella** | Weekly on configured day | Anti-bacterial high-temp cycle (60°C+) |
+| **Bath** | When bath_mode entity is on | Boost to 58°C before bath (optional) |
+| **Away** | When away_mode entity is on | Minimal 35°C while absent (optional) |
+| **Idle** | Between programs | Maintain 35°C standby |
+
+## Decision Logic
 
 ```
-1. Check time of day
-   ├── Hour < 6 → Night Program
-   └── Hour >= 6
-       ├── Saturday (configurable) → Legionella Program
-       └── Otherwise → Day Program
+1. IF price ≤ 0 → 70°C (free energy - maximize!)
+2. IF away_mode_entity is "on" → 35°C (Away)
+3. IF bath_mode_entity is "on" AND current_temp < 58°C → 58°C (Bath)
+   - Auto-disable bath_mode when temp reaches bath_auto_off_temp
+4. IF legionella_day AND within program window → preset.legionella
+5. IF night_window (00:00-06:00):
+   - IF night_price < day_price → preset.night_preheat
+   - ELSE → preset.night_minimal
+6. IF day_window (06:00-24:00):
+   - IF today_price < tomorrow_price → preset.day_preheat
+   - ELSE → preset.day_minimal
+7. ELSE → 35°C (Idle)
 
-2. Apply away mode override
-   └── If switch.our_home_away_mode == "on" → Away temperatures
-
-3. Apply bath mode check
-   └── If input_boolean.bath == "on" AND current_temp > 50°C
-       → Turn off bath mode automatically
+Cycle Gap Protection:
+- Before starting any program, check if min_cycle_gap_minutes has passed
+- If not, remain at current temperature until gap satisfied
 ```
-
-## Temperature Decision Matrix
-
-All temperatures are configurable via settings. Defaults shown:
-
-| Program | Condition | Config Key | Default |
-|---------|-----------|------------|---------|
-| Night | night_price < day_price | `temp_night_program` | 56°C |
-| Night | night_price >= day_price | `temp_night_program_low` | 52°C |
-| Day | price_level == None | `temp_day_program_max` | 70°C |
-| Day | price_level == Low/Medium/High | `temp_day_program` | 58°C |
-| Day | tomorrow cheaper & price > Medium | `temp_idle` | 35°C |
-| Legionella | price_level == None | `temp_legionella_max` | 70°C |
-| Legionella | otherwise | `temp_legionella` | 62°C |
-| Away + Legionella | price < `cheap_price_threshold` | `temp_away_legionella_cheap` | 66°C |
-| Away + Legionella | price >= `cheap_price_threshold` | `temp_away_legionella` | 60°C |
-| Idle | always | `temp_idle` | 35°C |
-| Bath auto-off | current_temp > threshold | `temp_bath_threshold` | 50°C |
 
 ## Price Data Contract
 
@@ -155,34 +196,23 @@ Store in `/data/state.json` to survive container restarts:
 
 ```json
 {
-  "heater_on": true,
+  "current_program": "Night",
   "target_temperature": 56,
-  "wait_cycles": 7,
-  "last_program": "Night",
+  "last_cycle_end": "2025-12-02T03:30:00Z",
   "last_update": "2025-12-02T02:30:00Z"
 }
 ```
 
-## Wait Cycle Mechanism
+## Output Sensors
 
-To prevent rapid toggling between heating and idle:
-
-1. When program ends, set `wait_cycles = 10` (configurable)
-2. Each 5-minute cycle decrements `wait_cycles`
-3. Only transition to idle when `wait_cycles == 0`
-4. If new program starts, reset `wait_cycles`
-
-## Entity Naming Convention
-
-All entities use `wh_` prefix for water-heater-scheduler:
+The add-on creates these sensors (no external input helpers required):
 
 | Entity ID | Type | Description |
 |-----------|------|-------------|
-| `sensor.wh_program_type` | sensor | Current program (Night/Day/Legionella/Away/Idle) |
+| `sensor.wh_program` | sensor | Current program (Night/Day/Legionella/Bath/Away/Idle) |
 | `sensor.wh_target_temp` | sensor | Current target temperature in °C |
-| `sensor.wh_next_start` | sensor | Next program start time (ISO timestamp) |
-| `sensor.wh_next_end` | sensor | Next program end time (ISO timestamp) |
-| `input_text.heating_schedule_status` | input_text | Human-readable status (legacy compatible) |
+| `sensor.wh_next_program` | sensor | Next scheduled program start time |
+| `sensor.wh_status` | sensor | Human-readable status message |
 
 ## Error Handling Strategy
 

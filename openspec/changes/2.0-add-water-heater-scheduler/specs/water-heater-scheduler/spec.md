@@ -5,185 +5,182 @@ Schedule domestic hot water heating based on electricity price curves, optimizin
 
 ## ADDED Requirements
 
-### Requirement: User-Configurable Entity Selection
-The system SHALL allow users to select target entities via the add-on configuration UI.
+### Requirement: Smart Entity Detection
+The system SHALL auto-detect compatible entities and allow manual configuration.
 
-#### Scenario: Configure water heater entity
-- **WHEN** the user sets `water_heater_entity_id` to `water_heater.my_heat_pump`
-- **THEN** the system controls that specific water heater entity
-- **AND** reads current temperature from its attributes
-- **AND** sets operation mode and target temperature via HA services
+#### Scenario: Auto-detect price sensor
+- **WHEN** `price_sensor_entity_id` is not configured
+- **AND** `sensor.ep_price_import` exists (energy-prices add-on installed)
+- **THEN** the system automatically uses `sensor.ep_price_import`
+- **AND** logs "Auto-detected price sensor: sensor.ep_price_import"
 
-#### Scenario: Configure price sensor entity
-- **WHEN** the user sets `price_sensor_entity_id` to `sensor.ep_price_import`
-- **THEN** the system reads price curves from that sensor's attributes
-- **AND** uses the `price_curve` and `price_level` attributes for scheduling decisions
+#### Scenario: Required water heater entity
+- **WHEN** `water_heater_entity_id` is not configured
+- **THEN** the system logs an error and exits
+- **AND** displays "water_heater_entity_id is required"
 
-#### Scenario: Configure auxiliary entities
-- **WHEN** the user configures `away_mode_entity_id`, `bath_mode_entity_id`, and `status_text_entity_id`
-- **THEN** the system uses those entities for away mode detection, bath mode control, and status display
+#### Scenario: Optional away/bath mode entities
+- **WHEN** `away_mode_entity_id` or `bath_mode_entity_id` is not configured
+- **THEN** the system disables that feature (no error)
+- **AND** logs "Away mode disabled (no entity configured)"
 
-### Requirement: User-Configurable Temperature Settings
-The system SHALL allow users to configure all temperature thresholds via the add-on configuration UI.
+### Requirement: Temperature Presets
+The system SHALL provide preset temperature profiles for common use cases.
 
-#### Scenario: Custom night program temperature
-- **WHEN** the user sets `temp_night_program` to 54
-- **AND** night prices are cheaper than day prices
-- **THEN** the system uses 54°C as the night program target (instead of default 56°C)
+#### Scenario: Select comfort preset (default)
+- **WHEN** `temperature_preset` is "comfort" or not specified
+- **THEN** the system uses: night_preheat=56°C, night_minimal=52°C, day_preheat=58°C, day_minimal=35°C, legionella=62°C
 
-#### Scenario: Custom idle temperature
-- **WHEN** the user sets `temp_idle` to 40
-- **THEN** the system uses 40°C as the idle/standby temperature (instead of default 35°C)
+#### Scenario: Select eco preset
+- **WHEN** `temperature_preset` is "eco"
+- **THEN** the system uses: night_preheat=52°C, night_minimal=48°C, day_preheat=55°C, day_minimal=35°C, legionella=60°C
 
-#### Scenario: Custom bath threshold
-- **WHEN** the user sets `temp_bath_threshold` to 55
-- **AND** bath mode is enabled
-- **AND** current water temperature exceeds 55°C
-- **THEN** the system auto-disables bath mode
+#### Scenario: Select performance preset
+- **WHEN** `temperature_preset` is "performance"
+- **THEN** the system uses: night_preheat=60°C, night_minimal=56°C, day_preheat=60°C, day_minimal=45°C, legionella=66°C
 
-### Requirement: User-Configurable Schedule Settings
-The system SHALL allow users to configure scheduling parameters via the add-on configuration UI.
+#### Scenario: Custom temperature override
+- **WHEN** `temperature_preset` is "custom"
+- **THEN** the system uses values from `night_preheat_temp`, `night_minimal_temp`, `day_preheat_temp`, `day_minimal_temp`, `legionella_temp`
 
-#### Scenario: Custom night window
-- **WHEN** the user sets `night_window_start` to "23:00" and `night_window_end` to "07:00"
-- **THEN** the system uses 23:00-07:00 as the night price window (instead of default 00:00-06:00)
+### Requirement: Configuration Validation
+The system SHALL validate configuration on startup and warn about potential issues.
 
-#### Scenario: Custom legionella day
-- **WHEN** the user sets `legionella_day_of_week` to "Sunday"
-- **THEN** the system runs legionella protection on Sundays (instead of default Saturday)
+#### Scenario: Validate legionella temperature
+- **WHEN** custom `legionella_temp` is below 60°C
+- **THEN** the system logs warning "Legionella temp below 60°C may not be effective for sanitization"
+- **AND** continues with the configured value
 
-#### Scenario: Custom evaluation interval
-- **WHEN** the user sets `schedule_interval_minutes` to 10
-- **THEN** the system evaluates the schedule every 10 minutes (instead of default 5)
+#### Scenario: Validate temperature ordering
+- **WHEN** custom `night_preheat_temp` is less than `night_minimal_temp`
+- **THEN** the system logs warning "night_preheat should be higher than night_minimal"
 
-### Requirement: Price-Based Night Program Scheduling
-The system SHALL schedule water heating during the lowest-priced 15-minute interval within the configured night window.
+#### Scenario: Validate required entity exists
+- **WHEN** configured `water_heater_entity_id` does not exist in Home Assistant
+- **THEN** the system logs error and exits
+- **AND** displays "Water heater entity not found: {entity_id}"
 
-#### Scenario: Night program with cheaper night prices
-- **WHEN** the current time is within the night window
-- **AND** the lowest night price is lower than the lowest day price
-- **THEN** the system schedules heating at the night price window
-- **AND** sets target temperature to configured `temp_night_program` (default 56°C)
-- **AND** updates status to "Night program planned at: HH:MM"
+### Requirement: Fixed Temperature Rules
+The system SHALL apply fixed temperatures for specific conditions regardless of preset.
 
-#### Scenario: Night program with expensive night prices
-- **WHEN** the current time is within the night window
-- **AND** the lowest night price is higher than the lowest day price
-- **THEN** the system schedules heating at the night price window
-- **AND** sets target temperature to configured `temp_night_program_low` (default 52°C)
+#### Scenario: Negative or zero price
+- **WHEN** the current electricity price is ≤ 0 (negative or zero)
+- **THEN** the system sets target temperature to 70°C (maximum)
+- **AND** logs "Free/negative price - heating to maximum"
 
-### Requirement: Price-Based Day Program Scheduling
-The system SHALL schedule water heating during the lowest-priced interval in the day window when not in night mode or legionella mode.
+#### Scenario: Away mode active
+- **WHEN** configured away mode entity is "on"
+- **THEN** the system sets target temperature to 35°C
+- **AND** continues legionella protection on scheduled day
 
-#### Scenario: Day program with very low price
-- **WHEN** the current time is outside the night window
-- **AND** the price level is "None" (below P20 percentile)
-- **THEN** the system sets target temperature to configured `temp_day_program_max` (default 70°C)
+#### Scenario: Bath mode active
+- **WHEN** configured bath mode entity is "on"
+- **AND** current water temperature is below 58°C
+- **THEN** the system sets target temperature to 58°C
 
-#### Scenario: Day program with normal price
-- **WHEN** the current time is outside the night window
-- **AND** the price level is "Low", "Medium", or "High"
-- **THEN** the system sets target temperature to configured `temp_day_program` (default 58°C)
+### Requirement: Night Program Scheduling
+The system SHALL heat water during the cheapest interval in the night window based on price comparison.
 
-#### Scenario: Day program deferred due to cheaper tomorrow
-- **WHEN** `next_day_price_check` is enabled (default true)
-- **AND** the current price level is above Medium
-- **AND** tomorrow's night price is lower than current price
-- **THEN** the system defers heating to tomorrow
-- **AND** sets target temperature to configured `temp_idle` (default 35°C)
+#### Scenario: Night cheaper than day - preheat
+- **WHEN** the current time is within night window (default 00:00-06:00)
+- **AND** lowest night price < lowest day price
+- **THEN** the system sets target to preset `night_preheat` temperature
+- **AND** schedules heating at the lowest night price slot
 
-### Requirement: Legionella Protection Cycle
-The system SHALL run a high-temperature cycle on the configured day of week to prevent legionella bacteria growth.
+#### Scenario: Day will be cheaper - minimal heating
+- **WHEN** the current time is within night window
+- **AND** lowest night price ≥ lowest day price
+- **THEN** the system sets target to preset `night_minimal` temperature
+- **AND** heats just enough to maintain comfort until day
 
-#### Scenario: Legionella cycle on configured day
-- **WHEN** the current day matches configured `legionella_day_of_week` (default Saturday)
-- **AND** the current time is outside the night window
-- **THEN** the system schedules a heating cycle for configured `legionella_duration_hours` (default 3)
-- **AND** sets target temperature to configured `temp_legionella` or `temp_legionella_max` based on price level
+### Requirement: Day Program Scheduling
+The system SHALL heat water during the day based on comparison with tomorrow's prices.
+
+#### Scenario: Today cheaper than tomorrow - preheat
+- **WHEN** the current time is in day window (default 06:00-24:00)
+- **AND** today's price < tomorrow's price
+- **THEN** the system sets target to preset `day_preheat` temperature
+
+#### Scenario: Tomorrow will be cheaper - minimal heating
+- **WHEN** the current time is in day window
+- **AND** today's price ≥ tomorrow's price
+- **THEN** the system sets target to preset `day_minimal` temperature
+
+### Requirement: Legionella Protection
+The system SHALL run weekly high-temperature sanitization cycle.
+
+#### Scenario: Legionella on scheduled day
+- **WHEN** the current day matches `legionella_day` (default Saturday)
+- **AND** the current time is in day window
+- **THEN** the system sets target to preset `legionella` temperature
+- **AND** runs for `legionella_duration_hours` (default 3 hours)
 
 #### Scenario: Legionella start time optimization
-- **WHEN** scheduling a legionella cycle
-- **AND** the price 15 minutes before start time is lower than 15 minutes after
-- **THEN** the system adjusts start time 15 minutes earlier
-- **AND** logs the adjustment with price comparison
-
-### Requirement: Away Mode Temperature Reduction
-The system SHALL use reduced temperatures when away mode is active, while maintaining legionella protection.
-
-#### Scenario: Away mode with legionella protection (cheap price)
-- **WHEN** configured away mode entity is "on"
-- **AND** it is legionella day
-- **AND** current price is below configured `cheap_price_threshold` (default 0.20 EUR/kWh)
-- **THEN** the system sets target temperature to configured `temp_away_legionella_cheap` (default 66°C)
-
-#### Scenario: Away mode with legionella protection (expensive price)
-- **WHEN** configured away mode entity is "on"
-- **AND** it is legionella day
-- **AND** current price is at or above configured `cheap_price_threshold`
-- **THEN** the system sets target temperature to configured `temp_away_legionella` (default 60°C)
+- **WHEN** scheduling legionella cycle
+- **AND** price 15 minutes before is lower than 15 minutes after optimal slot
+- **THEN** the system shifts start time 15 minutes earlier
 
 ### Requirement: Bath Mode Auto-Disable
-The system SHALL automatically disable bath mode when water temperature exceeds the configured bath threshold.
+The system SHALL automatically disable bath mode when target temperature is reached.
 
-#### Scenario: Bath mode auto-disable at threshold
-- **WHEN** configured bath mode entity is "on"
-- **AND** current water temperature exceeds configured `temp_bath_threshold` (default 50°C)
+#### Scenario: Bath reaches threshold
+- **WHEN** bath mode entity is "on"
+- **AND** current water temperature exceeds `bath_auto_off_temp` (default 50°C)
 - **THEN** the system turns off the bath mode entity
-- **AND** logs the auto-disable action
+- **AND** logs "Bath mode auto-disabled at {temp}°C"
 
-### Requirement: Wait Cycle Transition Smoothing
-The system SHALL use wait cycles to prevent rapid toggling between heating programs and idle state.
+### Requirement: Cycle Gap Protection
+The system SHALL prevent rapid toggling between heating programs.
 
-#### Scenario: Wait cycle countdown
-- **WHEN** a heating program ends
-- **AND** target temperature is above configured `temp_idle`
-- **THEN** the system sets wait_cycles to configured `wait_cycles_limit` (default 10)
-- **AND** decrements wait_cycles each evaluation interval
-- **AND** only transitions to idle when wait_cycles reaches 0
+#### Scenario: Minimum gap between cycles
+- **WHEN** a heating program completes
+- **AND** less than `min_cycle_gap_minutes` (default 50) has passed
+- **THEN** the system remains at current temperature
+- **AND** does not start a new program until gap is satisfied
 
-#### Scenario: Wait cycle reset on new program
-- **WHEN** a new heating program starts during wait cycle countdown
-- **THEN** the system resets wait_cycles to configured `wait_cycles_limit`
-- **AND** applies the new program's target temperature
+#### Scenario: New program after gap
+- **WHEN** `min_cycle_gap_minutes` has passed since last cycle ended
+- **THEN** the system evaluates and starts the appropriate program
 
-### Requirement: Status Entity Updates
-The system SHALL update Home Assistant entities with current schedule status for dashboard display.
+### Requirement: Output Sensors
+The system SHALL create sensors for dashboard integration (no input helpers required).
 
-#### Scenario: Status during active heating
-- **WHEN** a heating program is active
-- **THEN** the system updates `input_text.heating_schedule_status` with "{Program} program from: HH:MM to: HH:MM"
-- **AND** creates/updates `sensor.wh_program_type` with current program name
-- **AND** creates/updates `sensor.wh_target_temp` with target temperature
+#### Scenario: Create program sensor
+- **WHEN** the add-on starts
+- **THEN** the system creates `sensor.wh_program` showing current program (Night/Day/Legionella/Bath/Away/Idle)
 
-#### Scenario: Status during idle with planned program
-- **WHEN** no program is currently active
-- **AND** a program is scheduled for later today
-- **THEN** the system updates status to "{Program} program planned at: HH:MM"
+#### Scenario: Create temperature sensor
+- **WHEN** the add-on starts
+- **THEN** the system creates `sensor.wh_target_temp` showing current target in °C
+
+#### Scenario: Create status sensor
+- **WHEN** the add-on starts
+- **THEN** the system creates `sensor.wh_status` with human-readable status message
 
 ### Requirement: Price Data Integration
-The system SHALL read price curves from the energy-prices add-on sensor attributes.
+The system SHALL read price curves from the configured price sensor.
 
-#### Scenario: Successful price data read
+#### Scenario: Parse price curve
 - **WHEN** the system evaluates the schedule
-- **THEN** it reads `sensor.ep_price_import` state and attributes
-- **AND** parses `price_curve` attribute as Dict[datetime, float]
-- **AND** uses `price_level` attribute for temperature decisions
+- **THEN** it reads `price_curve` attribute from price sensor
+- **AND** parses as Dict[datetime, float] with 15-minute intervals
 
 #### Scenario: Price sensor unavailable
-- **WHEN** `sensor.ep_price_import` is unavailable or has no price_curve
-- **THEN** the system logs a warning
-- **AND** skips the current evaluation cycle
-- **AND** retries on the next 5-minute interval
+- **WHEN** price sensor is unavailable or has no price_curve
+- **THEN** the system logs warning and skips cycle
+- **AND** retries on next evaluation interval
 
-### Requirement: State Persistence Across Restarts
-The system SHALL persist scheduling state to survive container restarts.
+### Requirement: State Persistence
+The system SHALL persist state to survive container restarts.
 
-#### Scenario: State saved on shutdown
-- **WHEN** the add-on receives shutdown signal
-- **THEN** the system saves `heater_on`, `target_temperature`, `wait_cycles` to `/data/state.json`
+#### Scenario: Save state on change
+- **WHEN** the program or target temperature changes
+- **THEN** the system saves to `/data/state.json`:
+  - `current_program`: active program name
+  - `target_temperature`: current target in °C
+  - `last_cycle_end`: ISO timestamp of last cycle completion
 
-#### Scenario: State restored on startup
+#### Scenario: Restore state on startup
 - **WHEN** the add-on starts
 - **AND** `/data/state.json` exists and is valid
-- **THEN** the system restores `heater_on`, `target_temperature`, `wait_cycles`
-- **AND** logs the restored state values
+- **THEN** the system restores state and logs restored values
