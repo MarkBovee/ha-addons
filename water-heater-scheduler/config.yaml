@@ -15,7 +15,7 @@ arch:
 options:
   # Essentials (shown by default)
   water_heater_entity_id: ""
-  price_sensor_entity_id: "sensor.ep_price_import"
+  price_sensor_entity_id: "sensor.energy_prices_electricity_import_price"
   temperature_preset: "comfort"
   dynamic_window_mode: false
   
