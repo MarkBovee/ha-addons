@@ -60,12 +60,16 @@ WINTER_MONTHS = {10, 11, 12, 1, 2, 3}
 def get_status_visual(program: ProgramType, current_time: datetime) -> Tuple[str, Optional[str]]:
     """Return icon + color to match the current program and season."""
     is_winter = current_time.month in WINTER_MONTHS
+    
+    # Light blue for both seasons: #ADD8E6
+    light_blue = "#ADD8E6"
+    
     if program == ProgramType.DAY:
-        icon = "mdi:weather-snowy-sunny" if is_winter else "mdi:weather-sunny"
-        color = "#8ec5ff" if is_winter else "#fbc02d"
+        icon = "mdi:snowflake-thermometer" if is_winter else "mdi:water-thermometer"
+        color = light_blue
     elif program == ProgramType.NIGHT:
-        icon = "mdi:snowflake"
-        color = "#9bc8ff" if is_winter else "#bbdefb"
+        icon = "mdi:snowflake-thermometer" if is_winter else "mdi:water-thermometer"
+        color = light_blue
     elif program == ProgramType.NEGATIVE_PRICE:
         icon = "mdi:lightning-bolt-circle"
         color = "#ffb300"
@@ -80,7 +84,7 @@ def get_status_visual(program: ProgramType, current_time: datetime) -> Tuple[str
         color = "#78909c"
     else:
         icon = "mdi:information-outline"
-        color = "#b0bec5" if is_winter else "#cfd8dc"
+        color = "#b0bec5"
     return icon, color
 
 
