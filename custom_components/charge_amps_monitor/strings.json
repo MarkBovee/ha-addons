@@ -1,0 +1,93 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Charge Amps Account",
+        "description": "Enter your Charge Amps account credentials",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        },
+        "data_description": {
+          "email": "Your Charge Amps account email address",
+          "password": "Your Charge Amps account password"
+        }
+      },
+      "advanced": {
+        "title": "Advanced Settings",
+        "description": "Configure optional advanced settings",
+        "data": {
+          "host_name": "API Host",
+          "base_url": "Base URL",
+          "update_interval": "Update Interval (seconds)"
+        },
+        "data_description": {
+          "host_name": "Charge Amps API host (default: my.charge.space)",
+          "base_url": "API base URL (default: https://my.charge.space)",
+          "update_interval": "How often to poll for updates in seconds"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Charge Amps API",
+      "invalid_auth": "Invalid email or password",
+      "unknown": "An unknown error occurred"
+    },
+    "abort": {
+      "already_configured": "This Charge Amps account is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Charge Amps Options",
+        "description": "Configure Charge Amps Monitor options",
+        "data": {
+          "update_interval": "Update Interval (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "power": {
+        "name": "Power"
+      },
+      "total_consumption": {
+        "name": "Total Consumption"
+      },
+      "voltage_l1": {
+        "name": "Voltage L1"
+      },
+      "voltage_l2": {
+        "name": "Voltage L2"
+      },
+      "voltage_l3": {
+        "name": "Voltage L3"
+      },
+      "current_l1": {
+        "name": "Current L1"
+      },
+      "current_l2": {
+        "name": "Current L2"
+      },
+      "current_l3": {
+        "name": "Current L3"
+      },
+      "connector_status": {
+        "name": "Connector Status"
+      },
+      "charger_status": {
+        "name": "Charger Status"
+      }
+    },
+    "binary_sensor": {
+      "charging": {
+        "name": "Charging"
+      },
+      "online": {
+        "name": "Online"
+      }
+    }
+  }
+}
