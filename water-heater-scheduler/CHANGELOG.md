@@ -2,6 +2,11 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.1.4] - 2025-12-03
+
+### Changed
+- Updated status icons to seasonal thermometer icons (snowflake-thermometer for winter, water-thermometer for summer) with consistent light blue color.
+
 ## [1.1.3] - 2025-12-03
 
 ### Changed
