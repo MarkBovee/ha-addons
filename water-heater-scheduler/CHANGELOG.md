@@ -2,10 +2,14 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
-## [1.1.2] - 2025-12-03
+## [1.1.3] - 2025-12-03
 
 ### Changed
 - Trimmed schedule status messages so only actionable context (planned window, selected target) appears, removing noisy “no data” fragments.
+
+## [1.1.2] - 2025-12-03
+
+### Changed
 - Introduced winter-aware icons/colors for the heating status sensors so the UI reflects the season automatically.
 
 ## [1.1.1] - 2025-12-03
