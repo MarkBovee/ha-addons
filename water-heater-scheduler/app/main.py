@@ -7,7 +7,7 @@ optimizing for cost while maintaining comfort and legionella protection.
 import logging
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 from .models import ScheduleConfig, HeaterState, ProgramType
 from .price_analyzer import PriceAnalyzer
@@ -52,6 +52,36 @@ OLD_ENTITIES = [
 
 # Status entity to update (compatible with NetDaemon WaterHeater app)
 STATUS_TEXT_ENTITY = 'input_text.heating_schedule_status'
+
+
+WINTER_MONTHS = {10, 11, 12, 1, 2, 3}
+
+
+def get_status_visual(program: ProgramType, current_time: datetime) -> Tuple[str, Optional[str]]:
+    """Return icon + color to match the current program and season."""
+    is_winter = current_time.month in WINTER_MONTHS
+    if program == ProgramType.DAY:
+        icon = "mdi:weather-snowy-sunny" if is_winter else "mdi:weather-sunny"
+        color = "#8ec5ff" if is_winter else "#fbc02d"
+    elif program == ProgramType.NIGHT:
+        icon = "mdi:snowflake"
+        color = "#9bc8ff" if is_winter else "#bbdefb"
+    elif program == ProgramType.NEGATIVE_PRICE:
+        icon = "mdi:lightning-bolt-circle"
+        color = "#ffb300"
+    elif program == ProgramType.LEGIONELLA:
+        icon = "mdi:shield-heat"
+        color = "#ff7043"
+    elif program == ProgramType.BATH:
+        icon = "mdi:bathtub"
+        color = "#4dd0e1"
+    elif program == ProgramType.AWAY:
+        icon = "mdi:bag-suitcase"
+        color = "#78909c"
+    else:
+        icon = "mdi:information-outline"
+        color = "#b0bec5" if is_winter else "#cfd8dc"
+    return icon, color
 
 
 def load_config() -> ScheduleConfig:
@@ -116,7 +146,8 @@ def create_sensors(
     program: ProgramType,
     target_temp: int,
     status_msg: str,
-    status_icon: str = "mdi:information-outline"
+    status_icon: str = "mdi:information-outline",
+    status_icon_color: Optional[str] = None,
 ):
     """Create/update water heater status sensors.
     
@@ -128,15 +159,18 @@ def create_sensors(
         status_icon: Icon for the status sensor
     """
     # Update the input_text status entity (compatible with NetDaemon)
+    text_attributes = {
+        "friendly_name": "Heating Schedule Status",
+        "icon": status_icon,
+        "program": program.value,
+        "target_temp": target_temp,
+    }
+    if status_icon_color:
+        text_attributes["icon_color"] = status_icon_color
     ha_api.create_or_update_entity(
         entity_id=STATUS_TEXT_ENTITY,
         state=status_msg,
-        attributes={
-            "friendly_name": "Heating Schedule Status",
-            "icon": status_icon,
-            "program": program.value,
-            "target_temp": target_temp,
-        },
+        attributes=text_attributes,
         log_success=False
     )
     
@@ -165,13 +199,16 @@ def create_sensors(
     )
     
     # Sensor: Status message
+    status_attributes = {
+        "friendly_name": "Water Heater Status",
+        "icon": status_icon,
+    }
+    if status_icon_color:
+        status_attributes["icon_color"] = status_icon_color
     ha_api.create_or_update_entity(
         entity_id="sensor.wh_status",
         state=status_msg,
-        attributes={
-            "friendly_name": "Water Heater Status",
-            "icon": status_icon,
-        },
+        attributes=status_attributes,
         log_success=False
     )
 
@@ -286,15 +323,17 @@ def run_evaluation_cycle(
                 logger.info("Applied %s: %d°C", program.value, target_temp)
     
     status_msg = scheduler.build_status_message(decision, window, now)
-    if program == ProgramType.DAY:
-        status_icon = "mdi:weather-sunny"
-    elif program == ProgramType.NIGHT:
-        status_icon = "mdi:snowflake"
-    else:
-        status_icon = "mdi:information-outline"
+    status_icon, status_icon_color = get_status_visual(program, now)
     
     # 7. Update sensors
-    create_sensors(ha_api, program, target_temp, status_msg, status_icon)
+    create_sensors(
+        ha_api,
+        program,
+        target_temp,
+        status_msg,
+        status_icon=status_icon,
+        status_icon_color=status_icon_color,
+    )
     
     # Log cycle summary
     if first_run:

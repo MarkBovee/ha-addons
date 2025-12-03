@@ -98,15 +98,13 @@ class Scheduler:
         """Construct a ProgramDecision for the day window."""
         slot = slot or self.price_analyzer.get_lowest_day_price(night_end)
         today_cheaper = self.price_analyzer.compare_today_vs_tomorrow(night_end)
+        target = self.preset.day_preheat
+        reason = ""
         if today_cheaper is True:
-            target = self.preset.day_preheat
             reason = f"{prefix}: today cheaper than tomorrow"
         elif today_cheaper is False:
             target = self.preset.day_minimal
             reason = f"{prefix}: tomorrow cheaper than today"
-        else:
-            target = self.preset.day_preheat
-            reason = f"{prefix}: no tomorrow price data"
         return ProgramDecision(
             ProgramType.DAY,
             target,
@@ -222,7 +220,11 @@ class Scheduler:
                     prefix="Dynamic day window",
                     slot=day_slot,
                 )
-                decision.reason += " | Night window more expensive"
+                extra_reason = "Night window more expensive"
+                if decision.reason:
+                    decision.reason += f" | {extra_reason}"
+                else:
+                    decision.reason = extra_reason
                 return decision
             logger.debug("Dynamic window mode enabled but insufficient price data")
         
@@ -245,7 +247,7 @@ class Scheduler:
                 reason = "Day prices cheaper - night minimal"
                 target = self.preset.night_minimal
             else:
-                reason = "Night window - no comparison data"
+                reason = ""
                 target = self.preset.night_minimal
             return ProgramDecision(
                 ProgramType.NIGHT,
