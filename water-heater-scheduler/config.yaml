@@ -1,6 +1,6 @@
 name: Water Heater Scheduler
 description: Schedule domestic hot water heating based on electricity prices - optimizes for cost while maintaining comfort and legionella protection
-version: "1.1.0"
+version: "1.1.1"
 slug: water_heater_scheduler
 init: false
 homeassistant_api: true
@@ -13,17 +13,17 @@ arch:
 
 # Options schema for UI-managed settings
 options:
-  # Entity Selection (required)
+  # Essentials (shown by default)
   water_heater_entity_id: ""
-  
-  # Entity Selection (optional - auto-detected if energy-prices installed)
   price_sensor_entity_id: "sensor.ep_price_import"
+  temperature_preset: "comfort"
+  dynamic_window_mode: false
   
-  # Entity Selection (optional - features disabled if not set)
+  # Optional helper entities
   away_mode_entity_id: ""
   bath_mode_entity_id: ""
   
-  # Schedule Settings
+  # Schedule & safety tuning
   evaluation_interval_minutes: 5
   night_window_start: "00:00"
   night_window_end: "06:00"
@@ -31,21 +31,15 @@ options:
   legionella_day: "Saturday"
   legionella_duration_hours: 3
   bath_auto_off_temp: 50
+  min_cycle_gap_minutes: 50
+  log_level: "info"
   
-  # Temperature Preset (eco/comfort/performance/custom)
-  temperature_preset: "comfort"
-  
-  # Custom Temperature Overrides (only used when preset=custom)
+  # Custom temperature overrides (only used when preset=custom)
   night_preheat_temp: 56
   night_minimal_temp: 52
   day_preheat_temp: 58
   day_minimal_temp: 35
   legionella_temp: 62
-  
-  # Advanced Settings
-  min_cycle_gap_minutes: 50
-  log_level: "info"
-  dynamic_window_mode: false
   
   # MQTT settings for Home Assistant Mosquitto broker
   mqtt_host: "core-mosquitto"
@@ -53,40 +47,203 @@ options:
   mqtt_user: ""
   mqtt_password: ""
 
-# Schema defines the data types for validation
+# Schema defines the data types for validation (new Supervisor UI schema)
 schema:
-  # Entity Selection
-  water_heater_entity_id: str
-  price_sensor_entity_id: str?
-  away_mode_entity_id: str?
-  bath_mode_entity_id: str?
+  # --- Basic experience ---
+  - name: water_heater_entity_id
+    required: true
+    description: Water heater entity to control
+    selector:
+      entity:
+        filter:
+          - domain: water_heater
+  - name: price_sensor_entity_id
+    description: Price sensor providing Nord Pool data
+    selector:
+      entity:
+        filter:
+          - domain: sensor
+  - name: temperature_preset
+    description: Choose a predefined heating profile
+    selector:
+      select:
+        mode: dropdown
+        options:
+          - label: Eco (efficient)
+            value: eco
+          - label: Comfort (default)
+            value: comfort
+          - label: Performance (max comfort)
+            value: performance
+          - label: Custom (use overrides below)
+            value: custom
+  - name: dynamic_window_mode
+    description: Automatically pick the cheapest day/night window
+    selector:
+      boolean:
+    default: false
   
-  # Schedule Settings
-  evaluation_interval_minutes: int(1,60)
-  night_window_start: str
-  night_window_end: str
-  heating_duration_hours: int(1,4)
-  legionella_day: list(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)
-  legionella_duration_hours: int(1,6)
-  bath_auto_off_temp: int(40,60)
+  # --- Optional helper entities ---
+  - name: away_mode_entity_id
+    description: Switch/input_boolean that enables away mode
+    selector:
+      entity:
+        multiple: false
+        filter:
+          - domain: switch
+          - domain: input_boolean
+    required: false
+    advanced: true
+  - name: bath_mode_entity_id
+    description: Switch/input_boolean to trigger bath boost
+    selector:
+      entity:
+        multiple: false
+        filter:
+          - domain: switch
+          - domain: input_boolean
+    required: false
+    advanced: true
   
-  # Temperature Preset
-  temperature_preset: list(eco|comfort|performance|custom)
-  
-  # Custom Temperature Overrides
-  night_preheat_temp: int(45,65)?
-  night_minimal_temp: int(40,60)?
-  day_preheat_temp: int(50,70)?
-  day_minimal_temp: int(30,50)?
-  legionella_temp: int(60,70)?
-  
-  # Advanced Settings
-  min_cycle_gap_minutes: int(10,180)?
-  log_level: list(debug|info|warning|error)?
-  dynamic_window_mode: bool?
-  
-  # MQTT settings (optional)
-  mqtt_host: str?
-  mqtt_port: int?
-  mqtt_user: str?
-  mqtt_password: str?
+  # --- Advanced scheduling ---
+  - name: evaluation_interval_minutes
+    description: How often the scheduler evaluates prices
+    selector:
+      number:
+        min: 1
+        max: 60
+        unit_of_measurement: min
+    advanced: true
+  - name: night_window_start
+    description: Night program start time
+    selector:
+      time:
+    advanced: true
+  - name: night_window_end
+    description: Night program end time
+    selector:
+      time:
+    advanced: true
+  - name: heating_duration_hours
+    description: Duration for each heating run
+    selector:
+      number:
+        min: 1
+        max: 4
+        unit_of_measurement: h
+    advanced: true
+  - name: legionella_day
+    description: Day of week for legionella protection cycle
+    selector:
+      select:
+        options:
+          - Monday
+          - Tuesday
+          - Wednesday
+          - Thursday
+          - Friday
+          - Saturday
+          - Sunday
+    advanced: true
+  - name: legionella_duration_hours
+    description: Legionella cycle duration
+    selector:
+      number:
+        min: 1
+        max: 6
+        unit_of_measurement: h
+    advanced: true
+  - name: bath_auto_off_temp
+    description: Auto-disable bath mode once this temp is reached
+    selector:
+      number:
+        min: 40
+        max: 60
+        mode: slider
+        unit_of_measurement: °C
+    advanced: true
+  - name: min_cycle_gap_minutes
+    description: Minimum time between heating cycles
+    selector:
+      number:
+        min: 10
+        max: 180
+        unit_of_measurement: min
+    advanced: true
+  - name: log_level
+    selector:
+      select:
+        options:
+          - debug
+          - info
+          - warning
+          - error
+    advanced: true
+
+  # --- Custom temperature overrides ---
+  - name: night_preheat_temp
+    description: Used only when preset = custom
+    selector:
+      number:
+        min: 45
+        max: 65
+        unit_of_measurement: °C
+    required: false
+    advanced: true
+  - name: night_minimal_temp
+    selector:
+      number:
+        min: 40
+        max: 60
+        unit_of_measurement: °C
+    required: false
+    advanced: true
+  - name: day_preheat_temp
+    selector:
+      number:
+        min: 50
+        max: 70
+        unit_of_measurement: °C
+    required: false
+    advanced: true
+  - name: day_minimal_temp
+    selector:
+      number:
+        min: 30
+        max: 50
+        unit_of_measurement: °C
+    required: false
+    advanced: true
+  - name: legionella_temp
+    selector:
+      number:
+        min: 60
+        max: 70
+        unit_of_measurement: °C
+    required: false
+    advanced: true
+
+  # --- MQTT passthrough ---
+  - name: mqtt_host
+    selector:
+      text:
+    required: false
+    advanced: true
+  - name: mqtt_port
+    selector:
+      number:
+        min: 1
+        max: 65535
+    required: false
+    advanced: true
+  - name: mqtt_user
+    selector:
+      text:
+    required: false
+    advanced: true
+  - name: mqtt_password
+    selector:
+      text:
+        type: password
+    required: false
+    advanced: true
