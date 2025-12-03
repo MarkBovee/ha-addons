@@ -45,12 +45,13 @@ WH_CONFIG_DEFAULTS = {
 
 WH_REQUIRED_FIELDS = ['water_heater_entity_id']
 
-# Old entities to clean up on startup
+# Old entities to clean up on startup (from previous versions)
 OLD_ENTITIES = [
-    'sensor.wh_program',
-    'sensor.wh_target_temp',
-    'sensor.wh_status',
+    # None currently - sensors are managed by this add-on
 ]
+
+# Status entity to update (compatible with NetDaemon WaterHeater app)
+STATUS_TEXT_ENTITY = 'input_text.heating_schedule_status'
 
 
 def load_config() -> ScheduleConfig:
@@ -124,7 +125,21 @@ def create_sensors(
         program: Current program type
         target_temp: Current target temperature
         status_msg: Human-readable status message
+        status_icon: Icon for the status sensor
     """
+    # Update the input_text status entity (compatible with NetDaemon)
+    ha_api.create_or_update_entity(
+        entity_id=STATUS_TEXT_ENTITY,
+        state=status_msg,
+        attributes={
+            "friendly_name": "Heating Schedule Status",
+            "icon": status_icon,
+            "program": program.value,
+            "target_temp": target_temp,
+        },
+        log_success=False
+    )
+    
     # Sensor: Current program
     ha_api.create_or_update_entity(
         entity_id="sensor.wh_program",
