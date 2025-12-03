@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Colour" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #008d7f;
+      }
+
+      .cls-1, .cls-2, .cls-3, .cls-4, .cls-5, .cls-6, .cls-7, .cls-8, .cls-9, .cls-10, .cls-11, .cls-12, .cls-13, .cls-14, .cls-15, .cls-16 {
+        stroke-width: 0px;
+      }
+
+      .cls-2 {
+        fill: #00685e;
+      }
+
+      .cls-3 {
+        fill: #009a44;
+      }
+
+      .cls-4 {
+        fill: #78be20;
+      }
+
+      .cls-5 {
+        fill: #454545;
+      }
+
+      .cls-6 {
+        fill: #c2e189;
+      }
+
+      .cls-7 {
+        fill: #14a3c7;
+      }
+
+      .cls-8 {
+        fill: #007864;
+      }
+
+      .cls-9 {
+        fill: #279989;
+      }
+
+      .cls-10 {
+        fill: #5cb8b2;
+      }
+
+      .cls-11 {
+        fill: #a4d65e;
+      }
+
+      .cls-12 {
+        fill: #009639;
+      }
+
+      .cls-13 {
+        fill: #8dc8e8;
+      }
+
+      .cls-14 {
+        fill: #84bd00;
+      }
+
+      .cls-15 {
+        fill: #a0d1ca;
+      }
+
+      .cls-16 {
+        fill: #41b6e6;
+      }
+    </style>
+  </defs>
+  <g>
+    <rect class="cls-13" x="49.87" y="96.45" width="13.14" height="37.6"/>
+    <rect class="cls-16" x="49.87" y="134.04" width="13.14" height="29.86"/>
+    <rect class="cls-16" x="63.01" y="68.39" width="13.35" height="41.65"/>
+    <rect class="cls-7" x="63.01" y="110.03" width="13.35" height="47.75"/>
+    <rect class="cls-10" x="76.36" y="75.33" width="13.21" height="44.92"/>
+    <rect class="cls-9" x="76.36" y="120.25" width="13.21" height="52.59"/>
+    <rect class="cls-15" x="89.57" y="48.28" width="20.15" height="47.88"/>
+    <rect class="cls-1" x="89.57" y="96.16" width="20.15" height="87.6"/>
+    <rect class="cls-12" x="109.72" y="71.92" width="13.24" height="62.12"/>
+    <rect class="cls-2" x="109.72" y="134.04" width="13.24" height="58.01"/>
+    <rect class="cls-14" x="122.96" y="60" width="20.13" height="54.76"/>
+    <rect class="cls-8" x="122.96" y="114.77" width="20.13" height="59.33"/>
+    <rect class="cls-11" x="143.09" y="96.43" width="13.25" height="29.73"/>
+    <rect class="cls-3" x="143.09" y="126.15" width="13.25" height="31.62"/>
+    <rect class="cls-6" x="156.34" y="87.63" width="13.24" height="27.14"/>
+    <rect class="cls-4" x="156.34" y="114.77" width="13.24" height="31.52"/>
+  </g>
+</svg>
