@@ -315,40 +315,40 @@ class Scheduler:
         window: Optional[Tuple[datetime, datetime]],
         now: Optional[datetime] = None,
     ) -> str:
-        """Create a human-readable status string for sensors."""
+        """Create a simple status string: current state + next program if any.
+        
+        Format: "Idle" or "Heating (58°C)" or "Idle, heating at 22:00"
+        """
         if now is None:
             now = datetime.now()
-        program_label = decision.program.value
-        parts: list[str] = []
-        descriptor: str
+        
+        program = decision.program
+        
+        # Determine if currently heating
+        is_heating = False
         if window:
             start, end = window
-            in_window = start <= now <= end
-            state = "running" if in_window else "planned"
-            descriptor = (
-                f"{program_label} program {state} "
-                f"{start.strftime('%H:%M')}–{end.strftime('%H:%M')}"
-            )
-        elif decision.planned_time is not None:
-            if decision.planned_time <= now:
-                descriptor = (
-                    f"{program_label} program running since "
-                    f"{decision.planned_time.strftime('%H:%M')}"
-                )
-            else:
-                descriptor = (
-                    f"{program_label} program planned at "
-                    f"{decision.planned_time.strftime('%H:%M')}"
-                )
+            is_heating = start <= now <= end
+        elif program in (ProgramType.BATH, ProgramType.AWAY, ProgramType.NEGATIVE_PRICE):
+            # These programs are immediate/continuous
+            is_heating = True
+        
+        # Build current state
+        if program == ProgramType.AWAY:
+            return f"Away mode ({decision.target_temp}°C)"
+        elif program == ProgramType.BATH:
+            return f"Bath mode ({decision.target_temp}°C)"
+        elif program == ProgramType.NEGATIVE_PRICE:
+            return f"Free energy! ({decision.target_temp}°C)"
+        elif is_heating:
+            return f"Heating ({decision.target_temp}°C)"
         else:
-            descriptor = f"{program_label} program"
-        parts.append(descriptor)
-        if decision.reason:
-            parts.append(decision.reason)
-        parts.append(f"target {decision.target_temp}°C")
-        if decision.extra:
-            parts.append(decision.extra)
-        return " | ".join(parts)
+            # Idle - check for next planned program
+            if window:
+                start, _ = window
+                if start > now:
+                    return f"Idle, heating at {start.strftime('%H:%M')}"
+            return "Idle"
     
     def mark_cycle_complete(self) -> None:
         """Mark current heating cycle as complete."""

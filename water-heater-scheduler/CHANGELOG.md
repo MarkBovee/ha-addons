@@ -2,6 +2,11 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.1.5] - 2025-12-03
+
+### Changed
+- Simplified status messages to show current state and next planned heating time (e.g., "Idle, heating at 22:00" or "Heating (58°C)").
+
 ## [1.1.4] - 2025-12-03
 
 ### Changed
