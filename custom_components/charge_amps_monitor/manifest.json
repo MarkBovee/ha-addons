@@ -1,0 +1,12 @@
+{
+  "domain": "charge_amps_monitor",
+  "name": "Charge Amps Monitor",
+  "codeowners": ["@yourusername"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/yourusername/ha-addons/blob/main/custom_components/charge_amps_monitor/README.md",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/yourusername/ha-addons/issues",
+  "requirements": ["aiohttp>=3.8.0"],
+  "version": "1.0.0"
+}

@@ -1,0 +1,123 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Water Heater Scheduler",
+        "description": "Set up price-based water heater scheduling.",
+        "data": {
+          "water_heater_entity_id": "Water heater entity",
+          "price_sensor_entity_id": "Price sensor entity",
+          "temperature_preset": "Temperature preset",
+          "dynamic_window_mode": "Dynamic window mode"
+        },
+        "data_description": {
+          "water_heater_entity_id": "The water heater to control",
+          "price_sensor_entity_id": "Sensor providing electricity prices (with price_curve attribute)",
+          "temperature_preset": "Choose eco (efficient), comfort (default), performance (max), or custom",
+          "dynamic_window_mode": "Automatically pick the cheapest day/night window"
+        }
+      },
+      "advanced": {
+        "title": "Advanced Settings",
+        "description": "Configure scheduling windows, helper entities, and other advanced options.",
+        "data": {
+          "away_mode_entity_id": "Away mode entity",
+          "bath_mode_entity_id": "Bath mode entity",
+          "night_window_start": "Night window start",
+          "night_window_end": "Night window end",
+          "heating_duration_hours": "Heating duration (hours)",
+          "legionella_day": "Legionella protection day",
+          "legionella_duration_hours": "Legionella duration (hours)",
+          "bath_auto_off_temp": "Bath auto-off temperature",
+          "min_cycle_gap_minutes": "Minimum cycle gap (minutes)",
+          "evaluation_interval_minutes": "Evaluation interval (minutes)"
+        },
+        "data_description": {
+          "away_mode_entity_id": "Switch or input_boolean to enable away mode (optional)",
+          "bath_mode_entity_id": "Switch or input_boolean to trigger bath boost (optional)",
+          "night_window_start": "Start of night heating window (HH:MM)",
+          "night_window_end": "End of night heating window (HH:MM)",
+          "heating_duration_hours": "How long to heat during each window",
+          "legionella_day": "Day of week for legionella protection cycle",
+          "legionella_duration_hours": "Duration of legionella high-temp cycle",
+          "bath_auto_off_temp": "Temperature at which to end bath boost",
+          "min_cycle_gap_minutes": "Minimum time between heating cycles",
+          "evaluation_interval_minutes": "How often to re-evaluate prices and schedule"
+        }
+      },
+      "custom_temps": {
+        "title": "Custom Temperatures",
+        "description": "Override temperatures when using 'custom' preset.",
+        "data": {
+          "night_preheat_temp": "Night preheat temperature",
+          "night_minimal_temp": "Night minimal temperature",
+          "day_preheat_temp": "Day preheat temperature",
+          "day_minimal_temp": "Day minimal temperature",
+          "legionella_temp": "Legionella temperature"
+        }
+      }
+    },
+    "error": {
+      "invalid_water_heater": "Invalid water heater entity",
+      "invalid_price_sensor": "Invalid price sensor entity",
+      "already_configured": "Water heater is already configured"
+    },
+    "abort": {
+      "already_configured": "This water heater is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Water Heater Scheduler Options",
+        "description": "Adjust scheduling settings.",
+        "data": {
+          "price_sensor_entity_id": "Price sensor entity",
+          "temperature_preset": "Temperature preset",
+          "dynamic_window_mode": "Dynamic window mode"
+        }
+      },
+      "advanced": {
+        "title": "Advanced Settings",
+        "data": {
+          "away_mode_entity_id": "Away mode entity",
+          "bath_mode_entity_id": "Bath mode entity",
+          "night_window_start": "Night window start",
+          "night_window_end": "Night window end",
+          "heating_duration_hours": "Heating duration (hours)",
+          "legionella_day": "Legionella protection day",
+          "legionella_duration_hours": "Legionella duration (hours)",
+          "bath_auto_off_temp": "Bath auto-off temperature",
+          "min_cycle_gap_minutes": "Minimum cycle gap (minutes)",
+          "evaluation_interval_minutes": "Evaluation interval (minutes)"
+        }
+      },
+      "custom_temps": {
+        "title": "Custom Temperatures",
+        "data": {
+          "night_preheat_temp": "Night preheat temperature",
+          "night_minimal_temp": "Night minimal temperature",
+          "day_preheat_temp": "Day preheat temperature",
+          "day_minimal_temp": "Day minimal temperature",
+          "legionella_temp": "Legionella temperature"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "program": {
+        "name": "Current Program"
+      },
+      "target_temperature": {
+        "name": "Target Temperature"
+      },
+      "status": {
+        "name": "Status"
+      },
+      "next_heating": {
+        "name": "Next Heating"
+      }
+    }
+  }
+}
