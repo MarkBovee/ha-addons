@@ -47,222 +47,40 @@ options:
   mqtt_user: ""
   mqtt_password: ""
 
-# Schema defines the data types for validation (new Supervisor UI schema)
+# Schema defines the data types for validation
 schema:
-  # --- Basic experience ---
-  water_heater_entity_id:
-    name: Water heater entity
-    required: true
-    description: Water heater entity to control
-    selector:
-      entity:
-        multiple: false
-        filter:
-          - domain: water_heater
-  price_sensor_entity_id:
-    name: Price sensor entity
-    description: Price sensor providing Nord Pool data
-    selector:
-      entity:
-        multiple: false
-        filter:
-          - domain: sensor
-  temperature_preset:
-    name: Temperature preset
-    description: Choose a predefined heating profile
-    selector:
-      select:
-        mode: dropdown
-        options:
-          - label: Eco (efficient)
-            value: eco
-          - label: Comfort (default)
-            value: comfort
-          - label: Performance (max comfort)
-            value: performance
-          - label: Custom (use overrides below)
-            value: custom
-  dynamic_window_mode:
-    name: Dynamic window mode
-    description: Automatically pick the cheapest day/night window
-    selector:
-      boolean:
-    default: false
+  # Entity Selection
+  water_heater_entity_id: str
+  price_sensor_entity_id: str?
+  away_mode_entity_id: str?
+  bath_mode_entity_id: str?
   
-  # --- Optional helper entities ---
-  away_mode_entity_id:
-    name: Away mode entity
-    description: Switch/input_boolean that enables away mode
-    selector:
-      entity:
-        multiple: false
-        filter:
-          - domain: switch
-          - domain: input_boolean
-    required: false
-    advanced: true
-  bath_mode_entity_id:
-    name: Bath mode entity
-    description: Switch/input_boolean to trigger bath boost
-    selector:
-      entity:
-        multiple: false
-        filter:
-          - domain: switch
-          - domain: input_boolean
-    required: false
-    advanced: true
+  # Schedule Settings
+  evaluation_interval_minutes: int(1,60)
+  night_window_start: str
+  night_window_end: str
+  heating_duration_hours: int(1,4)
+  legionella_day: list(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)
+  legionella_duration_hours: int(1,6)
+  bath_auto_off_temp: int(40,60)
   
-  # --- Advanced scheduling ---
-  evaluation_interval_minutes:
-    name: Evaluation interval
-    description: How often the scheduler evaluates prices
-    selector:
-      number:
-        min: 1
-        max: 60
-        unit_of_measurement: min
-    advanced: true
-  night_window_start:
-    name: Night window start
-    selector:
-      time:
-    advanced: true
-  night_window_end:
-    name: Night window end
-    selector:
-      time:
-    advanced: true
-  heating_duration_hours:
-    name: Heating duration
-    selector:
-      number:
-        min: 1
-        max: 4
-        unit_of_measurement: h
-    advanced: true
-  legionella_day:
-    name: Legionella day
-    selector:
-      select:
-        options:
-          - Monday
-          - Tuesday
-          - Wednesday
-          - Thursday
-          - Friday
-          - Saturday
-          - Sunday
-    advanced: true
-  legionella_duration_hours:
-    name: Legionella duration
-    selector:
-      number:
-        min: 1
-        max: 6
-        unit_of_measurement: h
-    advanced: true
-  bath_auto_off_temp:
-    name: Bath auto-off temperature
-    selector:
-      number:
-        min: 40
-        max: 60
-        mode: slider
-        unit_of_measurement: °C
-    advanced: true
-  min_cycle_gap_minutes:
-    name: Minimum cycle gap
-    selector:
-      number:
-        min: 10
-        max: 180
-        unit_of_measurement: min
-    advanced: true
-  log_level:
-    name: Log level
-    selector:
-      select:
-        options:
-          - debug
-          - info
-          - warning
-          - error
-    advanced: true
-
-  # --- Custom temperature overrides ---
-  night_preheat_temp:
-    name: Night preheat temperature
-    description: Used only when preset = custom
-    selector:
-      number:
-        min: 45
-        max: 65
-        unit_of_measurement: °C
-    required: false
-    advanced: true
-  night_minimal_temp:
-    name: Night minimal temperature
-    selector:
-      number:
-        min: 40
-        max: 60
-        unit_of_measurement: °C
-    required: false
-    advanced: true
-  day_preheat_temp:
-    name: Day preheat temperature
-    selector:
-      number:
-        min: 50
-        max: 70
-        unit_of_measurement: °C
-    required: false
-    advanced: true
-  day_minimal_temp:
-    name: Day minimal temperature
-    selector:
-      number:
-        min: 30
-        max: 50
-        unit_of_measurement: °C
-    required: false
-    advanced: true
-  legionella_temp:
-    name: Legionella temperature
-    selector:
-      number:
-        min: 60
-        max: 70
-        unit_of_measurement: °C
-    required: false
-    advanced: true
-
-  # --- MQTT passthrough ---
-  mqtt_host:
-    name: MQTT host
-    selector:
-      text:
-    required: false
-    advanced: true
-  mqtt_port:
-    name: MQTT port
-    selector:
-      number:
-        min: 1
-        max: 65535
-    required: false
-    advanced: true
-  mqtt_user:
-    name: MQTT user
-    selector:
-      text:
-    required: false
-    advanced: true
-  mqtt_password:
-    name: MQTT password
-    selector:
-      text:
-        type: password
-    required: false
-    advanced: true
+  # Temperature Preset
+  temperature_preset: list(eco|comfort|performance|custom)
+  dynamic_window_mode: bool
+  
+  # Custom Temperature Overrides
+  night_preheat_temp: int(45,65)?
+  night_minimal_temp: int(40,60)?
+  day_preheat_temp: int(50,70)?
+  day_minimal_temp: int(30,50)?
+  legionella_temp: int(60,70)?
+  
+  # Advanced Settings
+  min_cycle_gap_minutes: int(10,180)?
+  log_level: list(debug|info|warning|error)?
+  
+  # MQTT settings (optional)
+  mqtt_host: str?
+  mqtt_port: int?
+  mqtt_user: str?
+  mqtt_password: str?

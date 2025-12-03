@@ -29,14 +29,6 @@ Schedule domestic hot water heating based on electricity prices. This add-on opt
 
 ### Configuration UI at a Glance
 
-The add-on now uses Home Assistant's selector-based form so the most important fields stay at the top and everything else is tucked under the **Advanced** toggle. Highlights:
-
-- **Entity pickers** for the water heater and price sensor prevent typos and let you pick the right sensor (choose the Energy Prices import sensor if yours differs from the default `sensor.ep_price_import`).
-- **Helper entity selectors** (Away/Bath switches) accept either `switch` or `input_boolean` entities and live under the Advanced section.
-- **Schedule tuning & custom temperatures** sit in Advanced, so the default view only shows the essentials: heater entity, price sensor, preset, and Dynamic Window Mode toggle.
-
-Switch the form to Advanced if you need to change timing windows, legionella settings, MQTT credentials, or provide custom temperatures.
-
 ### Basic Setup
 
 ```yaml

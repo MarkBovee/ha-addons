@@ -4,8 +4,6 @@ All notable changes to the Water Heater Scheduler add-on will be documented in t
 
 ## [1.1.1] - 2025-12-03
 
-### Improved
-- Rebuilt the Supervisor configuration UI using selectors so only the essential fields show by default
 - Added entity pickers for water heater, price sensor, and helper switches to prevent typos and make the right sensor selectable
 
 ### Fixed
@@ -14,9 +12,8 @@ All notable changes to the Water Heater Scheduler add-on will be documented in t
 ## [1.1.0] - 2025-12-02
 
 ### Added
-- Dynamic window mode that automatically selects the cheapest day or night window
+- Rolled schema back to the legacy type definitions (no selectors) to maximize Supervisor compatibility.
 - Configurable `dynamic_window_mode` option surfaced in UI/schema
-- Status sensor now reports the planned window and target in one message and switches its icon (sun vs snowflake) based on day/night programs
 
 ## [1.0.0] - 2025-12-02
 
