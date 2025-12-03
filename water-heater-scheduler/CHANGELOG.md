@@ -8,6 +8,9 @@ All notable changes to the Water Heater Scheduler add-on will be documented in t
 - Rebuilt the Supervisor configuration UI using selectors so only the essential fields show by default
 - Added entity pickers for water heater, price sensor, and helper switches to prevent typos and make the right sensor selectable
 
+### Fixed
+- Corrected the add-on schema definition so Home Assistant recognizes the configuration and the add-on appears in the store
+
 ## [1.1.0] - 2025-12-02
 
 ### Added
