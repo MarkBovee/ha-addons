@@ -204,6 +204,7 @@ class HomeAssistantApi:
         """
         try:
             url = f"{self.base_url}/states"
+            logger.debug("Fallback: fetching all states from %s", url)
             response = requests.get(url, headers=self._headers, timeout=30)
             
             if response.ok:
@@ -216,8 +217,8 @@ class HomeAssistantApi:
                 return None
             else:
                 logger.warning(
-                    "Fallback state fetch failed: %d - %s",
-                    response.status_code, response.text[:100]
+                    "Fallback state fetch failed: %d - %s (url=%s)",
+                    response.status_code, response.text[:100], url
                 )
                 return None
         except Exception as e:
@@ -259,8 +260,10 @@ class HomeAssistantApi:
             True if connection successful, False otherwise
         """
         try:
+            url = f"{self.base_url}/states"
+            logger.debug("Testing HA API connection: url=%s, token_len=%d", url, len(self.token) if self.token else 0)
             response = requests.get(
-                f"{self.base_url}/states",
+                url,
                 headers=self._headers,
                 timeout=10
             )
@@ -269,8 +272,8 @@ class HomeAssistantApi:
                 return True
             else:
                 logger.warning(
-                    "Home Assistant API test failed: %d - %s",
-                    response.status_code, response.text[:200]
+                    "Home Assistant API test failed: %d - %s (url=%s)",
+                    response.status_code, response.text[:200], url
                 )
                 return False
         except Exception as e:
