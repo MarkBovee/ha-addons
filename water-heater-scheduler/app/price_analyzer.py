@@ -153,7 +153,12 @@ class PriceAnalyzer:
         lowest_dt = min(prices, key=prices.get)
         return (lowest_dt, prices[lowest_dt])
     
-    def get_lowest_night_price(self, night_start: time, night_end: time) -> Optional[Tuple[datetime, float]]:
+    def get_lowest_night_price(
+        self,
+        night_start: time,
+        night_end: time,
+        target_date: Optional[datetime] = None,
+    ) -> Optional[Tuple[datetime, float]]:
         """Get the lowest price in the night window.
         
         Args:
@@ -163,9 +168,14 @@ class PriceAnalyzer:
         Returns:
             Tuple of (datetime, price) or None
         """
-        return self.get_lowest_price_in_window(night_start, night_end)
+        return self.get_lowest_price_in_window(night_start, night_end, target_date)
     
-    def get_lowest_day_price(self, day_start: time, day_end: time = time(23, 45)) -> Optional[Tuple[datetime, float]]:
+    def get_lowest_day_price(
+        self,
+        day_start: time,
+        day_end: time = time(23, 45),
+        target_date: Optional[datetime] = None,
+    ) -> Optional[Tuple[datetime, float]]:
         """Get the lowest price in the day window.
         
         Args:
@@ -175,9 +185,14 @@ class PriceAnalyzer:
         Returns:
             Tuple of (datetime, price) or None
         """
-        return self.get_lowest_price_in_window(day_start, day_end)
+        return self.get_lowest_price_in_window(day_start, day_end, target_date)
     
-    def compare_night_vs_day(self, night_start: time, night_end: time) -> Optional[bool]:
+    def compare_night_vs_day(
+        self,
+        night_start: time,
+        night_end: time,
+        target_date: Optional[datetime] = None,
+    ) -> Optional[bool]:
         """Compare if night prices are cheaper than day prices.
         
         Args:
@@ -187,8 +202,8 @@ class PriceAnalyzer:
         Returns:
             True if night is cheaper, False if day is cheaper, None if no data
         """
-        night_lowest = self.get_lowest_night_price(night_start, night_end)
-        day_lowest = self.get_lowest_day_price(night_end)
+        night_lowest = self.get_lowest_night_price(night_start, night_end, target_date)
+        day_lowest = self.get_lowest_day_price(night_end, target_date=target_date)
         
         if night_lowest is None or day_lowest is None:
             return None

@@ -2,6 +2,12 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.1.6] - 2025-12-03
+
+### Added
+- Status sensor now keeps announcing the upcoming heating window once the
+	current slot has passed, as soon as the next day's prices are available.
+
 ## [1.1.5] - 2025-12-03
 
 ### Changed
