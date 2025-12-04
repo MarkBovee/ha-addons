@@ -19,7 +19,7 @@ from .models import ChargePoint, Connector
 
 # Import shared modules
 from shared.addon_base import setup_logging, setup_signal_handlers, sleep_with_shutdown_check
-from shared.ha_api import HomeAssistantApi
+from shared.ha_api import HomeAssistantApi, get_ha_api_config
 from shared.mqtt_setup import setup_mqtt_client, is_mqtt_available
 
 # Try to import MQTT Discovery for entity publishing
@@ -791,9 +791,14 @@ def main():
     max_current = get_int_env("CHARGER_MAX_CURRENT_PER_PHASE", 16)
     connector_id = parse_connector_id(os.environ.get("CHARGER_CONNECTOR_IDS", "1"))
 
-    # Initialize HA API client
-    ha_api = HomeAssistantApi()
-
+    # Initialize HA API client (same pattern as water-heater-scheduler)
+    base_url, token = get_ha_api_config()
+    ha_api = HomeAssistantApi(base_url, token)
+    
+    # Always test connection - required for price reading even when using MQTT for entities
+    if not ha_api.test_connection():
+        logger.warning("Home Assistant API connection test failed - price-based automation may not work")
+    
     timezone_name = ha_api.get_timezone()
     if timezone_name:
         logger.info("Detected Home Assistant timezone: %s", timezone_name)

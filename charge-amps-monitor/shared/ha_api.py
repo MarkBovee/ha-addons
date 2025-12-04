@@ -31,6 +31,14 @@ def get_ha_api_config() -> Tuple[str, str]:
     """
     token = os.getenv('HA_API_TOKEN') or os.getenv('SUPERVISOR_TOKEN', '')
     base_url = os.getenv('HA_API_URL') or 'http://supervisor/core/api'
+    
+    # Debug logging to help troubleshoot auth issues
+    if token:
+        token_preview = token[:10] + "..." if len(token) > 10 else token
+        logger.debug("HA API config: url=%s, token=%s (len=%d)", base_url, token_preview, len(token))
+    else:
+        logger.warning("No HA API token found in environment (checked HA_API_TOKEN and SUPERVISOR_TOKEN)")
+    
     return base_url.rstrip('/'), token
 
 
