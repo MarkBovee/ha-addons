@@ -161,6 +161,7 @@ class HomeAssistantApi:
         Returns:
             State dict with 'state' and 'attributes' keys, or None if not found
         """
+        # Try direct endpoint first
         try:
             url = f"{self.base_url}/states/{entity_id}"
             response = requests.get(url, headers=self._headers, timeout=10)
@@ -170,6 +171,14 @@ class HomeAssistantApi:
             elif response.status_code == 404:
                 logger.debug("Entity %s not found", entity_id)
                 return None
+            elif response.status_code == 403:
+                # Some Supervisor versions have issues with direct entity state access
+                # Fall back to getting all states and filtering
+                logger.debug(
+                    "Direct state access denied for %s, trying fallback method",
+                    entity_id
+                )
+                return self._get_entity_state_fallback(entity_id)
             else:
                 logger.warning(
                     "Failed to get state for %s: %d - %s",
@@ -178,6 +187,33 @@ class HomeAssistantApi:
                 return None
         except Exception as e:
             logger.error("Exception getting state for %s: %s", entity_id, e)
+            return None
+    
+    def _get_entity_state_fallback(self, entity_id: str) -> Optional[Dict]:
+        """Fallback method to get entity state by fetching all states.
+        
+        Used when direct /states/{entity_id} access is denied (403).
+        """
+        try:
+            url = f"{self.base_url}/states"
+            response = requests.get(url, headers=self._headers, timeout=30)
+            
+            if response.ok:
+                all_states = response.json()
+                for state in all_states:
+                    if state.get('entity_id') == entity_id:
+                        logger.debug("Found %s via fallback method", entity_id)
+                        return state
+                logger.debug("Entity %s not found in all states", entity_id)
+                return None
+            else:
+                logger.warning(
+                    "Fallback state fetch failed: %d - %s",
+                    response.status_code, response.text[:100]
+                )
+                return None
+        except Exception as e:
+            logger.error("Exception in fallback state fetch: %s", e)
             return None
     
     def call_service(self, domain: str, service: str, data: Dict) -> bool:

@@ -1,6 +1,6 @@
 name: Charge Amps - EV Charger Monitor
 description: Monitor Charge Amps EV charger status and create Home Assistant entities
-version: "1.2.0"
+version: "1.2.1"
 slug: charge_amps_ev_charger_monitor
 init: false
 homeassistant_api: true
@@ -19,7 +19,7 @@ options:
   base_url: "https://my.charge.space"
   update_interval: 1
   automation_enabled: true
-  price_sensor_entity: "sensor.energy_prices_electricity_import_price"
+  price_sensor_entity: "sensor.energy_prices_price_import"
   top_x_charge_count: 16
   max_current_per_phase: 16
   connector_ids: "1"
