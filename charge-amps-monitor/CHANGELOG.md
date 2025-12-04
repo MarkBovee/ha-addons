@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.0] - 2025-01-XX
+
+### Added
+- **HEMS Operation Mode** - support for external schedule control via MQTT
+  - New `operation_mode` config: `standalone` (default) or `hems`
+  - HEMS mode subscribes to `hems/charge-amps/{connector_id}/schedule/set` and `/schedule/clear` topics
+  - Publishes status to `hems/charge-amps/{connector_id}/status`
+  - Prepares for future integration with battery-optimizer or other HEMS systems
+- **Price Threshold Filtering** - limit charging to slots below a max price
+  - New `price_threshold` config (default: 0.25 EUR/kWh)
+  - Slots above threshold are excluded before unique price selection
+  - New `binary_sensor.ca_price_threshold_active` shows when threshold filtered any slots
+- **New Sensors**:
+  - `sensor.ca_schedule_source` - shows `standalone`, `hems`, or `none`
+  - `sensor.ca_hems_last_command` - timestamp of last HEMS command (diagnostic)
+  - `binary_sensor.ca_price_threshold_active` - indicates if threshold excluded any slots
+
+### Changed
+- **Slot Selection Behavior** (breaking): `top_x_charge_count` now selects top X unique price *levels* instead of raw slot count
+  - Example: With `top_x_charge_count: 2`, if 4 slots exist at €0.08 and 3 at €0.10, all 7 slots are selected (2 price levels)
+  - This provides more charging time when multiple slots share the same low price
+  - Users wanting exact slot count can set a low `price_threshold` to limit selection
+
+### Fixed
+- Changed price unit in logs from "cents/kWh" to "EUR/kWh" for consistency
+
 ## [1.2.6] - 2025-12-04
 
 ### Fixed

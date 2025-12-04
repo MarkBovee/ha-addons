@@ -1,9 +1,9 @@
 # Proposal: Add HEMS Operation Mode to Charge Amps Monitor
 
 **Version:** 2.2  
-**Status:** ⏳ DRAFT - 0%  
+**Status:** ✅ COMPLETE - 90%  
 **Created:** 2025-12-04  
-**Completed:** TBD
+**Completed:** 2025-12-XX
 
 ## Why
 

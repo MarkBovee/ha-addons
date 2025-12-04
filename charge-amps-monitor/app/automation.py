@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 class AutomationConfig:
     """Configuration for the charging automation."""
     enabled: bool
+    operation_mode: str  # 'standalone' or 'hems'
     price_entity_id: str
     top_x_charge_count: int
+    price_threshold: float  # EUR/kWh - max price for charging (standalone only)
     max_current_per_phase: int
     connector_id: int
     timezone: str
@@ -120,6 +122,7 @@ class ChargingAutomationCoordinator:
             price_entity_id=config.price_entity_id,
             timezone_name=config.timezone,
             top_x_count=config.top_x_charge_count,
+            price_threshold=config.price_threshold,
         )
         self._last_schedule: Optional[ChargingSchedule] = None
         self._last_analysis_time: Optional[datetime] = None
@@ -144,6 +147,7 @@ class ChargingAutomationCoordinator:
             price_entity_id=config.price_entity_id,
             timezone_name=config.timezone,
             top_x_count=config.top_x_charge_count,
+            price_threshold=config.price_threshold,
         )
         self._status.attributes.update({"automation_enabled": config.enabled})
         if not config.enabled:
