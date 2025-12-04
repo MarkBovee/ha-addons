@@ -65,6 +65,14 @@ Configure the addon through the Home Assistant UI:
    - **Host Name**: API hostname (default: `my.charge.space`)
    - **Base URL**: API base URL (default: `https://my.charge.space`)
    - **Update Interval**: Update interval in minutes (default: `1`)
+    - **Price-Aware Automation (optional)**
+       - **Enable Automation**: Toggle to allow the add-on to schedule charging windows
+       - **Price Sensor Entity**: Home Assistant entity that exposes price per kWh
+       - **Required Minutes Per Day**: Target charging duration that must be scheduled (default `240`)
+       - **Earliest Start Hour / Latest End Hour**: Daily window for automation (default `00:00`–`08:00`)
+       - **Max Current Per Phase**: Safety limit for active charging (default `16` amps)
+       - **Connector IDs**: Comma-separated Charge Amps connector IDs to control (default `1`)
+       - **Safety Margin Minutes**: Extra buffer to compensate for slow ramps (default `15`)
 
 4. Click **Save**
 5. Start the addon
@@ -121,6 +129,15 @@ The easiest way to run the addon locally is using the provided debug scripts:
    - `CHARGER_PASSWORD` - Your Charge Amps account password
    - `HA_API_TOKEN` - Your Home Assistant API token (Long-Lived Access Token)
    - `HA_API_URL` - Home Assistant API URL (default: `http://localhost:8123/api`)
+    - Optional automation overrides:
+       - `CHARGER_AUTOMATION_ENABLED`
+       - `CHARGER_PRICE_SENSOR_ENTITY`
+       - `CHARGER_REQUIRED_MINUTES_PER_DAY`
+       - `CHARGER_EARLIEST_START_HOUR`
+       - `CHARGER_LATEST_END_HOUR`
+       - `CHARGER_MAX_CURRENT_PER_PHASE`
+       - `CHARGER_CONNECTOR_IDS`
+       - `CHARGER_SAFETY_MARGIN_MINUTES`
 
 3. **Run the debug script:**
    
@@ -171,6 +188,14 @@ If you prefer to set environment variables manually:
    export CHARGER_HOST_NAME="my.charge.space"
    export CHARGER_BASE_URL="https://my.charge.space"
    export CHARGER_UPDATE_INTERVAL="1"
+   export CHARGER_AUTOMATION_ENABLED="false"
+   export CHARGER_PRICE_SENSOR_ENTITY="sensor.ep_price_import"
+   export CHARGER_REQUIRED_MINUTES_PER_DAY="240"
+   export CHARGER_EARLIEST_START_HOUR="0"
+   export CHARGER_LATEST_END_HOUR="8"
+   export CHARGER_MAX_CURRENT_PER_PHASE="16"
+   export CHARGER_CONNECTOR_IDS="1"
+   export CHARGER_SAFETY_MARGIN_MINUTES="15"
    export HA_API_TOKEN="your-ha-token"
    export HA_API_URL="http://localhost:8123/api"
    ```
@@ -182,6 +207,14 @@ If you prefer to set environment variables manually:
    $env:CHARGER_HOST_NAME="my.charge.space"
    $env:CHARGER_BASE_URL="https://my.charge.space"
    $env:CHARGER_UPDATE_INTERVAL="1"
+   $env:CHARGER_AUTOMATION_ENABLED="false"
+   $env:CHARGER_PRICE_SENSOR_ENTITY="sensor.ep_price_import"
+   $env:CHARGER_REQUIRED_MINUTES_PER_DAY="240"
+   $env:CHARGER_EARLIEST_START_HOUR="0"
+   $env:CHARGER_LATEST_END_HOUR="8"
+   $env:CHARGER_MAX_CURRENT_PER_PHASE="16"
+   $env:CHARGER_CONNECTOR_IDS="1"
+   $env:CHARGER_SAFETY_MARGIN_MINUTES="15"
    $env:HA_API_TOKEN="your-ha-token"
    $env:HA_API_URL="http://localhost:8123/api"
    ```

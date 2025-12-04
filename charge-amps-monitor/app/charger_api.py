@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -37,6 +37,11 @@ class ChargerApi:
             "Content-Type": "application/json",
             "Accept": "application/json"
         })
+
+    def _auth_headers(self) -> Dict[str, str]:
+        if not self._ensure_authenticated():
+            raise RuntimeError("Authentication required")
+        return {"Authorization": f"Bearer {self._auth_token}"}
     
     def authenticate(self) -> bool:
         """Authenticate with the Charge Amps API and retrieve an access token."""
@@ -104,15 +109,8 @@ class ChargerApi:
     
     def get_charge_points(self) -> Optional[List[ChargePoint]]:
         """Get the list of charge points for the authenticated user."""
-        if not self._ensure_authenticated():
-            logger.error("Cannot get charge points: authentication failed")
-            return None
-        
         try:
-            request_headers = {
-                "Authorization": f"Bearer {self._auth_token}"
-            }
-            
+            request_headers = self._auth_headers()
             response = self._session.post(
                 f"{self.base_url}/api/users/chargepoints/owned?expand=ocppConfig",
                 headers=request_headers,
@@ -133,6 +131,111 @@ class ChargerApi:
         except Exception as ex:
             logger.error(f"Exception while getting charge points: {ex}", exc_info=True)
             return None
+
+    def get_schedules(self, charge_point_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Fetch smart charging schedules for a charge point."""
+        try:
+            headers = self._auth_headers()
+            response = self._session.get(
+                f"{self.base_url}/api/smartChargingSchedules/chargepoint/{charge_point_id}",
+                headers=headers,
+                timeout=30,
+            )
+            if response.ok:
+                return response.json()
+            logger.error("Failed to fetch schedules (%s): %s", response.status_code, response.text[:200])
+            return None
+        except Exception as exc:
+            logger.error("Exception fetching schedules: %s", exc, exc_info=True)
+            return None
+
+    def upsert_schedule(
+        self,
+        charge_point_id: str,
+        connector_id: int,
+        start_of_schedule: str,
+        schedule_periods: List[Dict[str, Any]],
+        max_current: float,
+        timezone_name: str,
+        schedule_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Create or update a smart charging schedule with multiple periods.
+        
+        Args:
+            charge_point_id: The charger ID
+            connector_id: The connector number (usually 1)
+            start_of_schedule: ISO timestamp for the start of the week (Sunday midnight UTC)
+            schedule_periods: List of dicts with 'from' and 'to' as seconds from week start
+            max_current: Maximum current in amps for all periods
+            timezone_name: Timezone name (e.g., "Europe/Amsterdam")
+            schedule_id: Optional existing schedule ID for updates
+        """
+        # Add maxCurrent to each period
+        periods_with_current = [
+            {
+                "from": p["from"],
+                "to": p["to"],
+                "maxCurrent": float(max_current),
+            }
+            for p in schedule_periods
+        ]
+        
+        payload = {
+            "scheduleId": schedule_id,
+            "chargePointId": charge_point_id,
+            "connectorId": connector_id,
+            "validFrom": None,
+            "validTo": None,
+            "defaultCurrent": 0,
+            "schedulePeriods": periods_with_current,
+            "isActive": True,
+            "isSynced": True,
+            "timeZone": timezone_name,
+            "startOfSchedule": start_of_schedule,
+        }
+
+        try:
+            headers = self._auth_headers()
+            response = self._session.put(
+                f"{self.base_url}/api/smartChargingSchedules",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+            if response.ok:
+                logger.info("Smart charging schedule upserted: %d periods", len(periods_with_current))
+                return response.json()
+            logger.error(
+                "Failed to upsert schedule (%s): %s",
+                response.status_code,
+                response.text[:200],
+            )
+            return None
+        except Exception as exc:
+            logger.error("Exception writing schedule: %s", exc, exc_info=True)
+            return None
+
+    def delete_schedule(self, charge_point_id: str, connector_id: int) -> bool:
+        """Delete the automation schedule for the connector."""
+        try:
+            headers = self._auth_headers()
+            response = self._session.delete(
+                f"{self.base_url}/api/smartChargingSchedules/{charge_point_id}/{connector_id}",
+                headers=headers,
+                timeout=30,
+            )
+            if response.ok:
+                logger.info("Deleted smart charging schedule for connector %s", connector_id)
+                return True
+            logger.error(
+                "Failed to delete schedule (%s): %s",
+                response.status_code,
+                response.text[:200],
+            )
+            return False
+        except Exception as exc:
+            logger.error("Exception deleting schedule: %s", exc, exc_info=True)
+            return False
     
     @staticmethod
     def _decode_jwt_payload(base64_payload: str) -> Optional[dict]:

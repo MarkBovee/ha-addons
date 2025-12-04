@@ -17,6 +17,24 @@ except ImportError:
     DOTENV_AVAILABLE = False
 
 
+DEFAULT_ENV_VALUES = {
+    "CHARGER_AUTOMATION_ENABLED": "false",
+    "CHARGER_PRICE_SENSOR_ENTITY": "sensor.ep_price_import",
+    "CHARGER_REQUIRED_MINUTES_PER_DAY": "240",
+    "CHARGER_EARLIEST_START_HOUR": "0",
+    "CHARGER_LATEST_END_HOUR": "8",
+    "CHARGER_MAX_CURRENT_PER_PHASE": "16",
+    "CHARGER_CONNECTOR_IDS": "1",
+    "CHARGER_SAFETY_MARGIN_MINUTES": "15",
+}
+
+
+def apply_default_env_values():
+    """Ensure optional configuration variables always have sensible defaults."""
+    for key, value in DEFAULT_ENV_VALUES.items():
+        os.environ.setdefault(key, value)
+
+
 def load_env_file():
     """Load environment variables from .env file if it exists."""
     if DOTENV_AVAILABLE:
@@ -90,6 +108,13 @@ def print_config_summary():
     print(f"Host Name: {os.environ.get('CHARGER_HOST_NAME', 'my.charge.space (default)')}")
     print(f"Base URL: {os.environ.get('CHARGER_BASE_URL', 'https://my.charge.space (default)')}")
     print(f"Update Interval: {os.environ.get('CHARGER_UPDATE_INTERVAL', '1 (default)')} minutes")
+    print(f"Automation Enabled: {os.environ.get('CHARGER_AUTOMATION_ENABLED', 'false')}")
+    print(f"Price Sensor: {os.environ.get('CHARGER_PRICE_SENSOR_ENTITY', 'sensor.ep_price_import')}")
+    print(f"Required Minutes / Day: {os.environ.get('CHARGER_REQUIRED_MINUTES_PER_DAY', '240')} minutes")
+    print(f"Window: {os.environ.get('CHARGER_EARLIEST_START_HOUR', '0')}h - {os.environ.get('CHARGER_LATEST_END_HOUR', '8')}h")
+    print(f"Max Current / Phase: {os.environ.get('CHARGER_MAX_CURRENT_PER_PHASE', '16')}A")
+    print(f"Connector IDs: {os.environ.get('CHARGER_CONNECTOR_IDS', '1')} (CSV)")
+    print(f"Safety Margin: {os.environ.get('CHARGER_SAFETY_MARGIN_MINUTES', '15')} minutes")
     print(f"HA API URL: {os.environ.get('HA_API_URL', 'http://localhost:8123/api (default)')}")
     print(f"HA API Token: {'SET' if os.environ.get('HA_API_TOKEN') else 'NOT SET'}")
     print("=" * 60 + "\n")
@@ -99,6 +124,7 @@ def main():
     """Main entry point for local debug script."""
     # Load .env file if available
     load_env_file()
+    apply_default_env_values()
     
     # Validate configuration
     if not validate_config():

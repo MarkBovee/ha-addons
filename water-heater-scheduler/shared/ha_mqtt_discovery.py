@@ -29,6 +29,7 @@ Usage:
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -185,6 +186,7 @@ class MqttDiscovery:
         mqtt_password: Optional[str] = None,
         manufacturer: str = "HA Addons",
         model: Optional[str] = None,
+        client_id_suffix: Optional[str] = None,
     ):
         """Initialize MQTT Discovery client.
         
@@ -212,6 +214,7 @@ class MqttDiscovery:
         self.mqtt_password = mqtt_password
         self.manufacturer = manufacturer
         self.model = model or addon_name
+        self._client_id_suffix = self._sanitize_suffix(client_id_suffix)
         
         self._client: Optional[mqtt.Client] = None
         self._connected = False
@@ -285,11 +288,13 @@ class MqttDiscovery:
         """
         try:
             # Use callback API version 2 for paho-mqtt 2.x compatibility
+            client_id = f"{self.addon_id}_discovery{self._client_id_suffix}"
             self._client = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                client_id=f"{self.addon_id}_discovery",
+                client_id=client_id,
                 protocol=mqtt.MQTTv311,
             )
+            logger.debug("Using MQTT client_id=%s", client_id)
             
             self._client.on_connect = self._on_connect
             self._client.on_disconnect = self._on_disconnect
@@ -717,6 +722,18 @@ class MqttDiscovery:
     def get_published_entities(self) -> List[str]:
         """Get list of entity IDs published in this session."""
         return self._published_entities.copy()
+
+    def _sanitize_suffix(self, suffix: Optional[str]) -> str:
+        if not suffix:
+            return ""
+        trimmed = suffix.strip()
+        if not trimmed:
+            return ""
+        safe = re.sub(r"[^A-Za-z0-9_-]", "", trimmed)
+        if not safe:
+            return ""
+        # MQTT client IDs should be reasonably short; enforce max 16 chars on suffix
+        return safe[:16]
 
 
 def get_mqtt_config_from_env() -> Dict[str, Any]:

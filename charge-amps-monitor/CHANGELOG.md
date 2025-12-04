@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.2.0] - 2025-12-04
+
+### Added
+- **Price-aware charging automation** - automatically schedules charging during cheapest electricity price periods
+  - Integrates with energy-prices add-on price sensor
+  - Selects top X unique price levels (configurable, default 16)
+  - Merges consecutive time slots into continuous charging periods
+  - Pushes smart charging schedule to Charge Amps API
+- New configuration options:
+  - `automation_enabled`: Enable/disable price-aware charging
+  - `price_sensor_entity`: Home Assistant price sensor entity ID
+  - `top_x_charge_count`: Number of unique price levels to select (more levels = more charging time)
+  - `max_current_per_phase`: Maximum charging current in amps
+  - `timezone`: Timezone for schedule calculations
+
+### Changed
+- Reduced logging verbosity - price analysis now at debug level
+- Only logs and pushes schedule when it changes
+
 ## [1.1.4] - 2025-12-02
 
 ### Fixed

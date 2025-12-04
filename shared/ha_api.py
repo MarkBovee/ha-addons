@@ -232,3 +232,21 @@ class HomeAssistantApi:
         except Exception as e:
             logger.warning("Home Assistant API test exception: %s", e)
             return False
+
+    def get_config(self) -> Optional[Dict]:
+        """Fetch Home Assistant configuration (timezone, unit system, etc.)."""
+        try:
+            response = requests.get(f"{self.base_url}/config", headers=self._headers, timeout=10)
+            if response.ok:
+                return response.json()
+            logger.debug("Failed to fetch HA config: %s - %s", response.status_code, response.text[:200])
+            return None
+        except Exception as exc:
+            logger.debug("Exception fetching HA config: %s", exc)
+            return None
+
+    def get_timezone(self) -> Optional[str]:
+        cfg = self.get_config()
+        if cfg:
+            return cfg.get("time_zone") or cfg.get("timeZone")
+        return None

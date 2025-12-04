@@ -4,10 +4,16 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
 
+from .automation import (
+    AutomationConfig,
+    AutomationStatus,
+    ChargingAutomationCoordinator,
+)
 from .charger_api import ChargerApi
 from .models import ChargePoint, Connector
 
@@ -18,7 +24,7 @@ from shared.mqtt_setup import setup_mqtt_client, is_mqtt_available
 
 # Try to import MQTT Discovery for entity publishing
 try:
-    from shared.ha_mqtt_discovery import EntityConfig
+    from shared.ha_mqtt_discovery import ButtonConfig, EntityConfig
     MQTT_ENTITY_CONFIG_AVAILABLE = True
 except ImportError:
     MQTT_ENTITY_CONFIG_AVAILABLE = False
@@ -45,6 +51,149 @@ OLD_ENTITIES = [
 ]
 
 
+DEFAULT_TIMEZONE = "Europe/Amsterdam"
+
+
+def parse_bool(value: Optional[str], default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid integer for %s (%s). Using default %s.", name, raw, default)
+        return default
+
+
+def parse_connector_id(raw: Optional[str]) -> int:
+    if not raw:
+        return 1
+    for part in raw.split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        try:
+            return int(candidate)
+        except ValueError:
+            logger.warning("Skipping invalid connector id '%s'", candidate)
+            continue
+    return 1
+
+
+def _automation_attributes(status: AutomationStatus) -> dict:
+    attrs = {
+        "friendly_name": "Charging Schedule Status",
+        "message": status.message,
+        "plan_date": status.plan_date,
+    }
+    if status.attributes:
+        attrs.update(status.attributes)
+    return attrs
+
+
+def publish_automation_sensors_rest(status: AutomationStatus, ha_api_url: str, ha_api_token: str) -> None:
+    create_or_update_entity(
+        "sensor.ca_charging_schedule_status",
+        status.state,
+        {
+            **_automation_attributes(status),
+            "icon": "mdi:calendar-clock",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+
+    create_or_update_entity(
+        "sensor.ca_next_charge_start",
+        status.next_start or "unknown",
+        {
+            "friendly_name": "Next Charge Start",
+            "device_class": "timestamp",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+
+    create_or_update_entity(
+        "sensor.ca_next_charge_end",
+        status.next_end or "unknown",
+        {
+            "friendly_name": "Next Charge End",
+            "device_class": "timestamp",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+
+    create_or_update_entity(
+        "sensor.ca_charging_schedule_error",
+        status.last_error or "none",
+        {
+            "friendly_name": "Charging Schedule Error",
+            "icon": "mdi:alert-circle",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+
+
+def publish_automation_sensors_mqtt(
+    mqtt_client: 'MqttDiscovery',
+    status: AutomationStatus,
+    discovery: bool = False,
+) -> None:
+    if not MQTT_ENTITY_CONFIG_AVAILABLE:
+        logger.debug("MQTT discovery helpers unavailable; skipping automation sensor publish")
+        return
+    if discovery:
+        mqtt_client.publish_sensor(
+            EntityConfig(
+                object_id="schedule_status",
+                name="Charging Schedule Status",
+                state=status.state,
+                icon="mdi:calendar-clock",
+                attributes=_automation_attributes(status),
+            )
+        )
+        mqtt_client.publish_sensor(
+            EntityConfig(
+                object_id="next_start",
+                name="Next Charge Start",
+                state=status.next_start or "unknown",
+                device_class="timestamp",
+            )
+        )
+        mqtt_client.publish_sensor(
+            EntityConfig(
+                object_id="next_end",
+                name="Next Charge End",
+                state=status.next_end or "unknown",
+                device_class="timestamp",
+            )
+        )
+        mqtt_client.publish_sensor(
+            EntityConfig(
+                object_id="schedule_error",
+                name="Charging Schedule Error",
+                state=status.last_error or "none",
+                icon="mdi:alert-circle",
+            )
+        )
+    else:
+        mqtt_client.update_state("sensor", "schedule_status", status.state, _automation_attributes(status))
+        mqtt_client.update_state("sensor", "next_start", status.next_start or "unknown")
+        mqtt_client.update_state("sensor", "next_end", status.next_end or "unknown")
+        mqtt_client.update_state("sensor", "schedule_error", status.last_error or "none")
 def delete_entity(entity_id: str, ha_api_url: str, ha_api_token: str) -> bool:
     """Delete a Home Assistant entity."""
     try:
@@ -539,14 +688,18 @@ def update_entities_mqtt(
 
 def update_charger_status(
     charger_api: ChargerApi, ha_api_url: str, ha_api_token: str, verbose: bool = False
-) -> bool:
-    """Update charger status and Home Assistant entities via REST API."""
+) -> Optional[str]:
+    """Update charger status and Home Assistant entities via REST API.
+    
+    Returns:
+        The charge point ID if successful, None otherwise.
+    """
     try:
         charge_points = charger_api.get_charge_points()
 
         if not charge_points or len(charge_points) == 0:
             logger.warning("No charge points found")
-            return False
+            return None
 
         # Get the first charge point (assuming single charger setup)
         charge_point = charge_points[0]
@@ -554,7 +707,7 @@ def update_charger_status(
 
         if not connector:
             logger.warning(f"No connector found on charge point {charge_point.id}")
-            return False
+            return None
 
         # Create/update all entities
         create_entities(
@@ -568,30 +721,34 @@ def update_charger_status(
             f"Power={connector.current_power_w:.0f}W"
         )
 
-        return True
+        return charge_point.id
 
     except Exception as ex:
         logger.error(f"Failed to update charger status: {ex}", exc_info=True)
-        return False
+        return None
 
 
 def update_charger_status_mqtt(
     charger_api: ChargerApi, mqtt_client: 'MqttDiscovery', verbose: bool = False
-) -> bool:
-    """Update charger status via MQTT Discovery."""
+) -> Optional[str]:
+    """Update charger status via MQTT Discovery.
+    
+    Returns:
+        The charge point ID if successful, None otherwise.
+    """
     try:
         charge_points = charger_api.get_charge_points()
 
         if not charge_points or len(charge_points) == 0:
             logger.warning("No charge points found")
-            return False
+            return None
 
         charge_point = charge_points[0]
         connector = charge_point.connectors[0] if charge_point.connectors else None
 
         if not connector:
             logger.warning(f"No connector found on charge point {charge_point.id}")
-            return False
+            return None
 
         if verbose:
             # First run: publish full discovery config
@@ -607,17 +764,20 @@ def update_charger_status_mqtt(
             f"Power={connector.current_power_w:.0f}W"
         )
 
-        return True
+        return charge_point.id
 
     except Exception as ex:
         logger.error(f"Failed to update charger status via MQTT: {ex}", exc_info=True)
-        return False
+        return None
 
 
 def main():
     """Main application entry point."""
     # Register signal handlers using shared module
     shutdown_event = setup_signal_handlers(logger)
+    
+    # Check for single-run mode
+    run_once = os.environ.get("RUN_ONCE", "").lower() in ("1", "true", "yes")
 
     # Get configuration from environment
     email = os.environ.get("CHARGER_EMAIL")
@@ -625,10 +785,49 @@ def main():
     host_name = os.environ.get("CHARGER_HOST_NAME", "my.charge.space")
     base_url = os.environ.get("CHARGER_BASE_URL", "https://my.charge.space")
     update_interval = int(os.environ.get("CHARGER_UPDATE_INTERVAL", "1"))
+    automation_enabled = parse_bool(os.environ.get("CHARGER_AUTOMATION_ENABLED"), False)
+    price_sensor_entity = os.environ.get("CHARGER_PRICE_SENSOR_ENTITY", "sensor.ep_price_import")
+    top_x_charge_count = get_int_env("CHARGER_TOP_X_CHARGE_COUNT", 16)
+    max_current = get_int_env("CHARGER_MAX_CURRENT_PER_PHASE", 16)
+    connector_id = parse_connector_id(os.environ.get("CHARGER_CONNECTOR_IDS", "1"))
 
     # Initialize HA API client
     ha_api = HomeAssistantApi()
-    
+
+    timezone_name = ha_api.get_timezone()
+    if timezone_name:
+        logger.info("Detected Home Assistant timezone: %s", timezone_name)
+    else:
+        timezone_name = os.environ.get("CHARGER_TIMEZONE", DEFAULT_TIMEZONE)
+        logger.info("Falling back to default timezone: %s", timezone_name)
+
+    if automation_enabled and not ha_api.token:
+        logger.warning(
+            "Home Assistant API token missing; disabling automation features until it becomes available"
+        )
+        automation_enabled = False
+
+    automation_config = AutomationConfig(
+        enabled=automation_enabled,
+        price_entity_id=price_sensor_entity,
+        top_x_charge_count=top_x_charge_count,
+        max_current_per_phase=max_current,
+        connector_id=connector_id,
+        timezone=timezone_name,
+    )
+
+    logger.info(
+        "Automation config: enabled=%s, price_sensor=%s, top_x_charge=%d slots, connector=%s, max_current=%sA",
+        automation_config.enabled,
+        automation_config.price_entity_id,
+        automation_config.top_x_charge_count,
+        automation_config.connector_id,
+        automation_config.max_current_per_phase,
+    )
+
+    coordinator: Optional[ChargingAutomationCoordinator] = None
+    automation_status_discovery_done = False
+
     mqtt_client = None
 
     # Validate configuration
@@ -661,6 +860,11 @@ def main():
 
     logger.info("Successfully authenticated with Charge Amps API")
 
+    if ha_api.token:
+        coordinator = ChargingAutomationCoordinator(charger_api, ha_api, automation_config)
+    else:
+        logger.warning("Home Assistant token not available; automation coordinator disabled")
+
     # Try MQTT Discovery first (provides unique_id for UI management)
     mqtt_client = setup_mqtt_client(
         addon_name="Charge Amps Monitor",
@@ -669,6 +873,35 @@ def main():
         model="EV Charger"
     )
     use_mqtt = mqtt_client is not None
+
+    if coordinator and use_mqtt and mqtt_client and MQTT_ENTITY_CONFIG_AVAILABLE:
+        try:
+            mqtt_client.publish_button(
+                ButtonConfig(
+                    object_id="force_refresh",
+                    name="Force Schedule Refresh",
+                    device_class="restart",
+                    icon="mdi:refresh-circle",
+                    entity_category="config",
+                ),
+                press_callback=lambda: coordinator.request_force_refresh("mqtt_button"),
+            )
+        except Exception as exc:
+            logger.warning("Failed to publish MQTT force refresh button: %s", exc)
+
+    def sync_automation_status(status: Optional[AutomationStatus]) -> None:
+        nonlocal automation_status_discovery_done
+        if not status:
+            return
+        if use_mqtt and mqtt_client and MQTT_ENTITY_CONFIG_AVAILABLE:
+            publish_automation_sensors_mqtt(
+                mqtt_client,
+                status,
+                discovery=not automation_status_discovery_done,
+            )
+            automation_status_discovery_done = True
+        elif ha_api.token:
+            publish_automation_sensors_rest(status, ha_api.base_url, ha_api.token)
 
     if not use_mqtt:
         # Fall back to REST API
@@ -689,12 +922,28 @@ def main():
         else:
             logger.info("No old entities found to delete")
 
-    # Initial update (with verbose entity logging)
+    # Initial update (with verbose entity logging) - capture charge point ID
     logger.info("Performing initial charger status update...")
+    charge_point_id: Optional[str] = None
     if use_mqtt:
-        update_charger_status_mqtt(charger_api, mqtt_client, verbose=True)
+        charge_point_id = update_charger_status_mqtt(charger_api, mqtt_client, verbose=True)
     else:
-        update_charger_status(charger_api, ha_api.base_url, ha_api.token, verbose=True)
+        charge_point_id = update_charger_status(charger_api, ha_api.base_url, ha_api.token, verbose=True)
+
+    # Run coordinator tick to analyze prices, log schedule, and push to charger
+    if coordinator:
+        try:
+            initial_status = coordinator.tick(charge_point_id=charge_point_id)
+            sync_automation_status(initial_status)
+        except Exception as exc:
+            logger.error("Automation coordinator failed during initial run: %s", exc, exc_info=True)
+    
+    # Exit early if run_once mode
+    if run_once:
+        logger.info("Single-run mode (--once) - exiting after initial update")
+        if mqtt_client:
+            mqtt_client.disconnect()
+        return
 
     # Main loop
     update_interval_seconds = update_interval * 60
@@ -709,9 +958,16 @@ def main():
             try:
                 logger.info("Updating charger status...")
                 if use_mqtt and mqtt_client and mqtt_client.is_connected():
-                    update_charger_status_mqtt(charger_api, mqtt_client)
+                    charge_point_id = update_charger_status_mqtt(charger_api, mqtt_client)
                 else:
-                    update_charger_status(charger_api, ha_api.base_url, ha_api.token)
+                    charge_point_id = update_charger_status(charger_api, ha_api.base_url, ha_api.token)
+
+                if coordinator:
+                    try:
+                        status = coordinator.tick(charge_point_id=charge_point_id)
+                        sync_automation_status(status)
+                    except Exception as automation_ex:
+                        logger.error("Automation coordinator error: %s", automation_ex, exc_info=True)
 
             except Exception as ex:
                 logger.error(f"Error in update loop: {ex}", exc_info=True)

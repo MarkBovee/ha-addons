@@ -77,7 +77,8 @@ def setup_mqtt_client(
     config: Optional[Dict[str, Any]] = None,
     manufacturer: str = "HA Addons",
     model: Optional[str] = None,
-    connection_timeout: float = 10.0
+    connection_timeout: float = 10.0,
+    client_id_suffix: Optional[str] = None,
 ) -> Optional['MqttDiscovery']:
     """Set up MQTT Discovery client if available.
     
@@ -92,6 +93,7 @@ def setup_mqtt_client(
         manufacturer: Device manufacturer for HA UI (default: "HA Addons")
         model: Device model for HA UI (default: addon_name)
         connection_timeout: Timeout for MQTT connection in seconds
+        client_id_suffix: Optional suffix appended to the MQTT client ID
         
     Returns:
         Connected MqttDiscovery client, or None if unavailable/failed
@@ -109,6 +111,11 @@ def setup_mqtt_client(
     mqtt_port = config.get('mqtt_port') or int(os.getenv('MQTT_PORT', '0')) or env_config['mqtt_port']
     mqtt_user = config.get('mqtt_user') or os.getenv('MQTT_USER') or env_config['mqtt_user']
     mqtt_password = config.get('mqtt_password') or os.getenv('MQTT_PASSWORD') or env_config['mqtt_password']
+    suffix = (
+        client_id_suffix
+        or config.get('mqtt_client_id_suffix')
+        or os.getenv('MQTT_CLIENT_ID_SUFFIX')
+    )
     
     logger.info("Attempting MQTT Discovery connection to %s:%d...", mqtt_host, mqtt_port)
     
@@ -121,7 +128,8 @@ def setup_mqtt_client(
             mqtt_user=mqtt_user,
             mqtt_password=mqtt_password,
             manufacturer=manufacturer,
-            model=model or addon_name
+            model=model or addon_name,
+            client_id_suffix=suffix,
         )
         
         if mqtt_client.connect(timeout=connection_timeout):

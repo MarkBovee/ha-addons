@@ -11,6 +11,27 @@ from pathlib import Path
 ROOT = Path(__file__).parent.resolve()
 
 
+CHARGE_AMPS_DEFAULTS = {
+    "CHARGER_AUTOMATION_ENABLED": "false",
+    "CHARGER_PRICE_SENSOR_ENTITY": "sensor.ep_price_import",
+    "CHARGER_REQUIRED_MINUTES_PER_DAY": "240",
+    "CHARGER_EARLIEST_START_HOUR": "0",
+    "CHARGER_LATEST_END_HOUR": "8",
+    "CHARGER_MAX_CURRENT_PER_PHASE": "16",
+    "CHARGER_CONNECTOR_IDS": "1",
+    "CHARGER_SAFETY_MARGIN_MINUTES": "15",
+}
+
+
+def ensure_local_mqtt_suffix():
+    if os.environ.get("MQTT_CLIENT_ID_SUFFIX"):
+        return
+    host = os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "local"
+    sanitized_host = re.sub(r"[^A-Za-z0-9]", "", host or "local").lower()[:8] or "local"
+    suffix = f"_{sanitized_host}_{os.getpid()}"
+    os.environ["MQTT_CLIENT_ID_SUFFIX"] = suffix
+
+
 def sync_shared():
     """Sync shared modules to target add-on directory."""
     shared_src = ROOT / 'shared'
@@ -82,6 +103,11 @@ def apply_env(env: dict):
         os.environ["SUPERVISOR_TOKEN"] = ha
 
 
+def apply_charge_amps_defaults():
+    for key, value in CHARGE_AMPS_DEFAULTS.items():
+        os.environ.setdefault(key, value)
+
+
 REQUIRED_ENV = {
     "charge-amps-monitor": ["CHARGER_EMAIL", "CHARGER_PASSWORD", "SUPERVISOR_TOKEN", "HA_API_TOKEN"],
     # Extend as new add-ons are added
@@ -117,6 +143,30 @@ def mask(val: str, keep: int = 4):
     if len(val) <= keep:
         return "*" * len(val)
     return val[:keep] + "*" * (len(val) - keep)
+
+
+def print_charge_amps_summary():
+    print("Charge scheduling config:")
+    print(f"  Automation Enabled: {os.environ.get('CHARGER_AUTOMATION_ENABLED', 'false')}")
+    print(f"  Price Sensor: {os.environ.get('CHARGER_PRICE_SENSOR_ENTITY', 'sensor.ep_price_import')}")
+    print(
+        "  Window: "
+        f"{os.environ.get('CHARGER_EARLIEST_START_HOUR', '0')}h-"
+        f"{os.environ.get('CHARGER_LATEST_END_HOUR', '8')}h"
+    )
+    print(
+        "  Required Minutes: "
+        f"{os.environ.get('CHARGER_REQUIRED_MINUTES_PER_DAY', '240')}"
+    )
+    print(
+        "  Max Current / Phase: "
+        f"{os.environ.get('CHARGER_MAX_CURRENT_PER_PHASE', '16')}A"
+    )
+    print(f"  Connector IDs: {os.environ.get('CHARGER_CONNECTOR_IDS', '1')}")
+    print(
+        "  Safety Margin: "
+        f"{os.environ.get('CHARGER_SAFETY_MARGIN_MINUTES', '15')} minutes"
+    )
 
 
 def main():
@@ -184,12 +234,22 @@ def main():
 
     apply_env(merged_env)
 
+    if target["slug"] == "charge-amps-monitor":
+        apply_charge_amps_defaults()
+
+    ensure_local_mqtt_suffix()
+
     missing = validate_env(target["slug"])
     print(f"Running add-on: {target['name']} ({target['slug']}) at {target['path']}")
     # Show selective env summary
     sup = os.environ.get("SUPERVISOR_TOKEN", "")
     ha = os.environ.get("HA_API_TOKEN", "")
     print(f"Tokens: SUPERVISOR_TOKEN={mask(sup)} HA_API_TOKEN={mask(ha)}")
+    mqtt_suffix = os.environ.get("MQTT_CLIENT_ID_SUFFIX", "")
+    if mqtt_suffix:
+        print(f"MQTT client suffix: {mqtt_suffix}")
+    if target["slug"] == "charge-amps-monitor":
+        print_charge_amps_summary()
 
     if missing:
         print("Missing required env vars:")
