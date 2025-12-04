@@ -45,7 +45,7 @@ fi
 
 # Get Home Assistant API token from Supervisor
 export HA_API_TOKEN="${SUPERVISOR_TOKEN}"
-export HA_API_URL="http://supervisor/core"
+export HA_API_URL="http://supervisor/core/api"
 
 # Log configuration (without password)
 bashio::log.info "Starting EV Charger Monitor addon"
