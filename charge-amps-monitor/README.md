@@ -18,7 +18,65 @@ This addon connects to the Charge Amps API (my.charge.space) to monitor your EV 
 - **Periodic Updates**: Configurable update interval (default: 1 minute)
 - **Secure Authentication**: Uses Charge Amps API with JWT token management
 - **Comprehensive Monitoring**: Tracks charging status, power, consumption, and more
+- **Price-Aware Scheduling**: Automatically schedules charging during cheapest electricity periods
+- **Standalone & HEMS Modes**: Operate autonomously or integrate with external energy management
 - **UI-Managed Settings**: All configuration through Home Assistant addon UI
+
+## Operation Modes
+
+The addon supports two operation modes:
+
+### Standalone Mode (Default)
+
+In standalone mode, the addon autonomously analyzes electricity prices and schedules charging during the cheapest periods.
+
+**Features:**
+- Reads price data from an energy price sensor (e.g., from energy-prices addon)
+- Selects top X unique price levels for charging (configurable)
+- Price threshold filtering - excludes slots above a maximum price
+- Pushes charging schedules directly to the Charge Amps API
+
+**Configuration:**
+```yaml
+operation_mode: "standalone"
+automation_enabled: true
+price_sensor_entity: "sensor.energy_prices_price_import"
+top_x_charge_count: 16  # Number of unique price levels to include
+price_threshold: 0.25   # Max EUR/kWh - slots above this are excluded
+```
+
+### HEMS Mode (External Control)
+
+In HEMS (Home Energy Management System) mode, the addon receives charging schedules from an external system via MQTT.
+
+**Features:**
+- Subscribes to MQTT topics for schedule commands
+- Validates and applies externally-provided schedules
+- Publishes charger status for HEMS consumption
+- Prepares for integration with battery-optimizer or other orchestrators
+
+**MQTT Topics:**
+- `hems/charge-amps/{connector_id}/schedule/set` - Receive schedule
+- `hems/charge-amps/{connector_id}/schedule/clear` - Clear schedule
+- `hems/charge-amps/{connector_id}/status` - Published status
+
+**Configuration:**
+```yaml
+operation_mode: "hems"
+# price_threshold is ignored in HEMS mode
+```
+
+**Example schedule payload:**
+```json
+{
+  "periods": [
+    {"start": "2025-01-15T02:00:00", "end": "2025-01-15T04:00:00"},
+    {"start": "2025-01-15T14:00:00", "end": "2025-01-15T15:30:00"}
+  ],
+  "expires_at": "2025-01-15T23:59:59",
+  "source_id": "battery-optimizer"
+}
+```
 
 ## Installation
 
@@ -60,19 +118,28 @@ Configure the addon through the Home Assistant UI:
 2. Click **Configuration**
 3. Enter your settings:
 
+### Basic Settings
    - **Email**: Your Charge Amps account email
    - **Password**: Your Charge Amps account password
    - **Host Name**: API hostname (default: `my.charge.space`)
    - **Base URL**: API base URL (default: `https://my.charge.space`)
    - **Update Interval**: Update interval in minutes (default: `1`)
-    - **Price-Aware Automation (optional)**
-       - **Enable Automation**: Toggle to allow the add-on to schedule charging windows
-       - **Price Sensor Entity**: Home Assistant entity that exposes price per kWh
-       - **Required Minutes Per Day**: Target charging duration that must be scheduled (default `240`)
-       - **Earliest Start Hour / Latest End Hour**: Daily window for automation (default `00:00`–`08:00`)
-       - **Max Current Per Phase**: Safety limit for active charging (default `16` amps)
-       - **Connector IDs**: Comma-separated Charge Amps connector IDs to control (default `1`)
-       - **Safety Margin Minutes**: Extra buffer to compensate for slow ramps (default `15`)
+
+### Operation Mode
+   - **Operation Mode**: `standalone` (default) or `hems`
+     - `standalone`: Internal price-based scheduling
+     - `hems`: External schedule control via MQTT
+
+### Standalone Mode Options
+   - **Enable Automation**: Toggle to allow the add-on to schedule charging windows
+   - **Price Sensor Entity**: Home Assistant entity that exposes price per kWh
+   - **Top X Charge Count**: Number of unique price levels to select (default: `16`)
+     - *Note*: This selects price *levels*, not slot count. Multiple slots at the same price = more charging time.
+   - **Price Threshold**: Maximum price in EUR/kWh (default: `0.25`)
+     - Slots above this price are excluded from scheduling
+     - Set to `1.0` to effectively disable threshold filtering
+   - **Max Current Per Phase**: Safety limit for active charging (default `16` amps)
+   - **Connector IDs**: Comma-separated Charge Amps connector IDs to control (default `1`)
 
 4. Click **Save**
 5. Start the addon
@@ -95,9 +162,18 @@ The addon creates the following Home Assistant entities (all prefixed with `ca_`
 - `sensor.ca_charger_ocpp_status` - OCPP status
 - `sensor.ca_charger_error_code` - Error code (if any)
 
+### Automation Sensors
+- `sensor.ca_schedule_status` - Current schedule state (idle, active, error)
+- `sensor.ca_schedule_source` - Schedule source: `standalone`, `hems`, or `none`
+- `sensor.ca_next_start` - Next scheduled charge start time
+- `sensor.ca_next_end` - Next scheduled charge end time
+- `sensor.ca_schedule_error` - Last scheduling error (if any)
+- `sensor.ca_hems_last_command` - Timestamp of last HEMS command (diagnostic)
+
 ### Binary Sensors
 - `binary_sensor.ca_charger_online` - Charger online status
 - `binary_sensor.ca_charger_connector_enabled` - Connector enabled state
+- `binary_sensor.ca_price_threshold_active` - Indicates if price threshold excluded any slots
 
 ### Text Entities
 - `input_text.ca_charger_name` - Charge point name

@@ -15,6 +15,7 @@ from .automation import (
     ChargingAutomationCoordinator,
 )
 from .charger_api import ChargerApi
+from .hems_manager import HEMSScheduleManager
 from .models import ChargePoint, Connector
 
 # Import shared modules
@@ -52,6 +53,7 @@ OLD_ENTITIES = [
 
 
 DEFAULT_TIMEZONE = "Europe/Amsterdam"
+DEFAULT_PRICE_THRESHOLD = 0.25  # EUR/kWh
 
 
 def parse_bool(value: Optional[str], default: bool = False) -> bool:
@@ -68,6 +70,17 @@ def get_int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         logger.warning("Invalid integer for %s (%s). Using default %s.", name, raw, default)
+        return default
+
+
+def get_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("Invalid float for %s (%s). Using default %s.", name, raw, default)
         return default
 
 
@@ -151,10 +164,18 @@ def publish_automation_sensors_mqtt(
     mqtt_client: 'MqttDiscovery',
     status: AutomationStatus,
     discovery: bool = False,
+    schedule_source: str = "standalone",
+    hems_last_command: Optional[str] = None,
+    price_threshold_active: bool = False,
 ) -> None:
     if not MQTT_ENTITY_CONFIG_AVAILABLE:
         logger.debug("MQTT discovery helpers unavailable; skipping automation sensor publish")
         return
+    
+    # Add schedule_source to attributes
+    status_attrs = _automation_attributes(status)
+    status_attrs["schedule_source"] = schedule_source
+    
     if discovery:
         mqtt_client.publish_sensor(
             EntityConfig(
@@ -162,7 +183,7 @@ def publish_automation_sensors_mqtt(
                 name="Charging Schedule Status",
                 state=status.state,
                 icon="mdi:calendar-clock",
-                attributes=_automation_attributes(status),
+                attributes=status_attrs,
             )
         )
         mqtt_client.publish_sensor(
@@ -189,11 +210,46 @@ def publish_automation_sensors_mqtt(
                 icon="mdi:alert-circle",
             )
         )
+        # New sensors for HEMS mode
+        mqtt_client.publish_sensor(
+            EntityConfig(
+                object_id="schedule_source",
+                name="Schedule Source",
+                state=schedule_source,
+                icon="mdi:source-branch",
+            )
+        )
+        mqtt_client.publish_sensor(
+            EntityConfig(
+                object_id="hems_last_command",
+                name="HEMS Last Command",
+                state=hems_last_command or "unavailable",
+                device_class="timestamp" if hems_last_command else None,
+                icon="mdi:clock-outline",
+                entity_category="diagnostic",
+            )
+        )
+        mqtt_client.publish_binary_sensor(
+            EntityConfig(
+                object_id="price_threshold_active",
+                name="Price Threshold Active",
+                state="ON" if price_threshold_active else "OFF",
+                icon="mdi:filter-check" if price_threshold_active else "mdi:filter-off",
+                entity_category="diagnostic",
+            )
+        )
     else:
-        mqtt_client.update_state("sensor", "schedule_status", status.state, _automation_attributes(status))
+        mqtt_client.update_state("sensor", "schedule_status", status.state, status_attrs)
         mqtt_client.update_state("sensor", "next_start", status.next_start or "unknown")
         mqtt_client.update_state("sensor", "next_end", status.next_end or "unknown")
         mqtt_client.update_state("sensor", "schedule_error", status.last_error or "none")
+        mqtt_client.update_state("sensor", "schedule_source", schedule_source)
+        mqtt_client.update_state("sensor", "hems_last_command", hems_last_command or "unavailable")
+        mqtt_client.update_state(
+            "binary_sensor", 
+            "price_threshold_active", 
+            "ON" if price_threshold_active else "OFF"
+        )
 def delete_entity(entity_id: str, ha_api_url: str, ha_api_token: str) -> bool:
     """Delete a Home Assistant entity."""
     try:
@@ -785,9 +841,17 @@ def main():
     host_name = os.environ.get("CHARGER_HOST_NAME", "my.charge.space")
     charger_base_url = os.environ.get("CHARGER_BASE_URL", "https://my.charge.space")
     update_interval = int(os.environ.get("CHARGER_UPDATE_INTERVAL", "1"))
+    
+    # Operation mode: standalone or hems
+    operation_mode = os.environ.get("CHARGER_OPERATION_MODE", "standalone").lower()
+    if operation_mode not in ("standalone", "hems"):
+        logger.warning("Invalid operation_mode '%s', defaulting to 'standalone'", operation_mode)
+        operation_mode = "standalone"
+    
     automation_enabled = parse_bool(os.environ.get("CHARGER_AUTOMATION_ENABLED"), False)
     price_sensor_entity = os.environ.get("CHARGER_PRICE_SENSOR_ENTITY", "sensor.ep_price_import")
     top_x_charge_count = get_int_env("CHARGER_TOP_X_CHARGE_COUNT", 16)
+    price_threshold = get_float_env("CHARGER_PRICE_THRESHOLD", DEFAULT_PRICE_THRESHOLD)
     max_current = get_int_env("CHARGER_MAX_CURRENT_PER_PHASE", 16)
     connector_id = parse_connector_id(os.environ.get("CHARGER_CONNECTOR_IDS", "1"))
 
@@ -814,18 +878,23 @@ def main():
 
     automation_config = AutomationConfig(
         enabled=automation_enabled,
+        operation_mode=operation_mode,
         price_entity_id=price_sensor_entity,
         top_x_charge_count=top_x_charge_count,
+        price_threshold=price_threshold,
         max_current_per_phase=max_current,
         connector_id=connector_id,
         timezone=timezone_name,
     )
 
     logger.info(
-        "Automation config: enabled=%s, price_sensor=%s, top_x_charge=%d slots, connector=%s, max_current=%sA",
+        "Operation mode: %s | Automation: enabled=%s, price_sensor=%s, "
+        "top_x=%d unique prices, threshold=%.2f EUR/kWh, connector=%s, max_current=%sA",
+        automation_config.operation_mode,
         automation_config.enabled,
         automation_config.price_entity_id,
         automation_config.top_x_charge_count,
+        automation_config.price_threshold,
         automation_config.connector_id,
         automation_config.max_current_per_phase,
     )
@@ -894,17 +963,81 @@ def main():
         except Exception as exc:
             logger.warning("Failed to publish MQTT force refresh button: %s", exc)
 
-    def sync_automation_status(status: Optional[AutomationStatus]) -> None:
+    # HEMS Manager setup (only in HEMS mode with MQTT available)
+    hems_manager: Optional[HEMSScheduleManager] = None
+    if automation_config.operation_mode == "hems" and use_mqtt and mqtt_client:
+        logger.info("Initializing HEMS mode...")
+        
+        # Create callbacks for HEMS schedule handling
+        def on_hems_schedule_received(periods: list) -> bool:
+            """Callback when HEMS sends a schedule."""
+            if not coordinator or not charge_point_id:
+                logger.error("Cannot apply HEMS schedule: coordinator or charge point not ready")
+                return False
+            # TODO: Push the HEMS schedule directly to the charger
+            # For now, log and return success
+            logger.info("📥 HEMS schedule received with %d periods", len(periods))
+            return True
+        
+        def on_hems_schedule_cleared() -> bool:
+            """Callback when HEMS clears the schedule."""
+            if not coordinator or not charge_point_id:
+                logger.error("Cannot clear schedule: coordinator or charge point not ready")
+                return False
+            # TODO: Clear the schedule from the charger
+            logger.info("🗑️ HEMS schedule cleared")
+            return True
+        
+        hems_manager = HEMSScheduleManager(
+            mqtt_client=mqtt_client,
+            connector_id=automation_config.connector_id,
+            timezone_name=automation_config.timezone,
+            default_max_current=float(automation_config.max_current_per_phase),
+            on_schedule_received=on_hems_schedule_received,
+            on_schedule_cleared=on_hems_schedule_cleared,
+        )
+        
+        if hems_manager.subscribe():
+            logger.info("✅ HEMS mode active - waiting for external schedule commands")
+        else:
+            logger.error("Failed to subscribe to HEMS topics - falling back to idle")
+            hems_manager = None
+    elif automation_config.operation_mode == "hems" and not use_mqtt:
+        logger.warning("HEMS mode requested but MQTT not available - automation disabled")
+
+    def sync_automation_status(status: Optional[AutomationStatus], price_threshold_active: bool = False) -> None:
         nonlocal automation_status_discovery_done
         if not status:
             return
+        
+        # Determine schedule source based on operation mode and HEMS state
+        if automation_config.operation_mode == "hems" and hems_manager:
+            if hems_manager.has_active_schedule:
+                schedule_source = "hems"
+            else:
+                schedule_source = "none"
+            hems_last_command = hems_manager.last_command_at
+        else:
+            schedule_source = "standalone" if automation_config.enabled else "none"
+            hems_last_command = None
+        
         if use_mqtt and mqtt_client and MQTT_ENTITY_CONFIG_AVAILABLE:
             publish_automation_sensors_mqtt(
                 mqtt_client,
                 status,
                 discovery=not automation_status_discovery_done,
+                schedule_source=schedule_source,
+                hems_last_command=hems_last_command,
+                price_threshold_active=price_threshold_active,
             )
             automation_status_discovery_done = True
+            
+            # Also publish HEMS status if in HEMS mode
+            if hems_manager:
+                hems_manager.publish_status(
+                    charger_state=status.state,
+                    ready=True,
+                )
         elif ha_api.token:
             publish_automation_sensors_rest(status, ha_api.base_url, ha_api.token)
 

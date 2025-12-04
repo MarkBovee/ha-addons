@@ -1,6 +1,6 @@
 name: Charge Amps - EV Charger Monitor
 description: Monitor Charge Amps EV charger status and create Home Assistant entities
-version: "1.2.6"
+version: "1.3.0"
 slug: charge_amps_ev_charger_monitor
 init: false
 homeassistant_api: true
@@ -19,9 +19,15 @@ options:
   host_name: "my.charge.space"
   base_url: "https://my.charge.space"
   update_interval: 1
+  
+  # Operation mode: standalone (internal price-based) or hems (external MQTT control)
+  operation_mode: "standalone"
+  
+  # Standalone mode settings
   automation_enabled: true
   price_sensor_entity: "sensor.energy_prices_price_import"
   top_x_charge_count: 16
+  price_threshold: 0.25
   max_current_per_phase: 16
   connector_ids: "1"
   
@@ -38,11 +44,18 @@ schema:
   host_name: str
   base_url: str
   update_interval: int
+  
+  # Operation mode
+  operation_mode: list(standalone|hems)?
+  
+  # Standalone mode settings
   automation_enabled: bool
   price_sensor_entity: str
   top_x_charge_count: int(1,96)
+  price_threshold: "float?"
   max_current_per_phase: int(6,32)
   connector_ids: str
+  
   # Advanced: MQTT settings (optional - auto-detects core-mosquitto by default)
   mqtt_host: str?
   mqtt_port: int?

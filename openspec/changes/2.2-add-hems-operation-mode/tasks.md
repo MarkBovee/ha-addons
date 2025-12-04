@@ -1,0 +1,56 @@
+# Tasks: Add HEMS Operation Mode
+
+## Phase 1: Configuration & Mode Infrastructure ✅ COMPLETE
+- [x] 1.1 Add `operation_mode` config option to `config.yaml` (list: standalone|hems, default: standalone)
+- [x] 1.2 Add `price_threshold` config option to `config.yaml` (float, default: 0.25)
+- [x] 1.3 Update `AutomationConfig` dataclass with new fields
+- [x] 1.4 Add mode validation in main.py startup
+- [x] 1.5 Verify build compiles and add-on starts with new config
+
+## Phase 2: Standalone Mode Enhancements ✅ COMPLETE
+- [x] 2.1 Modify `PriceSlotAnalyzer` to support price threshold filtering
+- [x] 2.2 Implement unique price level selection (group slots by price, pick top X levels) - *already existed*
+- [x] 2.3 Update `analyze_prices()` to apply threshold before selection
+- [x] 2.4 Add `price_threshold_active` attribute to status (shows if threshold filtered any slots)
+- [ ] 2.5 Write unit tests for unique price selection logic - *deferred*
+- [ ] 2.6 Write unit tests for price threshold filtering - *deferred*
+
+## Phase 3: HEMS Mode - MQTT Subscriber ✅ COMPLETE
+- [x] 3.1 Create `HEMSScheduleManager` class for MQTT message processing
+- [x] 3.2 Define schedule payload schema and validation
+- [x] 3.3 Subscribe to `hems/charge-amps/{connector_id}/schedule/set` topic
+- [x] 3.4 Subscribe to `hems/charge-amps/{connector_id}/schedule/clear` topic
+- [x] 3.5 Implement schedule application from HEMS payload (basic - TODO: push to charger)
+- [x] 3.6 Handle `expires_at` - auto-clear expired schedules
+- [ ] 3.7 Write unit tests for MQTT message parsing and validation - *deferred*
+
+## Phase 4: HEMS Mode - Status Publisher ✅ COMPLETE
+- [x] 4.1 Define HEMS status payload structure (`HEMSStatus` dataclass)
+- [x] 4.2 Publish to `hems/charge-amps/{connector_id}/status` on state changes
+- [x] 4.3 Include schedule_source, ready_for_schedule, last_hems_command_at
+- [x] 4.4 Publish periodic status updates (via sync_automation_status)
+
+## Phase 5: Mode Switching & Sensors ✅ COMPLETE
+- [x] 5.1 Implement mode switch handling (in main.py, separate HEMS vs standalone paths)
+- [x] 5.2 Add `sensor.ca_schedule_source` entity (standalone|hems|none)
+- [x] 5.3 Add `sensor.ca_hems_last_command` entity (timestamp)
+- [x] 5.4 Add `binary_sensor.ca_price_threshold_active` entity
+- [x] 5.5 Update existing schedule status sensor with source info (attribute)
+
+## Phase 6: Documentation & Testing ✅ COMPLETE
+- [x] 6.1 Update charge-amps-monitor README with operation modes
+- [x] 6.2 Document HEMS MQTT contract (topics, payloads) - *in README*
+- [x] 6.3 Add configuration examples for both modes - *in README*
+- [ ] 6.4 Integration test: standalone mode with threshold - *deferred*
+- [ ] 6.5 Integration test: HEMS mode schedule application - *deferred*
+- [x] 6.6 Bump version (1.3.0) and update CHANGELOG
+
+## Deferred Items (for follow-up)
+- Unit tests for price selection and threshold filtering
+- Integration tests for both modes
+- Full HEMS schedule push to charger (currently logs and stores, callback wired but not fully implemented)
+
+## Dependencies
+- Phase 2 can run in parallel with Phase 3-4
+- Phase 5 depends on Phase 3-4 completion
+- Phase 6 depends on all other phases

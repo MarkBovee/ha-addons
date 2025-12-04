@@ -719,6 +719,46 @@ class MqttDiscovery:
         discovery_topic = self._discovery_topic(component, object_id)
         return self._publish(discovery_topic, "")
     
+    def subscribe(self, topic: str, callback: callable) -> bool:
+        """Subscribe to a custom MQTT topic.
+        
+        Use this for subscribing to external topics (e.g., HEMS commands).
+        The callback receives the raw payload as a string.
+        
+        Args:
+            topic: MQTT topic to subscribe to
+            callback: Function to call with message payload (str)
+            
+        Returns:
+            True if subscription was successful
+        """
+        if not self._client or not self._connected:
+            logger.warning("Cannot subscribe to %s: not connected", topic)
+            return False
+        
+        self._subscribe_command(topic, callback)
+        logger.info("Subscribed to topic: %s", topic)
+        return True
+    
+    def publish_raw(self, topic: str, payload: Any, retain: bool = False) -> bool:
+        """Publish to a custom MQTT topic.
+        
+        Use this for publishing to external topics (e.g., HEMS status).
+        
+        Args:
+            topic: MQTT topic to publish to
+            payload: Payload (dict will be JSON-encoded, else str)
+            retain: Whether to retain the message (default False)
+            
+        Returns:
+            True if published successfully
+        """
+        if not self._client or not self._connected:
+            logger.warning("Cannot publish to %s: not connected", topic)
+            return False
+        
+        return self._publish(topic, payload, retain=retain)
+    
     def get_published_entities(self) -> List[str]:
         """Get list of entity IDs published in this session."""
         return self._published_entities.copy()
