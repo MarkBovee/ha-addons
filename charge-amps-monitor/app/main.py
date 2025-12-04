@@ -783,7 +783,7 @@ def main():
     email = os.environ.get("CHARGER_EMAIL")
     password = os.environ.get("CHARGER_PASSWORD")
     host_name = os.environ.get("CHARGER_HOST_NAME", "my.charge.space")
-    base_url = os.environ.get("CHARGER_BASE_URL", "https://my.charge.space")
+    charger_base_url = os.environ.get("CHARGER_BASE_URL", "https://my.charge.space")
     update_interval = int(os.environ.get("CHARGER_UPDATE_INTERVAL", "1"))
     automation_enabled = parse_bool(os.environ.get("CHARGER_AUTOMATION_ENABLED"), False)
     price_sensor_entity = os.environ.get("CHARGER_PRICE_SENSOR_ENTITY", "sensor.ep_price_import")
@@ -792,8 +792,8 @@ def main():
     connector_id = parse_connector_id(os.environ.get("CHARGER_CONNECTOR_IDS", "1"))
 
     # Initialize HA API client (same pattern as water-heater-scheduler)
-    base_url, token = get_ha_api_config()
-    ha_api = HomeAssistantApi(base_url, token)
+    ha_base_url, ha_token = get_ha_api_config()
+    ha_api = HomeAssistantApi(ha_base_url, ha_token)
     
     # Always test connection - required for price reading even when using MQTT for entities
     if not ha_api.test_connection():
@@ -852,11 +852,11 @@ def main():
         masked_email = "NOT SET"
     logger.info(f"Email: {masked_email}")
     logger.info(f"Host Name: {host_name}")
-    logger.info(f"Base URL: {base_url}")
+    logger.info(f"Base URL: {charger_base_url}")
     logger.info(f"Update Interval: {update_interval} minutes")
 
     # Initialize API client
-    charger_api = ChargerApi(email, password, host_name, base_url)
+    charger_api = ChargerApi(email, password, host_name, charger_base_url)
 
     # Authenticate
     if not charger_api.authenticate():

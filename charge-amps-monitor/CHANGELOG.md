@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.2.3] - 2025-12-04
+
+### Fixed
+- Critical bug: Fixed variable name collision where `base_url` was used for both Charger API and HA API
+  - Charger API was receiving HA API URL (`http://supervisor/core/api`) instead of Charge Amps URL
+  - This caused 401 Unauthorized errors from Charger API
+  - Now uses distinct variable names: `charger_base_url` and `ha_base_url`
+
 ## [1.2.2] - 2025-12-04
 
 ### Fixed
