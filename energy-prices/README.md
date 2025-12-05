@@ -8,6 +8,8 @@ This add-on connects to the Nord Pool Day-Ahead Prices API to fetch 15-minute in
 - Current import price (with VAT, grid fees, and energy taxes)
 - Current export price (feed-in tariff)
 - Price level classification (None/Low/Medium/High)
+- Today's statistics: average, minimum, maximum, and price spread
+- Tomorrow prices availability indicator
 - 48-hour price forecast with percentiles (P20/P40/P60)
 
 ## Features
@@ -130,6 +132,50 @@ Current price level classification: "None", "Low", "Medium", or "High".
 - **Low**: P20 ≤ Current price < P40 (below average)
 - **Medium**: P40 ≤ Current price < P60 (average)
 - **High**: Current price ≥ P60 (top 40%, most expensive)
+
+### `sensor.energy_prices_average_price`
+Average electricity price for today.
+
+**Attributes:**
+- `unit_of_measurement`: "EUR/kWh"
+- `device_class`: "monetary"
+- `last_update`: When prices were last calculated
+
+### `sensor.energy_prices_minimum_price`
+Lowest electricity price for today.
+
+**Attributes:**
+- `unit_of_measurement`: "EUR/kWh"
+- `device_class`: "monetary"
+- `last_update`: When prices were last calculated
+
+### `sensor.energy_prices_maximum_price`
+Highest electricity price for today.
+
+**Attributes:**
+- `unit_of_measurement`: "EUR/kWh"
+- `device_class`: "monetary"
+- `last_update`: When prices were last calculated
+
+### `sensor.energy_prices_max_profit_today`
+Price spread between highest and lowest price today. Useful for battery arbitrage or scheduling.
+
+**Attributes:**
+- `unit_of_measurement`: "EUR/kWh"
+- `device_class`: "monetary"
+- `min_price`: Today's minimum price
+- `max_price`: Today's maximum price
+- `last_update`: When prices were last calculated
+
+### `binary_sensor.energy_prices_tomorrow_available`
+Indicates when tomorrow's prices are available. Nord Pool typically publishes around 13:00 CET.
+
+**States:**
+- **ON**: Tomorrow's prices are available
+- **OFF**: Tomorrow's prices not yet published
+
+**Attributes:**
+- `tomorrow_intervals`: Number of price intervals available for tomorrow (0 or 96)
 
 ## Usage Examples
 

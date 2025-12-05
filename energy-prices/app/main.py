@@ -194,6 +194,28 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         logger.info("Current import price: %.4f EUR/kWh, level: %s", 
                    current_import, price_level)
         
+        # Calculate today's statistics (only from today_intervals)
+        today_import_prices = import_prices[:len(today_intervals)] if today_intervals else import_prices
+        if today_import_prices:
+            min_price_today = round(min(today_import_prices), 4)
+            max_price_today = round(max(today_import_prices), 4)
+            avg_price_today = round(sum(today_import_prices) / len(today_import_prices), 4)
+            max_profit_today = round(max_price_today - min_price_today, 4)  # Spread/arbitrage potential
+        else:
+            min_price_today = current_import
+            max_price_today = current_import
+            avg_price_today = current_import
+            max_profit_today = 0.0
+        
+        # Check if tomorrow's prices are available
+        # Nord Pool typically publishes around 13:00 CET, we check for any tomorrow intervals
+        tomorrow_available = len(tomorrow_intervals) > 0
+        
+        logger.info("Today stats: min=%.4f, max=%.4f, avg=%.4f, spread=%.4f",
+                   min_price_today, max_price_today, avg_price_today, max_profit_today)
+        logger.info("Tomorrow prices available: %s (%d intervals)", 
+                   tomorrow_available, len(tomorrow_intervals))
+        
         return {
             'current_import': current_import,
             'current_export': current_export,
@@ -201,7 +223,14 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
             'price_curve_export': price_curve_export,
             'percentiles': percentiles,
             'price_level': price_level,
-            'last_update': datetime.now(ZoneInfo('UTC')).isoformat()
+            'last_update': datetime.now(ZoneInfo('UTC')).isoformat(),
+            # New statistics
+            'min_price_today': min_price_today,
+            'max_price_today': max_price_today,
+            'avg_price_today': avg_price_today,
+            'max_profit_today': max_profit_today,
+            'tomorrow_available': tomorrow_available,
+            'tomorrow_intervals_count': len(tomorrow_intervals),
         }
         
     except Exception as e:
@@ -334,10 +363,83 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
                 }
             ))
             
+            # New statistics sensors
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="average_price",
+                name="Average Price Today",
+                state=str(data['avg_price_today']),
+                unit_of_measurement="EUR/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:chart-line-variant",
+                attributes={
+                    'last_update': data['last_update']
+                }
+            ))
+            
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="minimum_price",
+                name="Minimum Price Today",
+                state=str(data['min_price_today']),
+                unit_of_measurement="EUR/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:arrow-down-bold",
+                attributes={
+                    'last_update': data['last_update']
+                }
+            ))
+            
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="maximum_price",
+                name="Maximum Price Today",
+                state=str(data['max_price_today']),
+                unit_of_measurement="EUR/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:arrow-up-bold",
+                attributes={
+                    'last_update': data['last_update']
+                }
+            ))
+            
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="max_profit_today",
+                name="Max Profit Today",
+                state=str(data['max_profit_today']),
+                unit_of_measurement="EUR/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:cash-multiple",
+                attributes={
+                    'description': 'Price spread between highest and lowest price today',
+                    'min_price': data['min_price_today'],
+                    'max_price': data['max_price_today'],
+                    'last_update': data['last_update']
+                }
+            ))
+            
+            # Binary sensor for tomorrow prices availability
+            mqtt_client.publish_binary_sensor(EntityConfig(
+                object_id="tomorrow_available",
+                name="Tomorrow Prices Available",
+                state="ON" if data['tomorrow_available'] else "OFF",
+                icon="mdi:calendar-tomorrow",
+                attributes={
+                    'tomorrow_intervals': data['tomorrow_intervals_count'],
+                    'last_update': data['last_update']
+                }
+            ))
+            
             logger.info("Created Home Assistant entities via MQTT Discovery:")
             logger.info("  • sensor.energy_prices_price_import: %.4f EUR/kWh", data['current_import'])
             logger.info("  • sensor.energy_prices_price_export: %.4f EUR/kWh", data['current_export'])
             logger.info("  • sensor.energy_prices_price_level: %s", data['price_level'])
+            logger.info("  • sensor.energy_prices_average_price: %.4f EUR/kWh", data['avg_price_today'])
+            logger.info("  • sensor.energy_prices_minimum_price: %.4f EUR/kWh", data['min_price_today'])
+            logger.info("  • sensor.energy_prices_maximum_price: %.4f EUR/kWh", data['max_price_today'])
+            logger.info("  • sensor.energy_prices_max_profit_today: %.4f EUR/kWh", data['max_profit_today'])
+            logger.info("  • binary_sensor.energy_prices_tomorrow_available: %s", data['tomorrow_available'])
             logger.info("Entities have unique_id and can be managed from HA UI")
         else:
             # Just update state values
@@ -359,8 +461,34 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
                                       'p40': data['percentiles']['p40'],
                                       'p60': data['percentiles']['p60']})
             
-            logger.info("Updated MQTT entities: import=%.4f, export=%.4f, level=%s",
-                       data['current_import'], data['current_export'], data['price_level'])
+            # Update statistics sensors
+            mqtt_client.update_state("sensor", "average_price",
+                                     str(data['avg_price_today']),
+                                     {'last_update': data['last_update']})
+            
+            mqtt_client.update_state("sensor", "minimum_price",
+                                     str(data['min_price_today']),
+                                     {'last_update': data['last_update']})
+            
+            mqtt_client.update_state("sensor", "maximum_price",
+                                     str(data['max_price_today']),
+                                     {'last_update': data['last_update']})
+            
+            mqtt_client.update_state("sensor", "max_profit_today",
+                                     str(data['max_profit_today']),
+                                     {'min_price': data['min_price_today'],
+                                      'max_price': data['max_price_today'],
+                                      'last_update': data['last_update']})
+            
+            # Update binary sensor
+            mqtt_client.update_state("binary_sensor", "tomorrow_available",
+                                     "ON" if data['tomorrow_available'] else "OFF",
+                                     {'tomorrow_intervals': data['tomorrow_intervals_count'],
+                                      'last_update': data['last_update']})
+            
+            logger.info("Updated MQTT entities: import=%.4f, export=%.4f, level=%s, tomorrow=%s",
+                       data['current_import'], data['current_export'], data['price_level'],
+                       data['tomorrow_available'])
         
     except Exception as e:
         logger.error("Failed to update HA entities via MQTT: %s", e, exc_info=True)

@@ -5,6 +5,22 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2025-12-05
+
+### Added
+- **New statistics sensors** for today's prices:
+  - `sensor.energy_prices_average_price` - Average price for today
+  - `sensor.energy_prices_minimum_price` - Lowest price today
+  - `sensor.energy_prices_maximum_price` - Highest price today
+  - `sensor.energy_prices_max_profit_today` - Price spread (max - min) for arbitrage potential
+- **Tomorrow availability binary sensor**:
+  - `binary_sensor.energy_prices_tomorrow_available` - ON when tomorrow's prices are published (typically after 13:00 CET)
+  - Includes `tomorrow_intervals` attribute showing count of available intervals
+
+### Changed
+- Price statistics (min, max, avg) now calculated only from today's prices for accuracy
+- Enhanced logging with today's statistics summary
+
 ## [1.3.4] - 2025-11-26
 
 ### Changed
