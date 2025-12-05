@@ -203,30 +203,34 @@ def get_next_night_price(prices_tomorrow: Dict[datetime, float], tomorrow: datet
 
 
 def get_price_level(current_price: float, prices: Dict[datetime, float]) -> str:
-    """Determine price level (None/Low/Medium/High) based on percentiles."""
+    """Determine price level (None/Low/Medium/High) based on fixed price thresholds.
+    
+    Matches NetDaemon PriceHelper.GetEnergyPriceLevel() exactly:
+    - None: price < 0 (actual negative/free energy)
+    - Low: price < 0.10 EUR/kWh
+    - Medium: price < 0.35 EUR/kWh (and below threshold)
+    - High: price < 0.45 EUR/kWh or above threshold
+    - Maximum: price >= 0.45 EUR/kWh
+    """
     if not prices:
         return "Medium"
     
-    price_list = sorted(prices.values())
-    n = len(price_list)
+    # Calculate price threshold (average of today's prices, min 0.28)
+    avg_price = sum(prices.values()) / len(prices) if prices else 0.28
+    price_threshold = max(avg_price, 0.28)
     
-    # Calculate percentiles
-    p20_idx = int(n * 0.20)
-    p40_idx = int(n * 0.40)
-    p60_idx = int(n * 0.60)
-    
-    p20 = price_list[min(p20_idx, n-1)]
-    p40 = price_list[min(p40_idx, n-1)]
-    p60 = price_list[min(p60_idx, n-1)]
-    
-    if current_price < p20:
-        return "None"  # Cheapest tier - free energy behavior
-    elif current_price < p40:
-        return "Low"
-    elif current_price < p60:
-        return "Medium"
-    else:
+    # Fixed thresholds matching NetDaemon PriceHelper.cs GetEnergyPriceLevel()
+    if current_price < 0:
+        return "None"  # Actual negative price - free energy
+    elif current_price < 0.10:
+        return "Low"   # Very cheap (< 10 cents/kWh)
+    elif current_price < 0.35:
+        # Medium if below threshold, High if above
+        return "Medium" if current_price < price_threshold else "High"
+    elif current_price < 0.45:
         return "High"
+    else:
+        return "Maximum"
 
 
 def update_status_entity(ha_api: HomeAssistantApi, status_msg: str, 
@@ -345,6 +349,8 @@ def set_water_temperature(
     
     # Get energy price level for temperature decisions
     energy_price_level = get_price_level(current_price, prices_today)
+    
+    logger.debug("Price analysis: current=%.4f EUR/kWh, level=%s", current_price, energy_price_level)
     
     # === Temperature Selection Logic (from WaterHeater.cs) ===
     idle_temperature = preset.idle  # 35

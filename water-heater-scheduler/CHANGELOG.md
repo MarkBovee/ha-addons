@@ -2,6 +2,20 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.1] - 2025-12-05
+
+### Fixed
+- **Critical bug fix**: Fixed price level detection using incorrect percentile-based thresholds
+  - Bug caused "free energy" mode (70°C heating) to trigger when prices were in the lowest 20% of the day,
+    even when prices were 0.23+ EUR/kWh (not actually negative)
+  - Now uses fixed price thresholds matching NetDaemon PriceHelper.cs exactly:
+    - `None` (70°C): Only when price < 0 (actual negative prices)
+    - `Low` (50°C): price < 0.10 EUR/kWh
+    - `Medium` (35°C): price < 0.35 EUR/kWh
+    - `High` (35°C): price < 0.45 EUR/kWh  
+    - `Maximum` (35°C): price >= 0.45 EUR/kWh
+- Added debug logging for price level analysis
+
 ## [1.2.0] - 2025-12-05
 
 ### Changed
