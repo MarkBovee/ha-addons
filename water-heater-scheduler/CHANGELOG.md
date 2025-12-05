@@ -2,6 +2,18 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.0] - 2025-12-05
+
+### Changed
+- **Major rewrite**: Ported scheduling logic directly from proven NetDaemon WaterHeater.cs implementation
+- Simplified time window logic using simple hour-based comparisons instead of complex timezone handling
+- Removed complex scheduler.py and price_analyzer.py modules in favor of inline functions
+- More reliable heating window detection that matches the original C# behavior
+
+### Fixed
+- Fixed issue where heating windows were not being triggered at the scheduled time
+- Fixed timezone-related edge cases that caused missed heating slots
+
 ## [1.1.6] - 2025-12-03
 
 ### Added
