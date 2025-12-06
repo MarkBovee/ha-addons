@@ -2,6 +2,19 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.3] - 2025-12-06
+
+### Changed
+- **Modularized codebase** for better maintainability:
+  - Extracted price analysis logic to `price_analyzer.py`
+  - Extracted status management to `status_manager.py`
+  - Extracted scheduling logic to `scheduler.py`
+  - Created `constants.py` for shared constants
+  - Reduced `main.py` to a slim entry point (~170 lines vs ~640 lines)
+
+### Removed
+- **Removed `dynamic_window_mode` setting** - this option was defined in configuration but never implemented in code
+
 ## [1.2.2] - 2025-12-06
 
 ### Changed
@@ -86,7 +99,6 @@ All notable changes to the Water Heater Scheduler add-on will be documented in t
 
 ### Added
 - Rolled schema back to the legacy type definitions (no selectors) to maximize Supervisor compatibility.
-- Configurable `dynamic_window_mode` option surfaced in UI/schema
 
 ## [1.0.0] - 2025-12-02
 

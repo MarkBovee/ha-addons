@@ -99,7 +99,6 @@ class ScheduleConfig:
     # Advanced settings
     min_cycle_gap_minutes: int = 50
     log_level: str = "info"
-    dynamic_window_mode: bool = False
     
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "ScheduleConfig":
@@ -107,13 +106,6 @@ class ScheduleConfig:
         # Filter empty strings to None for optional fields
         def empty_to_none(value):
             return None if value == "" else value
-        
-        def to_bool(value):
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, str):
-                return value.strip().lower() in {"1", "true", "yes", "on"}
-            return bool(value)
         
         return cls(
             water_heater_entity_id=config.get("water_heater_entity_id", ""),
@@ -135,7 +127,6 @@ class ScheduleConfig:
             legionella_temp=config.get("legionella_temp"),
             min_cycle_gap_minutes=config.get("min_cycle_gap_minutes", 50),
             log_level=config.get("log_level", "info"),
-            dynamic_window_mode=to_bool(config.get("dynamic_window_mode", False)),
         )
     
     def get_preset(self) -> TemperaturePreset:
