@@ -1,6 +1,6 @@
 name: Water Heater Scheduler
 description: Schedule domestic hot water heating based on electricity prices - optimizes for cost while maintaining comfort and legionella protection
-version: "1.2.2"
+version: "1.2.3"
 slug: water_heater_scheduler
 init: false
 homeassistant_api: true
@@ -17,7 +17,6 @@ options:
   water_heater_entity_id: "water_heater.our_home_domestic_hot_water_0"
   price_sensor_entity_id: "sensor.energy_prices_electricity_import_price"
   temperature_preset: "comfort"
-  dynamic_window_mode: false
   
   # Optional helper entities
   away_mode_entity_id: "switch.our_home_away_mode"
@@ -66,7 +65,6 @@ schema:
   
   # Temperature Preset
   temperature_preset: list(eco|comfort|performance|custom)
-  dynamic_window_mode: bool
   
   # Custom Temperature Overrides
   night_preheat_temp: int(45,65)?
