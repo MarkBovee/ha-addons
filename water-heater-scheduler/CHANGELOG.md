@@ -16,6 +16,13 @@ All notable changes to the Water Heater Scheduler add-on will be documented in t
   - 💰 Low price heating indicator
   - 🦠 Legionella protection status
 
+- **Enhanced logging** for better troubleshooting:
+  - Evaluation summary each cycle: `[Day] Idle | €0.220 (Medium) | Window: 06:00-07:00 | Reason`
+  - Decision reasoning shows why temperatures were chosen
+  - State change logging when heater turns on/off or target changes
+  - Legionella optimization only logged when actionable (future window)
+  - Heat cycle completion logged with final temperature
+
 ## [1.2.1] - 2025-12-05
 
 ### Fixed

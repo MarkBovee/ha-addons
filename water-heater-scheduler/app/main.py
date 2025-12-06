@@ -340,8 +340,10 @@ def set_water_temperature(
         
         if prev_price is not None and next_price is not None and prev_price < next_price:
             start_time = prev_time
-            logger.info("Legionella: Adjusted start to %s (prev=%.4f < next=%.4f)",
-                       start_time.strftime("%H:%M"), prev_price, next_price)
+            # Only log if the adjusted time is in the future (actionable info)
+            if start_time > now:
+                logger.info("Legionella: Optimized start to %s (€%.4f vs €%.4f after)",
+                           start_time.strftime("%H:%M"), prev_price, next_price)
     
     # Set end time: 3 hours for legionella, 1 hour for normal
     duration_hours = config.legionella_duration_hours if use_legionella_protection else config.heating_duration_hours
@@ -375,21 +377,29 @@ def set_water_temperature(
     else:
         idle_text = f"💤 Idle | {next_heating_info}"
     
+    # Track decision reasoning for logging
+    decision_reason = None
+    
     if away_mode:
         # Away mode: only heat for legionella on Saturday
         if use_legionella_protection and not use_night_program:
             program_temperature = 66 if current_price < 0.2 else 60
+            decision_reason = f"Away + Legionella day: {program_temperature}°C"
         else:
             program_temperature = preset.away  # 35
+            decision_reason = "Away mode: minimal heating"
     elif bath_mode:
         program_temperature = preset.bath  # 58
         heating_temperature = preset.bath
+        decision_reason = f"Bath mode: {program_temperature}°C"
     else:
         # Normal operation - set heating temp based on price level
         if energy_price_level == "None":
             heating_temperature = 70  # Free energy
+            decision_reason = "Free energy: max heating"
         elif energy_price_level == "Low":
             heating_temperature = 50
+            decision_reason = f"Low price (€{current_price:.3f}): opportunistic 50°C"
         else:
             heating_temperature = 35
         
@@ -398,34 +408,58 @@ def set_water_temperature(
             # Night: higher temp if night is cheaper than day
             night_cheaper = lowest_night_price[1] < lowest_day_price[1]
             program_temperature = preset.night_preheat if night_cheaper else preset.night_minimal
+            if night_cheaper:
+                decision_reason = f"Night cheaper (€{lowest_night_price[1]:.3f}) than day (€{lowest_day_price[1]:.3f}): preheat {program_temperature}°C"
+            else:
+                decision_reason = f"Day cheaper: minimal night heating {program_temperature}°C"
         elif use_legionella_protection:
             program_temperature = 70 if energy_price_level == "None" else preset.legionella
+            decision_reason = f"Legionella protection: {program_temperature}°C"
         else:
             # Day program
             if energy_price_level == "None":
                 program_temperature = 70
+                decision_reason = "Free energy: max heating 70°C"
             else:
                 program_temperature = preset.day_preheat  # 58
+                decision_reason = f"Day program: {program_temperature}°C"
                 
                 # If tomorrow night is cheaper, skip heating now
                 if next_night_price[1] > 0 and next_night_price[1] < current_price:
                     if energy_price_level in ("Medium", "High"):
                         program_temperature = heating_temperature
-                        logger.debug("Tomorrow cheaper - using heating temp instead")
+                        decision_reason = f"Tomorrow night cheaper (€{next_night_price[1]:.3f} vs €{current_price:.3f}): skip day heating"
     
     # === Apply Temperature (matching WaterHeater.cs logic) ===
     try:
         in_window = start_time <= now <= end_time
         
-        logger.debug("Window check: now=%s, start=%s, end=%s, in_window=%s",
-                    now.strftime("%H:%M"), start_time.strftime("%H:%M"), 
-                    end_time.strftime("%H:%M"), in_window)
+        # Determine action for logging
+        if in_window:
+            if current_temp < program_temperature:
+                action = f"Heating to {program_temperature}°C"
+            else:
+                action = f"Target reached ({current_temp:.1f}°C)"
+        elif heating_temperature > idle_temperature and current_temp < heating_temperature:
+            action = f"Opportunistic {heating_temperature}°C"
+        else:
+            action = "Idle"
+        
+        # Log evaluation summary (always at INFO level for visibility)
+        window_info = f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}"
+        logger.info("[%s] %s | €%.3f (%s) | Window: %s | %s",
+                   program_type, action, current_price, energy_price_level, window_info,
+                   decision_reason or "Standard operation")
         
         if in_window:
             # Inside heating window
             if program_temperature <= state.target_temperature and state.heater_on:
                 # Already heating at same or higher temp
                 return
+            
+            # Log state change
+            old_temp = state.target_temperature
+            old_heater = state.heater_on
             
             state.target_temperature = program_temperature
             state.heater_on = True
@@ -434,6 +468,11 @@ def set_water_temperature(
             
             heater_controller.set_operation_mode("Manual")
             heater_controller.set_temperature(program_temperature)
+            
+            # Log significant state changes
+            if old_temp != program_temperature or not old_heater:
+                logger.info("State change: %d°C → %d°C, heater %s → ON",
+                           old_temp, program_temperature, "ON" if old_heater else "OFF")
             
             if current_temp < program_temperature:
                 # Active heating - show what and until when
@@ -450,10 +489,6 @@ def set_water_temperature(
             else:
                 # Reached target temp during window
                 status_msg = f"✅ {program_type} heating complete | {next_heating_info}"
-            
-            logger.info("Started %s: %d°C (window %s-%s)", 
-                       program_type, program_temperature,
-                       start_time.strftime("%H:%M"), end_time.strftime("%H:%M"))
         else:
             # Outside heating window - use wait cycles logic
             if state.target_temperature > idle_temperature and state.wait_cycles > 0:
@@ -463,11 +498,17 @@ def set_water_temperature(
                 if current_temp < state.target_temperature:
                     # Still finishing a heat cycle after window ended
                     status_msg = f"⏳ Finishing heat cycle ({state.target_temperature}°C)"
+                    logger.debug("Finishing cycle: %d°C, %d cycles remaining", 
+                                state.target_temperature, state.wait_cycles)
                 else:
                     # Heat cycle complete, show next
                     status_msg = f"✅ Heat cycle complete | {next_heating_info}"
+                    logger.info("Heat cycle complete at %.1f°C", current_temp)
             else:
                 # Reset to heating temperature
+                old_temp = state.target_temperature
+                old_heater = state.heater_on
+                
                 state.target_temperature = heating_temperature
                 state.wait_cycles = 10
                 state.heater_on = False
@@ -476,6 +517,7 @@ def set_water_temperature(
                 if current_target_temp != heating_temperature:
                     heater_controller.set_operation_mode("Manual")
                     heater_controller.set_temperature(heating_temperature)
+                    logger.info("Set heater target: %d°C (opportunistic)", heating_temperature)
                 
                 if heating_temperature > idle_temperature:
                     if current_temp < heating_temperature:
