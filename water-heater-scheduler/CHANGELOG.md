@@ -2,6 +2,14 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.5] - 2025-12-06
+
+### Added
+- **`initial_legionella_date` config option** - Set this once to bootstrap the legionella tracking:
+  - Format: `2025-12-06` or `2025-12-06 05:00` or `2025-12-06T05:00:00`
+  - Only applies if state has never been set (won't overwrite existing)
+  - Clear the setting after first startup
+
 ## [1.2.4] - 2025-12-06
 
 ### Added

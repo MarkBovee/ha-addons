@@ -37,6 +37,7 @@ WH_CONFIG_DEFAULTS = {
     'temperature_preset': 'comfort',
     'min_cycle_gap_minutes': 50,
     'log_level': 'info',
+    'initial_legionella_date': '',
 }
 
 WH_REQUIRED_FIELDS = ['water_heater_entity_id']
@@ -117,6 +118,26 @@ def main():
     
     # Load persistent state
     state = HeaterState.load()
+    
+    # Check for initial_legionella_date config (bootstrap setting)
+    raw_config = load_addon_config(defaults=WH_CONFIG_DEFAULTS, required_fields=[])
+    initial_date = raw_config.get('initial_legionella_date', '')
+    if initial_date and state.last_legionella_protection is None:
+        try:
+            # Parse date like "2025-12-06" or "2025-12-06 05:00" or "2025-12-06T05:00:00"
+            from datetime import datetime as dt
+            if 'T' in initial_date:
+                parsed = dt.fromisoformat(initial_date)
+            elif ' ' in initial_date:
+                parsed = dt.strptime(initial_date, '%Y-%m-%d %H:%M')
+            else:
+                parsed = dt.strptime(initial_date + ' 05:00', '%Y-%m-%d %H:%M')
+            state.set_last_legionella_protection(parsed)
+            state.save()
+            logger.info("Initialized last_legionella_protection from config: %s", parsed.isoformat())
+            logger.info("You can now clear 'initial_legionella_date' from the add-on config.")
+        except ValueError as e:
+            logger.warning("Invalid initial_legionella_date format '%s': %s", initial_date, e)
     
     # Get run-once mode
     run_once = get_run_once_mode()

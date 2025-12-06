@@ -1,6 +1,6 @@
 name: Water Heater Scheduler
 description: Schedule domestic hot water heating based on electricity prices - optimizes for cost while maintaining comfort and legionella protection
-version: "1.2.4"
+version: "1.2.5"
 slug: water_heater_scheduler
 init: false
 homeassistant_api: true
@@ -32,6 +32,9 @@ options:
   bath_auto_off_temp: 50
   min_cycle_gap_minutes: 50
   log_level: "info"
+  
+  # Initial legionella date (set once to bootstrap, then clear)
+  initial_legionella_date: ""
   
   # Custom temperature overrides (only used when preset=custom)
   night_preheat_temp: 56
@@ -76,6 +79,7 @@ schema:
   # Advanced Settings
   min_cycle_gap_minutes: int(10,180)?
   log_level: list(debug|info|warning|error)?
+  initial_legionella_date: str?
   
   # MQTT settings (optional)
   mqtt_host: str?
