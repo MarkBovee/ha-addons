@@ -10,14 +10,14 @@ from typing import Dict
 from shared.ha_api import HomeAssistantApi
 from .models import ScheduleConfig, HeaterState, ProgramType
 from .water_heater_controller import WaterHeaterController, EntityStateReader
-from .constants import DAYS_OF_WEEK
+from .constants import DAYS_OF_WEEK, LEGIONELLA_TEMP_THRESHOLD, LEGIONELLA_INTERVAL_DAYS
 from .price_analyzer import (
     get_lowest_night_price,
     get_lowest_day_price,
     get_next_night_price,
     get_price_level,
 )
-from .status_manager import get_status_visual, update_status_entity
+from .status_manager import get_status_visual, update_status_entity, update_legionella_entity
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,28 @@ def set_water_temperature(
     use_night_program = now.hour < night_end_hour
     
     # Check legionella day (Saturday by default)
+    # Only trigger if: it's the right day AND we need protection (>= 7 days since last)
     legionella_weekday = DAYS_OF_WEEK.get(config.legionella_day, 5)
-    use_legionella_protection = not use_night_program and now.weekday() == legionella_weekday
+    is_legionella_day = not use_night_program and now.weekday() == legionella_weekday
+    needs_legionella = state.needs_legionella_protection(LEGIONELLA_INTERVAL_DAYS)
+    use_legionella_protection = is_legionella_day and needs_legionella
+    
+    # Check if current temp is already above legionella threshold (counts as protection)
+    if current_temp >= LEGIONELLA_TEMP_THRESHOLD:
+        last_protection = state.get_last_legionella_protection()
+        # Only update if it's been a while or never set
+        if last_protection is None or (now - last_protection).total_seconds() > 3600:
+            logger.info("Water at %.1f°C >= %d°C threshold, recording legionella protection",
+                       current_temp, LEGIONELLA_TEMP_THRESHOLD)
+            state.set_last_legionella_protection(now)
+            state.save()
+    
+    # Log legionella decision
+    if is_legionella_day and not needs_legionella:
+        last_protection = state.get_last_legionella_protection()
+        days_since = (now - last_protection).days if last_protection else 0
+        logger.info("Legionella day but protection not needed (last: %d days ago, threshold: %d days)",
+                   days_since, LEGIONELLA_INTERVAL_DAYS)
     
     # Determine program type string
     if away_mode:
@@ -257,6 +277,12 @@ def set_water_temperature(
             else:
                 # Reached target temp during window
                 status_msg = f"✅ {program_type} heating complete | {next_heating_info}"
+                
+                # Record legionella protection completion when target reached during legionella cycle
+                if use_legionella_protection and current_temp >= LEGIONELLA_TEMP_THRESHOLD:
+                    state.set_last_legionella_protection(now)
+                    state.save()
+                    logger.info("Legionella protection complete at %.1f°C, recorded timestamp", current_temp)
         else:
             # Outside heating window - use wait cycles logic
             if state.target_temperature > idle_temperature and state.wait_cycles > 0:
@@ -304,6 +330,9 @@ def set_water_temperature(
         # Update status entity
         status_icon, status_color = get_status_visual(program, now)
         update_status_entity(ha_api, status_msg, program, state.target_temperature, status_icon, status_color)
+        
+        # Update legionella tracking entity
+        update_legionella_entity(ha_api, state.get_last_legionella_protection())
         
     except Exception as e:
         logger.error("Failed to set temperature: %s", e, exc_info=True)

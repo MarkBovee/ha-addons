@@ -2,6 +2,21 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.4] - 2025-12-06
+
+### Added
+- **Legionella protection tracking** via new `sensor.wh_last_legionella` entity:
+  - Shows when legionella protection last ran
+  - Shows when next protection is due
+  - Indicates if protection is needed now
+- **Smart legionella scheduling** - only runs protection cycle if >7 days since last:
+  - Prevents running protection twice per day on Saturday
+  - Automatically tracks when water reaches 60°C (counts as protection)
+  - Persists across add-on restarts
+
+### Fixed
+- Fixed issue where legionella protection would run multiple times per day on Saturday
+
 ## [1.2.3] - 2025-12-06
 
 ### Changed

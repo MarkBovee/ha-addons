@@ -135,6 +135,24 @@ To prevent the water heater from toggling rapidly:
 | `sensor.wh_program` | Current program (Night/Day/Legionella/Bath/Away/Idle) |
 | `sensor.wh_target_temp` | Current target temperature in °C |
 | `sensor.wh_status` | Human-readable status message (planned window, target, reason) |
+| `sensor.wh_last_legionella` | Last legionella protection timestamp with attributes |
+
+### Legionella Tracking
+
+The `sensor.wh_last_legionella` entity tracks when legionella protection last ran:
+
+- **State**: ISO timestamp of last protection (e.g., `2025-12-06T05:00:00`)
+- **Attributes**:
+  - `days_ago`: Days since last protection
+  - `next_due`: When next protection is due
+  - `needs_protection`: Boolean if protection needed
+  - `interval_days`: Configured interval (default 7 days)
+
+The add-on automatically records legionella protection when:
+1. Water temperature reaches 60°C during any heating cycle
+2. Legionella protection cycle completes with temp ≥ 60°C
+
+If protection was run less than 7 days ago, the scheduled legionella day will be skipped.
 
 ## Local Testing
 
