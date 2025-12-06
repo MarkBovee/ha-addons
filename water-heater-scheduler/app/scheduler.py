@@ -167,6 +167,7 @@ def set_water_temperature(
     
     # Track decision reasoning for logging
     decision_reason = None
+    skipping_for_tomorrow = False  # Track if we're waiting for tomorrow's cheaper prices
     
     if away_mode:
         # Away mode: only heat for legionella on Saturday
@@ -216,6 +217,7 @@ def set_water_temperature(
                 if next_night_price[1] > 0 and next_night_price[1] < current_price:
                     if energy_price_level in ("Medium", "High"):
                         program_temperature = heating_temperature
+                        skipping_for_tomorrow = True
                         decision_reason = f"Tomorrow night cheaper (€{next_night_price[1]:.3f} vs €{current_price:.3f}): skip day heating"
     
     # === Apply Temperature (matching WaterHeater.cs logic) ===
@@ -325,7 +327,11 @@ def set_water_temperature(
                     else:
                         status_msg = idle_text
                 else:
-                    status_msg = idle_text
+                    # Idle or skipping for better prices
+                    if skipping_for_tomorrow:
+                        status_msg = f"⏭️ Skipping day heating | Tomorrow night cheaper (€{next_night_price[1]:.3f})"
+                    else:
+                        status_msg = idle_text
         
         # Update status entity
         status_icon, status_color = get_status_visual(program, now)

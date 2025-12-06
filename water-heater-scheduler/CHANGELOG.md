@@ -2,6 +2,13 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.6] - 2025-12-06
+
+### Changed
+- **Improved status message when skipping for tomorrow's prices**:
+  - Now shows `⏭️ Skipping day heating | Tomorrow night cheaper (€X.XXX)` instead of generic idle message
+  - Makes it clear why the scheduled day heating window is being skipped
+
 ## [1.2.5] - 2025-12-06
 
 ### Added
