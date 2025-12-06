@@ -357,7 +357,23 @@ def set_water_temperature(
     heating_temperature = idle_temperature
     program_temperature = idle_temperature
     
-    idle_text = f"Idle, heating at {start_time.strftime('%H:%M')}" if start_time >= now else "Idle"
+    # Build next heating info for idle messages
+    if start_time > now:
+        next_heating_info = f"Next: {program_type} heating at {start_time.strftime('%H:%M')}"
+    else:
+        # Check if tomorrow's prices are available for next window prediction
+        if prices_tomorrow:
+            next_heating_info = "Next: Tomorrow's schedule ready"
+        else:
+            next_heating_info = "Waiting for tomorrow's prices"
+    
+    # Build idle text based on mode
+    if away_mode:
+        idle_text = f"🏖️ Away mode | {next_heating_info}"
+    elif bath_mode:
+        idle_text = f"🛁 Bath mode ready"
+    else:
+        idle_text = f"💤 Idle | {next_heating_info}"
     
     if away_mode:
         # Away mode: only heat for legionella on Saturday
@@ -420,9 +436,20 @@ def set_water_temperature(
             heater_controller.set_temperature(program_temperature)
             
             if current_temp < program_temperature:
-                status_msg = f"{program_type} program from: {start_time.strftime('%H:%M')} to: {end_time.strftime('%H:%M')}"
+                # Active heating - show what and until when
+                if away_mode:
+                    status_msg = f"🏖️ Away mode | Legionella cycle ({program_temperature}°C) until {end_time.strftime('%H:%M')}"
+                elif bath_mode:
+                    status_msg = f"🛁 Bath mode | Heating to {program_temperature}°C"
+                elif energy_price_level == "None":
+                    status_msg = f"⚡ Free energy! Heating to {program_temperature}°C"
+                elif use_legionella_protection:
+                    status_msg = f"🦠 Legionella protection ({program_temperature}°C) until {end_time.strftime('%H:%M')}"
+                else:
+                    status_msg = f"🔥 {program_type} heating ({program_temperature}°C) until {end_time.strftime('%H:%M')}"
             else:
-                status_msg = idle_text
+                # Reached target temp during window
+                status_msg = f"✅ {program_type} heating complete | {next_heating_info}"
             
             logger.info("Started %s: %d°C (window %s-%s)", 
                        program_type, program_temperature,
@@ -434,9 +461,11 @@ def set_water_temperature(
                 state.save()
                 
                 if current_temp < state.target_temperature:
-                    status_msg = f"Heating to {state.target_temperature} [{state.wait_cycles}]"
+                    # Still finishing a heat cycle after window ended
+                    status_msg = f"⏳ Finishing heat cycle ({state.target_temperature}°C)"
                 else:
-                    status_msg = idle_text
+                    # Heat cycle complete, show next
+                    status_msg = f"✅ Heat cycle complete | {next_heating_info}"
             else:
                 # Reset to heating temperature
                 state.target_temperature = heating_temperature
@@ -450,7 +479,13 @@ def set_water_temperature(
                 
                 if heating_temperature > idle_temperature:
                     if current_temp < heating_temperature:
-                        status_msg = f"Heating to {heating_temperature} [{state.wait_cycles}]"
+                        # Opportunistic heating due to low prices
+                        if energy_price_level == "None":
+                            status_msg = f"⚡ Free energy! Heating to {heating_temperature}°C"
+                        elif energy_price_level == "Low":
+                            status_msg = f"💰 Low price heating ({heating_temperature}°C)"
+                        else:
+                            status_msg = f"🔥 Heating ({heating_temperature}°C) | {next_heating_info}"
                     else:
                         status_msg = idle_text
                 else:

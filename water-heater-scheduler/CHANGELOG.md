@@ -2,6 +2,20 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.2] - 2025-12-06
+
+### Changed
+- **Improved status messages** with clear context about what's happening and why:
+  - 🔥 Active heating shows program type, temperature, and end time
+  - ✅ Completion messages when target temp reached
+  - ⏳ "Finishing heat cycle" when continuing after window ends
+  - 💤 Idle shows next scheduled heating time
+  - 🏖️ Away mode status clearly visible
+  - 🛁 Bath mode status
+  - ⚡ Free energy indicator for negative prices
+  - 💰 Low price heating indicator
+  - 🦠 Legionella protection status
+
 ## [1.2.1] - 2025-12-05
 
 ### Fixed
