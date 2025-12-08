@@ -2,6 +2,14 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.10] - 2025-12-08
+
+### Changed
+- **Time-aware status messages**:
+  - Evening (18:00+): `🌙 Evening idle | Night program cheaper`
+  - Daytime (06:00-18:00): `⏭️ Skipping day | Tonight cheaper`
+  - Makes it clear we're waiting for the night program, not skipping a day program
+
 ## [1.2.9] - 2025-12-08
 
 ### Changed

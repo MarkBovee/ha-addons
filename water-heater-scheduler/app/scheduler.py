@@ -94,6 +94,7 @@ class Scheduler:
         night_end: time,
         prefix: str = "Day",
         slot: Optional[Tuple[datetime, float]] = None,
+        now: Optional[datetime] = None,
     ) -> ProgramDecision:
         """Construct a ProgramDecision for the day window.
         
@@ -101,7 +102,14 @@ class Scheduler:
         - Compare CURRENT price vs tomorrow's night average (00:00-06:00)
         - Only skip if current price > tomorrow night AND current price is above medium level
         - This ensures we don't skip day heating when prices are already low
+        
+        Time-aware status messages:
+        - Morning/afternoon (06:00-18:00): "Skipping day | Tonight cheaper"
+        - Evening (18:00-00:00): "Evening idle | Night program cheaper"
         """
+        if now is None:
+            now = datetime.now()
+        
         slot = slot or self.price_analyzer.get_lowest_day_price(night_end)
         
         # Get current price and tomorrow's night average
@@ -111,6 +119,7 @@ class Scheduler:
         target = self.preset.day_preheat
         reason = ""
         skip_day = False
+        is_evening = now.hour >= 18  # Evening is 18:00+
         
         # NetDaemon logic: skip if tomorrow night < current AND current is expensive (> 0.20)
         # This matches: nextNightPrice.Value < CurrentPrice && EnergyPriceLevel > Level.Medium
@@ -121,7 +130,10 @@ class Scheduler:
             and tomorrow_night_avg < current_price
             and current_price > 0.20  # "Medium" threshold in euros
         ):
-            reason = f"{prefix}: skipping — tomorrow night cheaper ({tomorrow_night_avg:.2f}¢ vs now {current_price:.2f}¢)"
+            if is_evening:
+                reason = f"Evening: waiting for night program ({tomorrow_night_avg:.2f}¢ vs now {current_price:.2f}¢)"
+            else:
+                reason = f"{prefix}: skipping — tonight cheaper ({tomorrow_night_avg:.2f}¢ vs now {current_price:.2f}¢)"
             skip_day = True
             target = self.preset.day_minimal  # Use minimal temp, not 0
         elif slot:
@@ -133,7 +145,7 @@ class Scheduler:
             reason,
             planned_time=slot[0] if slot and not skip_day else None,
             planned_price=slot[1] if slot and not skip_day else None,
-            extra="skip_day" if skip_day else None,
+            extra="skip_evening" if skip_day and is_evening else ("skip_day" if skip_day else None),
         )
     
     def can_start_program(self, now: Optional[datetime] = None) -> bool:
@@ -257,7 +269,7 @@ class Scheduler:
             )
         
         # 7. Day program (default)
-        return self._build_day_decision(night_end, slot=day_slot)
+        return self._build_day_decision(night_end, slot=day_slot, now=now)
     
     def get_program_window(
         self, 
@@ -349,9 +361,11 @@ class Scheduler:
         elif is_heating:
             return f"Heating ({decision.target_temp}°C)"
         else:
-            # Check if skipping day heating for tomorrow night
-            if decision.extra == "skip_day":
-                return "⏭️ Skipping day | Tomorrow night cheaper"
+            # Check if skipping - different messages for evening vs daytime
+            if decision.extra == "skip_evening":
+                return "🌙 Evening idle | Night program cheaper"
+            elif decision.extra == "skip_day":
+                return "⏭️ Skipping day | Tonight cheaper"
             
             # Idle - check for next planned program
             if window:
