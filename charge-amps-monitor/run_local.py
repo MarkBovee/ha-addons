@@ -19,7 +19,7 @@ except ImportError:
 
 DEFAULT_ENV_VALUES = {
     "CHARGER_AUTOMATION_ENABLED": "false",
-    "CHARGER_PRICE_SENSOR_ENTITY": "sensor.ep_price_import",
+    "CHARGER_PRICE_SENSOR_ENTITY": "sensor.energy_prices_electricity_import_price",
     "CHARGER_REQUIRED_MINUTES_PER_DAY": "240",
     "CHARGER_EARLIEST_START_HOUR": "0",
     "CHARGER_LATEST_END_HOUR": "8",
@@ -109,7 +109,7 @@ def print_config_summary():
     print(f"Base URL: {os.environ.get('CHARGER_BASE_URL', 'https://my.charge.space (default)')}")
     print(f"Update Interval: {os.environ.get('CHARGER_UPDATE_INTERVAL', '1 (default)')} minutes")
     print(f"Automation Enabled: {os.environ.get('CHARGER_AUTOMATION_ENABLED', 'false')}")
-    print(f"Price Sensor: {os.environ.get('CHARGER_PRICE_SENSOR_ENTITY', 'sensor.ep_price_import')}")
+    print(f"Price Sensor: {os.environ.get('CHARGER_PRICE_SENSOR_ENTITY', 'sensor.energy_prices_electricity_import_price')}")
     print(f"Required Minutes / Day: {os.environ.get('CHARGER_REQUIRED_MINUTES_PER_DAY', '240')} minutes")
     print(f"Window: {os.environ.get('CHARGER_EARLIEST_START_HOUR', '0')}h - {os.environ.get('CHARGER_LATEST_END_HOUR', '8')}h")
     print(f"Max Current / Phase: {os.environ.get('CHARGER_MAX_CURRENT_PER_PHASE', '16')}A")

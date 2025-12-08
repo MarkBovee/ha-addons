@@ -69,7 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Fixed 403 Forbidden error when reading price sensor state in Supervisor environment
   - Added fallback method to get entity state via /states endpoint when direct access fails
   - Some Home Assistant Supervisor versions restrict direct /states/{entity_id} access
-- Updated default price sensor entity to match energy-prices add-on: `sensor.energy_prices_price_import`
+- Updated default price sensor entity to match energy-prices add-on: `sensor.energy_prices_electricity_import_price`
 
 ## [1.2.0] - 2025-12-04
 

@@ -78,7 +78,7 @@ class PriceSlotAnalyzer:
         
         Args:
             ha_api: Home Assistant API client
-            price_entity_id: Entity ID of the price sensor (e.g., sensor.ep_price_import)
+            price_entity_id: Entity ID of the price sensor (e.g., sensor.energy_prices_electricity_import_price)
             timezone_name: Timezone for local time conversions
             top_x_count: Number of unique price levels to select (default 16)
             price_threshold: Max price in EUR/kWh (None = no threshold)
