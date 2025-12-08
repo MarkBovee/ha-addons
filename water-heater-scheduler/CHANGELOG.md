@@ -8,6 +8,13 @@ All notable changes to the Water Heater Scheduler add-on will be documented in t
 - Day vs tomorrow comparison now looks at tonight's evening window (18:00–00:00) versus tomorrow night's window (00:00–06:00) to avoid skipping an entire day when tomorrow night is cheaper.
 - Kept day preheat target while reflecting the new reasoning in status messages.
 
+## [1.2.8] - 2025-12-08
+
+### Fixed
+- Resolved startup/import errors by aligning `main.py` with the class-based `PriceAnalyzer`/`Scheduler` flow.
+- Removed leftover `dynamic_window_mode` references from configuration and scheduling logic.
+- Confirmed single-iteration (`RUN_ONCE`) execution succeeds after the cleanup.
+
 ## [1.2.6] - 2025-12-06
 
 ### Changed
