@@ -83,7 +83,7 @@ class HomeAssistantApi:
         """Create or update a Home Assistant entity.
         
         Args:
-            entity_id: Entity ID (e.g., sensor.ep_price_import)
+            entity_id: Entity ID (e.g., sensor.energy_prices_electricity_import_price)
             state: Entity state value
             attributes: Entity attributes dictionary
             log_success: Whether to log successful updates

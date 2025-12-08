@@ -849,7 +849,7 @@ def main():
         operation_mode = "standalone"
     
     automation_enabled = parse_bool(os.environ.get("CHARGER_AUTOMATION_ENABLED"), False)
-    price_sensor_entity = os.environ.get("CHARGER_PRICE_SENSOR_ENTITY", "sensor.ep_price_import")
+    price_sensor_entity = os.environ.get("CHARGER_PRICE_SENSOR_ENTITY", "sensor.energy_prices_electricity_import_price")
     top_x_charge_count = get_int_env("CHARGER_TOP_X_CHARGE_COUNT", 16)
     price_threshold = get_float_env("CHARGER_PRICE_THRESHOLD", DEFAULT_PRICE_THRESHOLD)
     max_current = get_int_env("CHARGER_MAX_CURRENT_PER_PHASE", 16)

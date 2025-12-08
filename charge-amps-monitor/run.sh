@@ -8,7 +8,7 @@ BASE_URL=$(bashio::config 'base_url')
 UPDATE_INTERVAL=$(bashio::config 'update_interval')
 
 AUTOMATION_ENABLED=$(bashio::config 'automation_enabled' 'false')
-PRICE_SENSOR_ENTITY=$(bashio::config 'price_sensor_entity' 'sensor.ep_price_import')
+PRICE_SENSOR_ENTITY=$(bashio::config 'price_sensor_entity' 'sensor.energy_prices_electricity_import_price')
 REQUIRED_MINUTES=$(bashio::config 'required_minutes_per_day' '240')
 EARLIEST_START=$(bashio::config 'earliest_start_hour' '0')
 LATEST_END=$(bashio::config 'latest_end_hour' '8')
