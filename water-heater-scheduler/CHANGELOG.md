@@ -2,6 +2,12 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.7] - 2025-12-08
+
+### Changed
+- Day vs tomorrow comparison now looks at tonight's evening window (18:00–00:00) versus tomorrow night's window (00:00–06:00) to avoid skipping an entire day when tomorrow night is cheaper.
+- Kept day preheat target while reflecting the new reasoning in status messages.
+
 ## [1.2.6] - 2025-12-06
 
 ### Changed
