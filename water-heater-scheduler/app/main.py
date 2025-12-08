@@ -7,10 +7,11 @@ Logic ported directly from NetDaemon WaterHeater.cs for reliability.
 import logging
 from datetime import datetime, timedelta
 
-from .models import ScheduleConfig, HeaterState
+from .models import ScheduleConfig, HeaterState, ProgramType
 from .water_heater_controller import WaterHeaterController, EntityStateReader
-from .price_analyzer import parse_price_curve
-from .scheduler import set_water_temperature
+from .price_analyzer import PriceAnalyzer
+from .scheduler import Scheduler
+from .status_manager import get_status_visual, update_status_entity, update_legionella_entity
 
 # Import shared modules
 from shared.addon_base import setup_logging, setup_signal_handlers, sleep_with_shutdown_check
@@ -115,9 +116,13 @@ def main():
     # Initialize components
     heater_controller = WaterHeaterController(ha_api, config.water_heater_entity_id)
     entity_reader = EntityStateReader(ha_api)
+    price_analyzer = PriceAnalyzer()
     
     # Load persistent state
     state = HeaterState.load()
+    
+    # Initialize scheduler with state
+    scheduler = Scheduler(config, price_analyzer, state)
     
     # Check for initial_legionella_date config (bootstrap setting)
     raw_config = load_addon_config(defaults=WH_CONFIG_DEFAULTS, required_fields=[])
@@ -156,33 +161,61 @@ def main():
             if not price_state:
                 logger.warning("Price sensor %s unavailable", config.price_sensor_entity_id)
             else:
-                # Parse prices
-                prices_today = parse_price_curve(price_state)
-                
-                # Get tomorrow's prices (if available)
-                # They're in the same price_curve, just filter by date
-                tomorrow = datetime.now() + timedelta(days=1)
-                prices_tomorrow = {dt: p for dt, p in prices_today.items() 
-                                   if dt.date() == tomorrow.date()}
-                prices_today = {dt: p for dt, p in prices_today.items() 
-                               if dt.date() == datetime.now().date()}
-                
-                current_price = float(price_state.get("state", 0))
-                
-                if not prices_today:
-                    logger.warning("No price data for today")
+                if not price_analyzer.update_prices(price_state):
+                    logger.warning("Failed to update price data from sensor %s", config.price_sensor_entity_id)
+                elif not price_analyzer.has_prices:
+                    logger.warning("No price data available after parsing price_curve")
                 else:
-                    # Run the main logic
-                    set_water_temperature(
-                        config=config,
-                        ha_api=ha_api,
-                        state=state,
-                        heater_controller=heater_controller,
-                        entity_reader=entity_reader,
-                        prices_today=prices_today,
-                        prices_tomorrow=prices_tomorrow,
-                        current_price=current_price,
+                    # Determine current context
+                    current_price = price_analyzer.current_price or float(price_state.get("state", 0))
+                    away_mode_on = entity_reader.is_entity_on(config.away_mode_entity_id)
+                    bath_mode_on = entity_reader.is_entity_on(config.bath_mode_entity_id)
+                    heater_controller.get_state()
+                    current_water_temp = heater_controller.current_temperature
+
+                    decision = scheduler.select_program(
+                        away_mode_on=away_mode_on,
+                        bath_mode_on=bath_mode_on,
+                        current_water_temp=current_water_temp,
                     )
+
+                    window = scheduler.get_program_window(decision.program)
+                    now = datetime.now(price_analyzer.timezone)
+                    if window is not None:
+                        start_raw, end_raw = window
+                        start = start_raw if start_raw.tzinfo else start_raw.replace(tzinfo=price_analyzer.timezone)
+                        end = end_raw if end_raw.tzinfo else end_raw.replace(tzinfo=price_analyzer.timezone)
+                        in_window = start <= now <= end
+                    else:
+                        in_window = False
+                    can_start = scheduler.can_start_program(now)
+
+                    apply_now = (
+                        decision.program in (ProgramType.NEGATIVE_PRICE, ProgramType.BATH)
+                        or (in_window and can_start)
+                    )
+
+                    if apply_now:
+                        heater_controller.apply_program(decision.target_temp)
+                        state.current_program = decision.program.value
+                        state.target_temperature = decision.target_temp
+                        state.heater_on = True
+                        state.save()
+                    else:
+                        state.heater_on = False
+                        state.save()
+
+                    status_msg = scheduler.build_status_message(decision, window, now=now)
+                    status_icon, status_color = get_status_visual(decision.program, now)
+                    update_status_entity(
+                        ha_api,
+                        status_msg,
+                        decision.program,
+                        decision.target_temp,
+                        status_icon,
+                        status_color,
+                    )
+                    update_legionella_entity(ha_api, state.get_last_legionella_protection())
             
         except Exception as e:
             logger.error("Error in evaluation cycle: %s", e, exc_info=True)

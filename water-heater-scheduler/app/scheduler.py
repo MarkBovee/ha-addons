@@ -204,30 +204,6 @@ class Scheduler:
         day_slot = self.price_analyzer.get_lowest_day_price(night_end)
         night_vs_day = self.price_analyzer.compare_night_vs_day(night_start, night_end)
         
-        # 4. Dynamic selection (auto day vs night)
-        if self.config.dynamic_window_mode:
-            if night_vs_day is True:
-                return ProgramDecision(
-                    ProgramType.NIGHT,
-                    self.preset.night_preheat,
-                    "Dynamic: night window cheaper than day",
-                    planned_time=night_slot[0] if night_slot else None,
-                    planned_price=night_slot[1] if night_slot else None,
-                )
-            if night_vs_day is False:
-                decision = self._build_day_decision(
-                    night_end,
-                    prefix="Dynamic day window",
-                    slot=day_slot,
-                )
-                extra_reason = "Night window more expensive"
-                if decision.reason:
-                    decision.reason += f" | {extra_reason}"
-                else:
-                    decision.reason = extra_reason
-                return decision
-            logger.debug("Dynamic window mode enabled but insufficient price data")
-        
         # 5. Legionella day in regular mode
         if self.is_legionella_day(now) and not in_night:
             return ProgramDecision(
@@ -313,52 +289,7 @@ class Scheduler:
         self,
         after: datetime,
     ) -> Optional[Tuple[ProgramType, Tuple[datetime, datetime]]]:
-        """Find the next planned heating window after a timestamp.
-
-        Currently only used in dynamic window mode, once tomorrow's prices are
-        available. Returns the selected program and its window.
-        """
-        if not self.config.dynamic_window_mode:
-            return None
-        if not self.price_analyzer.has_tomorrow_prices():
-            return None
-        if after.tzinfo is None:
-            tz_after = after.replace(tzinfo=self.price_analyzer.timezone)
-        else:
-            tz_after = after.astimezone(self.price_analyzer.timezone)
-        night_start = self.config.get_night_window_start()
-        night_end = self.config.get_night_window_end()
-        heating_duration = timedelta(hours=self.config.heating_duration_hours)
-        # Look at the remainder of today plus the next two days to find a slot
-        for offset in range(0, 3):
-            date_ref = tz_after + timedelta(days=offset)
-            preference = self.price_analyzer.compare_night_vs_day(
-                night_start,
-                night_end,
-                target_date=date_ref,
-            )
-            if preference is None:
-                continue
-            if preference is True:
-                slot = self.price_analyzer.get_lowest_night_price(
-                    night_start,
-                    night_end,
-                    target_date=date_ref,
-                )
-                program = ProgramType.NIGHT
-            else:
-                slot = self.price_analyzer.get_lowest_day_price(
-                    night_end,
-                    target_date=date_ref,
-                )
-                program = ProgramType.DAY
-            if slot is None:
-                continue
-            start = slot[0]
-            if start <= tz_after:
-                continue
-            end = start + heating_duration
-            return program, (start, end)
+        """Return None - future window planning disabled (dynamic mode removed)."""
         return None
     
     def build_status_message(
@@ -400,10 +331,6 @@ class Scheduler:
                 start, _ = window
                 if start > now:
                     return f"Idle, heating at {start.strftime('%H:%M')}"
-            next_window = self.get_next_planned_window(now)
-            if next_window:
-                _, (start, _) = next_window
-                return f"Idle, heating at {start.strftime('%H:%M')}"
             return "Idle"
     
     def mark_cycle_complete(self) -> None:
