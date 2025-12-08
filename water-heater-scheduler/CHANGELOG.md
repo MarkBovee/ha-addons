@@ -2,6 +2,16 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.9] - 2025-12-08
+
+### Changed
+- **Day skip logic now matches NetDaemon WaterHeater.cs**:
+  - Compares **current price** vs **tomorrow's night average** (00:00-06:00)
+  - Only skips day heating if: tomorrow night is cheaper AND current price > €0.20 (Medium)
+  - This prevents skipping when prices are already low
+  - Status shows `⏭️ Skipping day | Tomorrow night cheaper` when skipping
+  - Shows actual prices in reason: "tomorrow night cheaper (X.XX¢ vs now Y.YY¢)"
+
 ## [1.2.7] - 2025-12-08
 
 ### Changed

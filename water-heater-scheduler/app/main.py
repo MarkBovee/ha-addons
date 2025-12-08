@@ -178,6 +178,9 @@ def main():
                         bath_mode_on=bath_mode_on,
                         current_water_temp=current_water_temp,
                     )
+                    
+                    logger.debug("Decision: program=%s, target=%d°C, reason=%s",
+                                decision.program.value, decision.target_temp, decision.reason)
 
                     window = scheduler.get_program_window(decision.program)
                     now = datetime.now(price_analyzer.timezone)
@@ -206,6 +209,7 @@ def main():
                         state.save()
 
                     status_msg = scheduler.build_status_message(decision, window, now=now)
+                    logger.info("Status: %s | %s", status_msg, decision.reason)
                     status_icon, status_color = get_status_visual(decision.program, now)
                     update_status_entity(
                         ha_api,

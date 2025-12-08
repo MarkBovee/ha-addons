@@ -230,6 +230,36 @@ class PriceAnalyzer:
         """Check if tomorrow's prices are available."""
         return len(self.get_tomorrow_prices()) > 0
     
+    def get_tomorrow_night_avg(
+        self,
+        night_end: time = time(6, 0),
+    ) -> Optional[float]:
+        """Get average price for tomorrow's night window (00:00 to night_end).
+
+        This matches the NetDaemon WaterHeater.cs logic which uses GetNextNightPrice
+        to get tomorrow's early morning prices for comparison.
+
+        Args:
+            night_end: End of night window (default 06:00)
+
+        Returns:
+            Average price for tomorrow 00:00-night_end, or None if no data
+        """
+        now = datetime.now(self.timezone)
+        tomorrow = now.date() + timedelta(days=1)
+        tomorrow_ref = datetime.combine(tomorrow, time(0, 0), tzinfo=self.timezone)
+
+        tomorrow_night_prices = self.get_prices_in_window(
+            time(0, 0),
+            night_end,
+            target_date=tomorrow_ref,
+        )
+
+        if not tomorrow_night_prices:
+            return None
+
+        return sum(tomorrow_night_prices.values()) / len(tomorrow_night_prices)
+
     def compare_today_vs_tomorrow(
         self,
         evening_start: time = time(18, 0),
