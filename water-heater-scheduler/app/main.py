@@ -6,16 +6,14 @@ Logic ported directly from NetDaemon WaterHeater.cs for reliability.
 
 import logging
 from datetime import datetime, timedelta
+from typing import Optional, Tuple, Dict, Any
 
 from .models import ScheduleConfig, HeaterState, ProgramType
 from .water_heater_controller import WaterHeaterController, EntityStateReader
-from .price_analyzer import PriceAnalyzer
-from .scheduler import Scheduler
-from .status_manager import get_status_visual, update_status_entity, update_legionella_entity
 
 # Import shared modules
 from shared.addon_base import setup_logging, setup_signal_handlers, sleep_with_shutdown_check
-from shared.ha_api import HomeAssistantApi
+from shared.ha_api import HomeAssistantApi, get_ha_api_config
 from shared.config_loader import load_addon_config, get_run_once_mode
 
 # Configure logging
@@ -38,10 +36,51 @@ WH_CONFIG_DEFAULTS = {
     'temperature_preset': 'comfort',
     'min_cycle_gap_minutes': 50,
     'log_level': 'info',
-    'initial_legionella_date': '',
 }
 
 WH_REQUIRED_FIELDS = ['water_heater_entity_id']
+
+# Status entity to update (compatible with NetDaemon WaterHeater app)
+STATUS_TEXT_ENTITY = 'input_text.heating_schedule_status'
+
+# Day of week mapping (matches C# DayOfWeek enum)
+DAYS_OF_WEEK = {
+    "Sunday": 6,
+    "Monday": 0,
+    "Tuesday": 1,
+    "Wednesday": 2,
+    "Thursday": 3,
+    "Friday": 4,
+    "Saturday": 5,
+}
+
+WINTER_MONTHS = {10, 11, 12, 1, 2, 3}
+
+
+def get_status_visual(program: ProgramType, current_time: datetime) -> Tuple[str, Optional[str]]:
+    """Return icon + color to match the current program and season."""
+    is_winter = current_time.month in WINTER_MONTHS
+    light_blue = "#ADD8E6"
+    
+    if program in (ProgramType.DAY, ProgramType.NIGHT):
+        icon = "mdi:snowflake-thermometer" if is_winter else "mdi:water-thermometer"
+        color = light_blue
+    elif program == ProgramType.NEGATIVE_PRICE:
+        icon = "mdi:lightning-bolt-circle"
+        color = "#ffb300"
+    elif program == ProgramType.LEGIONELLA:
+        icon = "mdi:shield-heat"
+        color = "#ff7043"
+    elif program == ProgramType.BATH:
+        icon = "mdi:bathtub"
+        color = "#4dd0e1"
+    elif program == ProgramType.AWAY:
+        icon = "mdi:bag-suitcase"
+        color = "#78909c"
+    else:
+        icon = "mdi:information-outline"
+        color = "#b0bec5"
+    return icon, color
 
 
 def load_config() -> ScheduleConfig:
@@ -89,6 +128,423 @@ def load_config() -> ScheduleConfig:
     return config
 
 
+def parse_price_curve(sensor_state: Dict[str, Any]) -> Dict[datetime, float]:
+    """Parse price_curve from sensor attributes into datetime->price dict.
+    
+    Mirrors PriceHelper.PricesToday in NetDaemon.
+    """
+    prices = {}
+    attributes = sensor_state.get("attributes", {})
+    price_curve = attributes.get("price_curve", [])
+    
+    for entry in price_curve:
+        if not isinstance(entry, dict):
+            continue
+        start_str = entry.get("start") or entry.get("time")
+        price = entry.get("price")
+        if start_str is None or price is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(start_str))
+            # Convert to local time for comparison (strip timezone for simple comparisons)
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            prices[dt] = float(price)
+        except (ValueError, TypeError):
+            continue
+    
+    return prices
+
+
+def get_lowest_price_in_range(prices: Dict[datetime, float], start_hour: int, end_hour: int, 
+                               target_date: datetime) -> Tuple[datetime, float]:
+    """Get the lowest price in a time range.
+    
+    Mirrors PriceHelper.GetLowestNightPrice / GetLowestDayPrice.
+    """
+    target_day = target_date.date()
+    filtered = {}
+    
+    for dt, price in prices.items():
+        if dt.date() != target_day:
+            continue
+        hour = dt.hour
+        if start_hour <= end_hour:
+            # Normal range (e.g., 6-23)
+            if start_hour <= hour < end_hour:
+                filtered[dt] = price
+        else:
+            # Overnight range (e.g., 0-6)
+            if hour >= start_hour or hour < end_hour:
+                filtered[dt] = price
+    
+    if not filtered:
+        # Return a default if no prices found
+        default_time = target_date.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+        return (default_time, 0.5)
+    
+    lowest_dt = min(filtered, key=filtered.get)
+    return (lowest_dt, filtered[lowest_dt])
+
+
+def get_lowest_night_price(prices: Dict[datetime, float], target_date: datetime) -> Tuple[datetime, float]:
+    """Get lowest price during night hours (0:00 - 6:00)."""
+    return get_lowest_price_in_range(prices, 0, 6, target_date)
+
+
+def get_lowest_day_price(prices: Dict[datetime, float], target_date: datetime) -> Tuple[datetime, float]:
+    """Get lowest price during day hours (6:00 - 24:00)."""
+    return get_lowest_price_in_range(prices, 6, 24, target_date)
+
+
+def get_next_night_price(prices_tomorrow: Dict[datetime, float], tomorrow: datetime) -> Tuple[datetime, float]:
+    """Get lowest night price for tomorrow."""
+    return get_lowest_night_price(prices_tomorrow, tomorrow)
+
+
+def get_price_level(current_price: float, prices: Dict[datetime, float]) -> str:
+    """Determine price level (None/Low/Medium/High) based on fixed price thresholds.
+    
+    Matches NetDaemon PriceHelper.GetEnergyPriceLevel() exactly:
+    - None: price < 0 (actual negative/free energy)
+    - Low: price < 0.10 EUR/kWh
+    - Medium: price < 0.35 EUR/kWh (and below threshold)
+    - High: price < 0.45 EUR/kWh or above threshold
+    - Maximum: price >= 0.45 EUR/kWh
+    """
+    if not prices:
+        return "Medium"
+    
+    # Calculate price threshold (average of today's prices, min 0.28)
+    avg_price = sum(prices.values()) / len(prices) if prices else 0.28
+    price_threshold = max(avg_price, 0.28)
+    
+    # Fixed thresholds matching NetDaemon PriceHelper.cs GetEnergyPriceLevel()
+    if current_price < 0:
+        return "None"  # Actual negative price - free energy
+    elif current_price < 0.10:
+        return "Low"   # Very cheap (< 10 cents/kWh)
+    elif current_price < 0.35:
+        # Medium if below threshold, High if above
+        return "Medium" if current_price < price_threshold else "High"
+    elif current_price < 0.45:
+        return "High"
+    else:
+        return "Maximum"
+
+
+def update_status_entity(ha_api: HomeAssistantApi, status_msg: str, 
+                         program: ProgramType, target_temp: int,
+                         status_icon: str, status_color: Optional[str]):
+    """Update the status input_text entity."""
+    attributes = {
+        "friendly_name": "Heating Schedule Status",
+        "icon": status_icon,
+        "program": program.value,
+        "target_temp": target_temp,
+    }
+    if status_color:
+        attributes["icon_color"] = status_color
+    
+    ha_api.create_or_update_entity(
+        entity_id=STATUS_TEXT_ENTITY,
+        state=status_msg,
+        attributes=attributes,
+        log_success=False
+    )
+
+
+def set_water_temperature(
+    config: ScheduleConfig,
+    ha_api: HomeAssistantApi,
+    state: HeaterState,
+    heater_controller: WaterHeaterController,
+    entity_reader: EntityStateReader,
+    prices_today: Dict[datetime, float],
+    prices_tomorrow: Dict[datetime, float],
+    current_price: float,
+) -> None:
+    """Set the water temperature for the heat pump.
+    
+    This is a direct port of WaterHeater.cs SetWaterTemperature() method.
+    """
+    now = datetime.now()
+    preset = config.get_preset()
+    
+    # Get current water heater state
+    heater_state = heater_controller.get_state()
+    if not heater_state:
+        logger.warning("Water heater unavailable")
+        return
+    
+    current_temp = heater_controller.current_temperature or 35
+    current_target_temp = heater_controller.target_temperature or 35
+    
+    # Check away mode
+    away_mode = entity_reader.is_entity_on(config.away_mode_entity_id)
+    
+    # Determine program type based on time (matching WaterHeater.cs logic exactly)
+    night_end_hour = config.get_night_window_end().hour
+    use_night_program = now.hour < night_end_hour
+    
+    # Check legionella day (Saturday by default)
+    legionella_weekday = DAYS_OF_WEEK.get(config.legionella_day, 5)
+    use_legionella_protection = not use_night_program and now.weekday() == legionella_weekday
+    
+    # Determine program type string
+    if away_mode:
+        program_type = "Away"
+        program = ProgramType.AWAY
+    elif use_night_program:
+        program_type = "Night"
+        program = ProgramType.NIGHT
+    elif use_legionella_protection:
+        program_type = "Legionella Protection"
+        program = ProgramType.LEGIONELLA
+    else:
+        program_type = "Day"
+        program = ProgramType.DAY
+    
+    # Check bath mode and auto-disable if water temp > 50
+    bath_mode = entity_reader.is_entity_on(config.bath_mode_entity_id)
+    if bath_mode and current_temp > config.bath_auto_off_temp:
+        entity_reader.turn_off_entity(config.bath_mode_entity_id)
+        bath_mode = False
+        logger.info("Bath mode auto-disabled at %.1f°C", current_temp)
+    
+    if bath_mode:
+        program_type = "Bath"
+        program = ProgramType.BATH
+    
+    # Get price slots
+    lowest_night_price = get_lowest_night_price(prices_today, now)
+    lowest_day_price = get_lowest_day_price(prices_today, now)
+    tomorrow = now + timedelta(days=1)
+    next_night_price = get_next_night_price(prices_tomorrow, tomorrow) if prices_tomorrow else (tomorrow, 999.0)
+    
+    logger.debug("Schedule: program=%s, night=%s@%.4f, day=%s@%.4f",
+                program_type,
+                lowest_night_price[0].strftime("%H:%M"), lowest_night_price[1],
+                lowest_day_price[0].strftime("%H:%M"), lowest_day_price[1])
+    
+    # Determine start time
+    start_time = lowest_night_price[0] if use_night_program else lowest_day_price[0]
+    
+    # Legionella optimization: check if 15 min before is cheaper than 15 min after
+    if use_legionella_protection and 0 < start_time.hour < 23:
+        prev_time = start_time - timedelta(minutes=15)
+        next_time = start_time + timedelta(minutes=15)
+        
+        prev_price = prices_today.get(prev_time)
+        next_price = prices_today.get(next_time)
+        
+        if prev_price is not None and next_price is not None and prev_price < next_price:
+            start_time = prev_time
+            # Only log if the adjusted time is in the future (actionable info)
+            if start_time > now:
+                logger.info("Legionella: Optimized start to %s (€%.4f vs €%.4f after)",
+                           start_time.strftime("%H:%M"), prev_price, next_price)
+    
+    # Set end time: 3 hours for legionella, 1 hour for normal
+    duration_hours = config.legionella_duration_hours if use_legionella_protection else config.heating_duration_hours
+    end_time = start_time + timedelta(hours=duration_hours)
+    
+    # Get energy price level for temperature decisions
+    energy_price_level = get_price_level(current_price, prices_today)
+    
+    logger.debug("Price analysis: current=%.4f EUR/kWh, level=%s", current_price, energy_price_level)
+    
+    # === Temperature Selection Logic (from WaterHeater.cs) ===
+    idle_temperature = preset.idle  # 35
+    heating_temperature = idle_temperature
+    program_temperature = idle_temperature
+    
+    # Build next heating info for idle messages
+    if start_time > now:
+        next_heating_info = f"Next: {program_type} heating at {start_time.strftime('%H:%M')}"
+    else:
+        # Check if tomorrow's prices are available for next window prediction
+        if prices_tomorrow:
+            next_heating_info = "Next: Tomorrow's schedule ready"
+        else:
+            next_heating_info = "Waiting for tomorrow's prices"
+    
+    # Build idle text based on mode
+    if away_mode:
+        idle_text = f"🏖️ Away mode | {next_heating_info}"
+    elif bath_mode:
+        idle_text = f"🛁 Bath mode ready"
+    else:
+        idle_text = f"💤 Idle | {next_heating_info}"
+    
+    # Track decision reasoning for logging
+    decision_reason = None
+    
+    if away_mode:
+        # Away mode: only heat for legionella on Saturday
+        if use_legionella_protection and not use_night_program:
+            program_temperature = 66 if current_price < 0.2 else 60
+            decision_reason = f"Away + Legionella day: {program_temperature}°C"
+        else:
+            program_temperature = preset.away  # 35
+            decision_reason = "Away mode: minimal heating"
+    elif bath_mode:
+        program_temperature = preset.bath  # 58
+        heating_temperature = preset.bath
+        decision_reason = f"Bath mode: {program_temperature}°C"
+    else:
+        # Normal operation - set heating temp based on price level
+        if energy_price_level == "None":
+            heating_temperature = 70  # Free energy
+            decision_reason = "Free energy: max heating"
+        elif energy_price_level == "Low":
+            heating_temperature = 50
+            decision_reason = f"Low price (€{current_price:.3f}): opportunistic 50°C"
+        else:
+            heating_temperature = 35
+        
+        # Set program temperature based on program type
+        if use_night_program:
+            # Night: higher temp if night is cheaper than day
+            night_cheaper = lowest_night_price[1] < lowest_day_price[1]
+            program_temperature = preset.night_preheat if night_cheaper else preset.night_minimal
+            if night_cheaper:
+                decision_reason = f"Night cheaper (€{lowest_night_price[1]:.3f}) than day (€{lowest_day_price[1]:.3f}): preheat {program_temperature}°C"
+            else:
+                decision_reason = f"Day cheaper: minimal night heating {program_temperature}°C"
+        elif use_legionella_protection:
+            program_temperature = 70 if energy_price_level == "None" else preset.legionella
+            decision_reason = f"Legionella protection: {program_temperature}°C"
+        else:
+            # Day program
+            if energy_price_level == "None":
+                program_temperature = 70
+                decision_reason = "Free energy: max heating 70°C"
+            else:
+                program_temperature = preset.day_preheat  # 58
+                decision_reason = f"Day program: {program_temperature}°C"
+                
+                # If tomorrow night is cheaper, skip heating now
+                if next_night_price[1] > 0 and next_night_price[1] < current_price:
+                    if energy_price_level in ("Medium", "High"):
+                        program_temperature = heating_temperature
+                        decision_reason = f"Tomorrow night cheaper (€{next_night_price[1]:.3f} vs €{current_price:.3f}): skip day heating"
+    
+    # === Apply Temperature (matching WaterHeater.cs logic) ===
+    try:
+        in_window = start_time <= now <= end_time
+        
+        # Determine action for logging
+        if in_window:
+            if current_temp < program_temperature:
+                action = f"Heating to {program_temperature}°C"
+            else:
+                action = f"Target reached ({current_temp:.1f}°C)"
+        elif heating_temperature > idle_temperature and current_temp < heating_temperature:
+            action = f"Opportunistic {heating_temperature}°C"
+        else:
+            action = "Idle"
+        
+        # Log evaluation summary (always at INFO level for visibility)
+        window_info = f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}"
+        logger.info("[%s] %s | €%.3f (%s) | Window: %s | %s",
+                   program_type, action, current_price, energy_price_level, window_info,
+                   decision_reason or "Standard operation")
+        
+        if in_window:
+            # Inside heating window
+            if program_temperature <= state.target_temperature and state.heater_on:
+                # Already heating at same or higher temp
+                return
+            
+            # Log state change
+            old_temp = state.target_temperature
+            old_heater = state.heater_on
+            
+            state.target_temperature = program_temperature
+            state.heater_on = True
+            state.current_program = program.value
+            state.save()
+            
+            heater_controller.set_operation_mode("Manual")
+            heater_controller.set_temperature(program_temperature)
+            
+            # Log significant state changes
+            if old_temp != program_temperature or not old_heater:
+                logger.info("State change: %d°C → %d°C, heater %s → ON",
+                           old_temp, program_temperature, "ON" if old_heater else "OFF")
+            
+            if current_temp < program_temperature:
+                # Active heating - show what and until when
+                if away_mode:
+                    status_msg = f"🏖️ Away mode | Legionella cycle ({program_temperature}°C) until {end_time.strftime('%H:%M')}"
+                elif bath_mode:
+                    status_msg = f"🛁 Bath mode | Heating to {program_temperature}°C"
+                elif energy_price_level == "None":
+                    status_msg = f"⚡ Free energy! Heating to {program_temperature}°C"
+                elif use_legionella_protection:
+                    status_msg = f"🦠 Legionella protection ({program_temperature}°C) until {end_time.strftime('%H:%M')}"
+                else:
+                    status_msg = f"🔥 {program_type} heating ({program_temperature}°C) until {end_time.strftime('%H:%M')}"
+            else:
+                # Reached target temp during window
+                status_msg = f"✅ {program_type} heating complete | {next_heating_info}"
+        else:
+            # Outside heating window - use wait cycles logic
+            if state.target_temperature > idle_temperature and state.wait_cycles > 0:
+                state.wait_cycles -= 1
+                state.save()
+                
+                if current_temp < state.target_temperature:
+                    # Still finishing a heat cycle after window ended
+                    status_msg = f"⏳ Finishing heat cycle ({state.target_temperature}°C)"
+                    logger.debug("Finishing cycle: %d°C, %d cycles remaining", 
+                                state.target_temperature, state.wait_cycles)
+                else:
+                    # Heat cycle complete, show next
+                    status_msg = f"✅ Heat cycle complete | {next_heating_info}"
+                    logger.info("Heat cycle complete at %.1f°C", current_temp)
+            else:
+                # Reset to heating temperature
+                old_temp = state.target_temperature
+                old_heater = state.heater_on
+                
+                state.target_temperature = heating_temperature
+                state.wait_cycles = 10
+                state.heater_on = False
+                state.save()
+                
+                if current_target_temp != heating_temperature:
+                    heater_controller.set_operation_mode("Manual")
+                    heater_controller.set_temperature(heating_temperature)
+                    logger.info("Set heater target: %d°C (opportunistic)", heating_temperature)
+                
+                if heating_temperature > idle_temperature:
+                    if current_temp < heating_temperature:
+                        # Opportunistic heating due to low prices
+                        if energy_price_level == "None":
+                            status_msg = f"⚡ Free energy! Heating to {heating_temperature}°C"
+                        elif energy_price_level == "Low":
+                            status_msg = f"💰 Low price heating ({heating_temperature}°C)"
+                        else:
+                            status_msg = f"🔥 Heating ({heating_temperature}°C) | {next_heating_info}"
+                    else:
+                        status_msg = idle_text
+                else:
+                    status_msg = idle_text
+        
+        # Update status entity
+        status_icon, status_color = get_status_visual(program, now)
+        update_status_entity(ha_api, status_msg, program, state.target_temperature, status_icon, status_color)
+        
+    except Exception as e:
+        logger.error("Failed to set temperature: %s", e, exc_info=True)
+        state.target_temperature = 0
+        state.wait_cycles = 0
+        state.heater_on = False
+        state.save()
+
+
 def main():
     """Main entry point for Water Heater Scheduler add-on."""
     logger.info("Starting Water Heater Scheduler add-on...")
@@ -116,33 +572,9 @@ def main():
     # Initialize components
     heater_controller = WaterHeaterController(ha_api, config.water_heater_entity_id)
     entity_reader = EntityStateReader(ha_api)
-    price_analyzer = PriceAnalyzer()
     
     # Load persistent state
     state = HeaterState.load()
-    
-    # Initialize scheduler with state
-    scheduler = Scheduler(config, price_analyzer, state)
-    
-    # Check for initial_legionella_date config (bootstrap setting)
-    raw_config = load_addon_config(defaults=WH_CONFIG_DEFAULTS, required_fields=[])
-    initial_date = raw_config.get('initial_legionella_date', '')
-    if initial_date and state.last_legionella_protection is None:
-        try:
-            # Parse date like "2025-12-06" or "2025-12-06 05:00" or "2025-12-06T05:00:00"
-            from datetime import datetime as dt
-            if 'T' in initial_date:
-                parsed = dt.fromisoformat(initial_date)
-            elif ' ' in initial_date:
-                parsed = dt.strptime(initial_date, '%Y-%m-%d %H:%M')
-            else:
-                parsed = dt.strptime(initial_date + ' 05:00', '%Y-%m-%d %H:%M')
-            state.set_last_legionella_protection(parsed)
-            state.save()
-            logger.info("Initialized last_legionella_protection from config: %s", parsed.isoformat())
-            logger.info("You can now clear 'initial_legionella_date' from the add-on config.")
-        except ValueError as e:
-            logger.warning("Invalid initial_legionella_date format '%s': %s", initial_date, e)
     
     # Get run-once mode
     run_once = get_run_once_mode()
@@ -161,65 +593,33 @@ def main():
             if not price_state:
                 logger.warning("Price sensor %s unavailable", config.price_sensor_entity_id)
             else:
-                if not price_analyzer.update_prices(price_state):
-                    logger.warning("Failed to update price data from sensor %s", config.price_sensor_entity_id)
-                elif not price_analyzer.has_prices:
-                    logger.warning("No price data available after parsing price_curve")
+                # Parse prices
+                prices_today = parse_price_curve(price_state)
+                
+                # Get tomorrow's prices (if available)
+                # They're in the same price_curve, just filter by date
+                tomorrow = datetime.now() + timedelta(days=1)
+                prices_tomorrow = {dt: p for dt, p in prices_today.items() 
+                                   if dt.date() == tomorrow.date()}
+                prices_today = {dt: p for dt, p in prices_today.items() 
+                               if dt.date() == datetime.now().date()}
+                
+                current_price = float(price_state.get("state", 0))
+                
+                if not prices_today:
+                    logger.warning("No price data for today")
                 else:
-                    # Determine current context
-                    current_price = price_analyzer.current_price or float(price_state.get("state", 0))
-                    away_mode_on = entity_reader.is_entity_on(config.away_mode_entity_id)
-                    bath_mode_on = entity_reader.is_entity_on(config.bath_mode_entity_id)
-                    heater_controller.get_state()
-                    current_water_temp = heater_controller.current_temperature
-
-                    decision = scheduler.select_program(
-                        away_mode_on=away_mode_on,
-                        bath_mode_on=bath_mode_on,
-                        current_water_temp=current_water_temp,
+                    # Run the main logic
+                    set_water_temperature(
+                        config=config,
+                        ha_api=ha_api,
+                        state=state,
+                        heater_controller=heater_controller,
+                        entity_reader=entity_reader,
+                        prices_today=prices_today,
+                        prices_tomorrow=prices_tomorrow,
+                        current_price=current_price,
                     )
-                    
-                    logger.debug("Decision: program=%s, target=%d°C, reason=%s",
-                                decision.program.value, decision.target_temp, decision.reason)
-
-                    window = scheduler.get_program_window(decision.program)
-                    now = datetime.now(price_analyzer.timezone)
-                    if window is not None:
-                        start_raw, end_raw = window
-                        start = start_raw if start_raw.tzinfo else start_raw.replace(tzinfo=price_analyzer.timezone)
-                        end = end_raw if end_raw.tzinfo else end_raw.replace(tzinfo=price_analyzer.timezone)
-                        in_window = start <= now <= end
-                    else:
-                        in_window = False
-                    can_start = scheduler.can_start_program(now)
-
-                    apply_now = (
-                        decision.program in (ProgramType.NEGATIVE_PRICE, ProgramType.BATH)
-                        or (in_window and can_start)
-                    )
-
-                    if apply_now:
-                        heater_controller.apply_program(decision.target_temp)
-                        state.current_program = decision.program.value
-                        state.target_temperature = decision.target_temp
-                        state.heater_on = True
-                        state.save()
-                    else:
-                        state.heater_on = False
-                        state.save()
-
-                    status_msg = scheduler.build_status_message(decision, window, now=now)
-                    logger.info("Status: %s | %s", status_msg, decision.reason)
-                    status_icon, status_color = get_status_visual(decision.program, now)
-                    update_status_entity(
-                        ha_api,
-                        status_msg,
-                        decision.program,
-                        decision.target_temp,
-                        status_icon,
-                        status_color,
-                    )
-                    update_legionella_entity(ha_api, state.get_last_legionella_protection())
             
         except Exception as e:
             logger.error("Error in evaluation cycle: %s", e, exc_info=True)

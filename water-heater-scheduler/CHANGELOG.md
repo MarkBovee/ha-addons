@@ -2,80 +2,6 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
-## [1.2.10] - 2025-12-08
-
-### Changed
-- **Time-aware status messages**:
-  - Evening (18:00+): `🌙 Evening idle | Night program cheaper`
-  - Daytime (06:00-18:00): `⏭️ Skipping day | Tonight cheaper`
-  - Makes it clear we're waiting for the night program, not skipping a day program
-
-## [1.2.9] - 2025-12-08
-
-### Changed
-- **Day skip logic now matches NetDaemon WaterHeater.cs**:
-  - Compares **current price** vs **tomorrow's night average** (00:00-06:00)
-  - Only skips day heating if: tomorrow night is cheaper AND current price > €0.20 (Medium)
-  - This prevents skipping when prices are already low
-  - Status shows `⏭️ Skipping day | Tomorrow night cheaper` when skipping
-  - Shows actual prices in reason: "tomorrow night cheaper (X.XX¢ vs now Y.YY¢)"
-
-## [1.2.7] - 2025-12-08
-
-### Changed
-- Day vs tomorrow comparison now looks at tonight's evening window (18:00–00:00) versus tomorrow night's window (00:00–06:00) to avoid skipping an entire day when tomorrow night is cheaper.
-- Kept day preheat target while reflecting the new reasoning in status messages.
-
-## [1.2.8] - 2025-12-08
-
-### Fixed
-- Resolved startup/import errors by aligning `main.py` with the class-based `PriceAnalyzer`/`Scheduler` flow.
-- Removed leftover `dynamic_window_mode` references from configuration and scheduling logic.
-- Confirmed single-iteration (`RUN_ONCE`) execution succeeds after the cleanup.
-
-## [1.2.6] - 2025-12-06
-
-### Changed
-- **Improved status message when skipping for tomorrow's prices**:
-  - Now shows `⏭️ Skipping day heating | Tomorrow night cheaper (€X.XXX)` instead of generic idle message
-  - Makes it clear why the scheduled day heating window is being skipped
-
-## [1.2.5] - 2025-12-06
-
-### Added
-- **`initial_legionella_date` config option** - Set this once to bootstrap the legionella tracking:
-  - Format: `2025-12-06` or `2025-12-06 05:00` or `2025-12-06T05:00:00`
-  - Only applies if state has never been set (won't overwrite existing)
-  - Clear the setting after first startup
-
-## [1.2.4] - 2025-12-06
-
-### Added
-- **Legionella protection tracking** via new `sensor.wh_last_legionella` entity:
-  - Shows when legionella protection last ran
-  - Shows when next protection is due
-  - Indicates if protection is needed now
-- **Smart legionella scheduling** - only runs protection cycle if >7 days since last:
-  - Prevents running protection twice per day on Saturday
-  - Automatically tracks when water reaches 60°C (counts as protection)
-  - Persists across add-on restarts
-
-### Fixed
-- Fixed issue where legionella protection would run multiple times per day on Saturday
-
-## [1.2.3] - 2025-12-06
-
-### Changed
-- **Modularized codebase** for better maintainability:
-  - Extracted price analysis logic to `price_analyzer.py`
-  - Extracted status management to `status_manager.py`
-  - Extracted scheduling logic to `scheduler.py`
-  - Created `constants.py` for shared constants
-  - Reduced `main.py` to a slim entry point (~170 lines vs ~640 lines)
-
-### Removed
-- **Removed `dynamic_window_mode` setting** - this option was defined in configuration but never implemented in code
-
 ## [1.2.2] - 2025-12-06
 
 ### Changed
@@ -160,6 +86,7 @@ All notable changes to the Water Heater Scheduler add-on will be documented in t
 
 ### Added
 - Rolled schema back to the legacy type definitions (no selectors) to maximize Supervisor compatibility.
+- Configurable `dynamic_window_mode` option surfaced in UI/schema
 
 ## [1.0.0] - 2025-12-02
 
