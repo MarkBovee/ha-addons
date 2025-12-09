@@ -99,6 +99,7 @@ class ScheduleConfig:
     # Advanced settings
     min_cycle_gap_minutes: int = 50
     log_level: str = "info"
+    dynamic_window_mode: bool = False
     
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "ScheduleConfig":
@@ -106,6 +107,13 @@ class ScheduleConfig:
         # Filter empty strings to None for optional fields
         def empty_to_none(value):
             return None if value == "" else value
+        
+        def to_bool(value):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on"}
+            return bool(value)
         
         return cls(
             water_heater_entity_id=config.get("water_heater_entity_id", ""),
@@ -127,6 +135,7 @@ class ScheduleConfig:
             legionella_temp=config.get("legionella_temp"),
             min_cycle_gap_minutes=config.get("min_cycle_gap_minutes", 50),
             log_level=config.get("log_level", "info"),
+            dynamic_window_mode=to_bool(config.get("dynamic_window_mode", False)),
         )
     
     def get_preset(self) -> TemperaturePreset:
@@ -181,7 +190,6 @@ class HeaterState:
     current_program: str = "Idle"
     target_temperature: int = 35
     last_cycle_end: Optional[str] = None  # ISO format datetime string
-    last_legionella_protection: Optional[str] = None  # ISO format datetime string
     heater_on: bool = False
     wait_cycles: int = 0
     
@@ -193,15 +201,13 @@ class HeaterState:
             try:
                 with open(path, "r") as f:
                     data = json.load(f)
-                logger.info("Restored state: program=%s, temp=%d°C, last_legionella=%s", 
+                logger.info("Restored state: program=%s, temp=%d°C", 
                            data.get("current_program", "Idle"),
-                           data.get("target_temperature", 35),
-                           data.get("last_legionella_protection", "never"))
+                           data.get("target_temperature", 35))
                 return cls(
                     current_program=data.get("current_program", "Idle"),
                     target_temperature=data.get("target_temperature", 35),
                     last_cycle_end=data.get("last_cycle_end"),
-                    last_legionella_protection=data.get("last_legionella_protection"),
                     heater_on=data.get("heater_on", False),
                     wait_cycles=data.get("wait_cycles", 0),
                 )
@@ -231,24 +237,3 @@ class HeaterState:
     def set_last_cycle_end(self, dt: datetime) -> None:
         """Set last_cycle_end from datetime."""
         self.last_cycle_end = dt.isoformat()
-    
-    def get_last_legionella_protection(self) -> Optional[datetime]:
-        """Parse last_legionella_protection as datetime."""
-        if self.last_legionella_protection:
-            try:
-                return datetime.fromisoformat(self.last_legionella_protection)
-            except ValueError:
-                pass
-        return None
-    
-    def set_last_legionella_protection(self, dt: datetime) -> None:
-        """Set last_legionella_protection from datetime."""
-        self.last_legionella_protection = dt.isoformat()
-    
-    def needs_legionella_protection(self, interval_days: int = 7) -> bool:
-        """Check if legionella protection is needed based on last run."""
-        last_run = self.get_last_legionella_protection()
-        if last_run is None:
-            return True  # Never run, need protection
-        days_since = (datetime.now() - last_run).days
-        return days_since >= interval_days
