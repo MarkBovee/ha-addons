@@ -8,7 +8,7 @@ Schedule domestic hot water heating based on electricity prices. This add-on opt
 - **Temperature presets**: Choose from eco, comfort, performance, or custom profiles
 - **Night/Day programs**: Automatically selects optimal heating times
 - **Dynamic window mode**: Optional automatic selection of day vs night based on prices
-- **Legionella protection**: Weekly high-temperature sanitization cycle
+- **Legionella protection**: Weekly high-temperature sanitization cycle, enforced with a 7-day guard and tracked in Home Assistant
 - **Away mode**: Minimal heating while you're away
 - **Bath mode**: Boost heating before baths with auto-disable
 - **Cycle gap protection**: Prevents rapid on/off toggling
@@ -146,6 +146,7 @@ To prevent the water heater from toggling rapidly:
 | `sensor.wh_program` | Current program (Night/Day/Legionella/Bath/Away/Idle) |
 | `sensor.wh_target_temp` | Current target temperature in °C |
 | `sensor.wh_status` | Human-readable status message (planned window, target, reason) |
+| `sensor.wh_last_legionella` | Timestamp and due-state for legionella protection (7-day guard) |
 
 ## Local Testing
 

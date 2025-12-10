@@ -2,6 +2,13 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.3] - 2025-12-10
+
+### Added
+- Restored legionella guard logic to prevent multiple high-temp cycles within 7 days.
+- Added `sensor.wh_last_legionella` tracking entity showing last run, next due, and whether protection is needed.
+- Automatically records manual/externally triggered >60°C heats as valid legionella protection.
+
 ## [1.2.2] - 2025-12-06
 
 ### Changed
