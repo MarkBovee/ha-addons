@@ -2,6 +2,12 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.4] - 2025-12-11
+
+### Changed
+- Heating window selection now uses the configured `heating_duration_hours` (and `legionella_duration_hours` on legionella day) to choose the lowest-average price window, avoiding late single-hour picks when the cheapest full hour sits late in the day.
+- Debug logging reports the average price of the chosen window and its duration for visibility.
+
 ## [1.2.3] - 2025-12-10
 
 ### Added
