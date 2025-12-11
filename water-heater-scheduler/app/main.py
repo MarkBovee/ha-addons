@@ -159,50 +159,58 @@ def parse_price_curve(sensor_state: Dict[str, Any]) -> Dict[datetime, float]:
     return prices
 
 
-def get_lowest_price_in_range(prices: Dict[datetime, float], start_hour: int, end_hour: int, 
-                               target_date: datetime) -> Tuple[datetime, float]:
-    """Get the lowest price in a time range.
-    
-    Mirrors PriceHelper.GetLowestNightPrice / GetLowestDayPrice.
+def get_lowest_price_window(
+    prices: Dict[datetime, float],
+    start_hour: int,
+    end_hour: int,
+    target_date: datetime,
+    duration_hours: int,
+) -> Tuple[datetime, float]:
+    """Get the lowest-average price window within the given hours.
+
+    Uses a sliding window sized by heating_duration_hours or legionella_duration_hours
+    so we select the cheapest full heating window, not a single hour.
     """
     target_day = target_date.date()
-    filtered = {}
-    
-    for dt, price in prices.items():
-        if dt.date() != target_day:
+    duration = max(1, duration_hours)
+
+    candidates: Dict[datetime, float] = {}
+
+    # Determine candidate start hours (non-wrapping windows are sufficient for current ranges)
+    last_start_hour = end_hour - duration
+    for hour in range(start_hour, max(start_hour, last_start_hour) + 1):
+        start_dt = target_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+        window_points = [start_dt + timedelta(hours=i) for i in range(duration)]
+
+        # Ensure all points exist for a full window on the same day
+        if any(pt.date() != target_day or pt not in prices for pt in window_points):
             continue
-        hour = dt.hour
-        if start_hour <= end_hour:
-            # Normal range (e.g., 6-23)
-            if start_hour <= hour < end_hour:
-                filtered[dt] = price
-        else:
-            # Overnight range (e.g., 0-6)
-            if hour >= start_hour or hour < end_hour:
-                filtered[dt] = price
-    
-    if not filtered:
-        # Return a default if no prices found
+
+        avg_price = sum(prices[pt] for pt in window_points) / duration
+        candidates[start_dt] = avg_price
+
+    if not candidates:
+        # Fall back to the start of the window with a default price if data is missing
         default_time = target_date.replace(hour=start_hour, minute=0, second=0, microsecond=0)
         return (default_time, 0.5)
-    
-    lowest_dt = min(filtered, key=filtered.get)
-    return (lowest_dt, filtered[lowest_dt])
+
+    best_start = min(candidates, key=candidates.get)
+    return (best_start, candidates[best_start])
 
 
-def get_lowest_night_price(prices: Dict[datetime, float], target_date: datetime) -> Tuple[datetime, float]:
-    """Get lowest price during night hours (0:00 - 6:00)."""
-    return get_lowest_price_in_range(prices, 0, 6, target_date)
+def get_lowest_night_price(prices: Dict[datetime, float], target_date: datetime, duration_hours: int) -> Tuple[datetime, float]:
+    """Get lowest-average price window during night hours (0:00 - 6:00)."""
+    return get_lowest_price_window(prices, 0, 6, target_date, duration_hours)
 
 
-def get_lowest_day_price(prices: Dict[datetime, float], target_date: datetime) -> Tuple[datetime, float]:
-    """Get lowest price during day hours (6:00 - 24:00)."""
-    return get_lowest_price_in_range(prices, 6, 24, target_date)
+def get_lowest_day_price(prices: Dict[datetime, float], target_date: datetime, duration_hours: int) -> Tuple[datetime, float]:
+    """Get lowest-average price window during day hours (6:00 - 24:00)."""
+    return get_lowest_price_window(prices, 6, 24, target_date, duration_hours)
 
 
-def get_next_night_price(prices_tomorrow: Dict[datetime, float], tomorrow: datetime) -> Tuple[datetime, float]:
-    """Get lowest night price for tomorrow."""
-    return get_lowest_night_price(prices_tomorrow, tomorrow)
+def get_next_night_price(prices_tomorrow: Dict[datetime, float], tomorrow: datetime, duration_hours: int) -> Tuple[datetime, float]:
+    """Get lowest-average night window for tomorrow."""
+    return get_lowest_night_price(prices_tomorrow, tomorrow, duration_hours)
 
 
 def get_price_level(current_price: float, prices: Dict[datetime, float]) -> str:
@@ -386,15 +394,24 @@ def set_water_temperature(
         program = ProgramType.BATH
     
     # Get price slots
-    lowest_night_price = get_lowest_night_price(prices_today, now)
-    lowest_day_price = get_lowest_day_price(prices_today, now)
+    duration_hours = config.legionella_duration_hours if use_legionella_protection else config.heating_duration_hours
+
+    lowest_night_price = get_lowest_night_price(prices_today, now, duration_hours)
+    lowest_day_price = get_lowest_day_price(prices_today, now, duration_hours)
     tomorrow = now + timedelta(days=1)
-    next_night_price = get_next_night_price(prices_tomorrow, tomorrow) if prices_tomorrow else (tomorrow, 999.0)
+    next_night_price = (
+        get_next_night_price(prices_tomorrow, tomorrow, config.heating_duration_hours)
+        if prices_tomorrow
+        else (tomorrow, 999.0)
+    )
     
-    logger.debug("Schedule: program=%s, night=%s@%.4f, day=%s@%.4f",
-                program_type,
-                lowest_night_price[0].strftime("%H:%M"), lowest_night_price[1],
-                lowest_day_price[0].strftime("%H:%M"), lowest_day_price[1])
+    logger.debug(
+        "Schedule: program=%s, night=%s@avg%.4f, day=%s@avg%.4f (duration %dh)",
+        program_type,
+        lowest_night_price[0].strftime("%H:%M"), lowest_night_price[1],
+        lowest_day_price[0].strftime("%H:%M"), lowest_day_price[1],
+        duration_hours,
+    )
     
     # Determine start time
     start_time = lowest_night_price[0] if use_night_program else lowest_day_price[0]
@@ -415,7 +432,6 @@ def set_water_temperature(
                            start_time.strftime("%H:%M"), prev_price, next_price)
     
     # Set end time: 3 hours for legionella, 1 hour for normal
-    duration_hours = config.legionella_duration_hours if use_legionella_protection else config.heating_duration_hours
     end_time = start_time + timedelta(hours=duration_hours)
     
     # Get energy price level for temperature decisions
