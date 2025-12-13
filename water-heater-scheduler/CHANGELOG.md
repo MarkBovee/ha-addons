@@ -2,6 +2,14 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.5] - 2025-12-13
+
+### Added
+- INFO-level logging for legionella decisions and scheduled windows (shows day check, interval guard, last run, and start/end times) to make missed cycles easy to diagnose.
+
+### Fixed
+- Prevents schedule backsliding to "waiting" by rescheduling to the best future window when the chosen slot has already ended.
+
 ## [1.2.4] - 2025-12-11
 
 ### Changed

@@ -5,7 +5,7 @@ Logic ported directly from NetDaemon WaterHeater.cs for reliability.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Optional, Tuple, Dict, Any
 
 from .models import ScheduleConfig, HeaterState, ProgramType
@@ -208,6 +208,49 @@ def get_lowest_day_price(prices: Dict[datetime, float], target_date: datetime, d
     return get_lowest_price_window(prices, 6, 24, target_date, duration_hours)
 
 
+def get_lowest_future_price_window(
+    prices: Dict[datetime, float],
+    start_hour: int,
+    end_hour: int,
+    target_date: datetime,
+    duration_hours: int,
+    now: datetime,
+) -> Tuple[datetime, float]:
+    """Get the lowest-average price window that starts in the future.
+
+    Filters out windows that have already ended to avoid scheduling in the past.
+    """
+    target_day = target_date.date()
+    duration = max(1, duration_hours)
+    candidates: Dict[datetime, float] = {}
+    last_start_hour = end_hour - duration
+
+    for hour in range(start_hour, last_start_hour + 1):
+        candidate_start = datetime.combine(target_day, time(hour, 0))
+        if candidate_start < now:
+            continue
+
+        window_prices = []
+        for offset in range(duration):
+            price = prices.get(candidate_start + timedelta(hours=offset))
+            if price is None:
+                break
+            window_prices.append(price)
+        if len(window_prices) == duration:
+            candidates[candidate_start] = sum(window_prices) / duration
+
+    if candidates:
+        best_start = min(candidates, key=candidates.get)
+        return best_start, candidates[best_start]
+
+    # Fallback: keep earliest possible future hour even if prices missing
+    fallback_start = max(
+        datetime.combine(target_day, time(start_hour, 0)),
+        now.replace(minute=0, second=0, microsecond=0),
+    )
+    return fallback_start, float("inf")
+
+
 def get_next_night_price(prices_tomorrow: Dict[datetime, float], tomorrow: datetime, duration_hours: int) -> Tuple[datetime, float]:
     """Get lowest-average night window for tomorrow."""
     return get_lowest_night_price(prices_tomorrow, tomorrow, duration_hours)
@@ -360,6 +403,17 @@ def set_water_temperature(
     needs_legionella = state.needs_legionella_protection(LEGIONELLA_INTERVAL_DAYS)
     use_legionella_protection = is_legionella_day and needs_legionella
 
+    last_legionella_str = last_legionella.isoformat(timespec="minutes") if last_legionella else "never"
+    logger.info(
+        "Legionella eval: day=%s after-night=%s needs=%s use=%s last_run=%s temp=%.1f°C",
+        is_legionella_day,
+        not use_night_program,
+        needs_legionella,
+        use_legionella_protection,
+        last_legionella_str,
+        current_temp,
+    )
+
     if is_legionella_day and not needs_legionella:
         days_since = (now - last_legionella).days if last_legionella else 0
         logger.info(
@@ -433,6 +487,40 @@ def set_water_temperature(
     
     # Set end time: 3 hours for legionella, 1 hour for normal
     end_time = start_time + timedelta(hours=duration_hours)
+
+    # If the chosen window already ended, pick the best future window to avoid "waiting" backslides
+    if end_time <= now:
+        future_price = get_lowest_future_price_window(
+            prices_today,
+            0 if use_night_program else 6,
+            6 if use_night_program else 24,
+            now,
+            duration_hours,
+            now,
+        )
+        future_start, future_avg = future_price
+        future_end = future_start + timedelta(hours=duration_hours)
+        if future_start != start_time:
+            logger.info(
+                "Rescheduled window: was %s-%s, now %s-%s (avg €%.4f)",
+                start_time.strftime("%H:%M"),
+                end_time.strftime("%H:%M"),
+                future_start.strftime("%H:%M"),
+                future_end.strftime("%H:%M"),
+                future_avg,
+            )
+        start_time, end_time = future_start, future_end
+
+    if use_legionella_protection:
+        start_price = prices_today.get(start_time, current_price)
+        logger.info(
+            "Legionella scheduled: %s-%s (%dh) start €%.4f | current=%.1f°C",
+            start_time.strftime("%H:%M"),
+            end_time.strftime("%H:%M"),
+            duration_hours,
+            start_price,
+            current_temp,
+        )
     
     # Get energy price level for temperature decisions
     energy_price_level = get_price_level(current_price, prices_today)
