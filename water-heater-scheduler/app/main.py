@@ -551,8 +551,16 @@ def set_water_temperature(
         if last_run and last_run.date() == now.date():
             logger.info("Cycle finished at %s. Done for today.", last_run.strftime("%H:%M"))
         else:
-            logger.info("Scheduled window %s-%s passed. Missed cycle for today.", 
-                       start_time.strftime("%H:%M"), end_time.strftime("%H:%M"))
+            # Check if water is already hot enough to consider the cycle "done"
+            # Use night_minimal as a safe threshold for "heated"
+            if current_temp >= preset.night_minimal:
+                logger.info("Scheduled window %s-%s passed, but water is hot (%.1f°C). Marking as done for today.", 
+                           start_time.strftime("%H:%M"), end_time.strftime("%H:%M"), current_temp)
+                state.set_last_cycle_end(now)
+                state.save()
+            else:
+                logger.info("Scheduled window %s-%s passed. Missed cycle for today.", 
+                           start_time.strftime("%H:%M"), end_time.strftime("%H:%M"))
 
     if use_legionella_protection:
         start_price = prices_today.get(start_time, current_price)
