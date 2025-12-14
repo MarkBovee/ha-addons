@@ -1,6 +1,6 @@
 name: Water Heater Scheduler
 description: Schedule domestic hot water heating based on electricity prices - optimizes for cost while maintaining comfort and legionella protection
-version: "1.2.6"
+version: "1.2.7"
 slug: water_heater_scheduler
 init: false
 homeassistant_api: true

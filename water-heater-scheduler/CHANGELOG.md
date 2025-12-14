@@ -2,6 +2,12 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.7] - 2025-12-14
+
+### Fixed
+- **Prevent rescheduling of missed windows**: If the optimal heating window for the day has already passed (e.g. due to add-on restart), the scheduler will now skip the cycle for the day instead of attempting to reschedule to a sub-optimal future window. This prevents "catch-up" heating at expensive times.
+- **Track daily cycle completion**: Added state tracking for daily heating cycles (`last_cycle_end`) to correctly identify if a cycle has already run or was missed.
+
 ## [1.2.6] - 2025-12-14
 
 ### Fixed
