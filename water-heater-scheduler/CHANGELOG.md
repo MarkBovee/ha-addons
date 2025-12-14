@@ -2,6 +2,16 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.6] - 2025-12-14
+
+### Fixed
+- **Reduced unnecessary status updates**: Status entities are now only updated when their state or attributes actually change, preventing duplicate "changed by Supervisor" log entries every 5 minutes when idle. This significantly reduces Home Assistant history log noise while maintaining full visibility of actual state changes.
+- Both the heating schedule status (`input_text.heating_schedule_status`) and legionella tracking entity (`sensor.wh_last_legionella`) now implement change detection.
+- **Ensured legionella entity updates on first run**: Fixed sentinel value initialization to guarantee the legionella tracking entity is created/updated on add-on startup.
+
+### Changed
+- Legionella entity updates now log at INFO level for better visibility of protection status changes.
+
 ## [1.2.5] - 2025-12-13
 
 ### Added

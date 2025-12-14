@@ -59,6 +59,22 @@ DAYS_OF_WEEK = {
 
 WINTER_MONTHS = {10, 11, 12, 1, 2, 3}
 
+# Track previous status to avoid unnecessary updates
+_previous_status_state = {
+    'message': None,
+    'program': None,
+    'target_temp': None,
+    'icon': None,
+    'color': None
+}
+
+_previous_legionella_state = {
+    'state': '__UNINITIALIZED__',  # Sentinel value to force first update
+    'days_ago': None,
+    'next_due': None,
+    'needs_protection': None
+}
+
 
 def get_status_visual(program: ProgramType, current_time: datetime) -> Tuple[str, Optional[str]]:
     """Return icon + color to match the current program and season."""
@@ -290,7 +306,20 @@ def get_price_level(current_price: float, prices: Dict[datetime, float]) -> str:
 def update_status_entity(ha_api: HomeAssistantApi, status_msg: str, 
                          program: ProgramType, target_temp: int,
                          status_icon: str, status_color: Optional[str]):
-    """Update the status input_text entity."""
+    """Update the status input_text entity only if something changed."""
+    global _previous_status_state
+    
+    # Check if anything changed
+    if (_previous_status_state['message'] == status_msg and
+        _previous_status_state['program'] == program.value and
+        _previous_status_state['target_temp'] == target_temp and
+        _previous_status_state['icon'] == status_icon and
+        _previous_status_state['color'] == status_color):
+        # Nothing changed, skip update
+        logger.debug("Status unchanged, skipping update")
+        return
+    
+    # Something changed, update the entity
     attributes = {
         "friendly_name": "Heating Schedule Status",
         "icon": status_icon,
@@ -306,10 +335,20 @@ def update_status_entity(ha_api: HomeAssistantApi, status_msg: str,
         attributes=attributes,
         log_success=False
     )
+    
+    # Update tracking state
+    _previous_status_state['message'] = status_msg
+    _previous_status_state['program'] = program.value
+    _previous_status_state['target_temp'] = target_temp
+    _previous_status_state['icon'] = status_icon
+    _previous_status_state['color'] = status_color
+    
+    logger.info("Status updated: %s", status_msg)
 
 
 def update_legionella_entity(ha_api: HomeAssistantApi, last_protection: Optional[datetime]) -> None:
-    """Publish last legionella run and next due information."""
+    """Publish last legionella run and next due information only if changed."""
+    global _previous_legionella_state
     now = datetime.now()
 
     if last_protection is None:
@@ -331,6 +370,15 @@ def update_legionella_entity(ha_api: HomeAssistantApi, last_protection: Optional
             next_due = f"In {days_until} days" if days_until > 0 else "Tomorrow"
             needs_protection = False
 
+    # Check if anything changed
+    if (_previous_legionella_state['state'] == state and
+        _previous_legionella_state['days_ago'] == days_ago and
+        _previous_legionella_state['next_due'] == next_due and
+        _previous_legionella_state['needs_protection'] == needs_protection):
+        # Nothing changed, skip update
+        logger.debug("Legionella status unchanged, skipping update")
+        return
+
     attributes = {
         "friendly_name": "Last Legionella Protection",
         "icon": "mdi:shield-check" if not needs_protection else "mdi:shield-alert",
@@ -349,6 +397,15 @@ def update_legionella_entity(ha_api: HomeAssistantApi, last_protection: Optional
         attributes=attributes,
         log_success=False,
     )
+    
+    # Update tracking state
+    _previous_legionella_state['state'] = state
+    _previous_legionella_state['days_ago'] = days_ago
+    _previous_legionella_state['next_due'] = next_due
+    _previous_legionella_state['needs_protection'] = needs_protection
+    
+    logger.info("Legionella status updated: %s, needs_protection=%s, next_due=%s", 
+                state, needs_protection, next_due)
 
 
 def set_water_temperature(
