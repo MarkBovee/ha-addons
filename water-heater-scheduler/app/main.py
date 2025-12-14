@@ -545,28 +545,14 @@ def set_water_temperature(
     # Set end time: 3 hours for legionella, 1 hour for normal
     end_time = start_time + timedelta(hours=duration_hours)
 
-    # If the chosen window already ended, pick the best future window to avoid "waiting" backslides
+    # If the chosen window already ended, check if we're done for the day
     if end_time <= now:
-        future_price = get_lowest_future_price_window(
-            prices_today,
-            0 if use_night_program else 6,
-            6 if use_night_program else 24,
-            now,
-            duration_hours,
-            now,
-        )
-        future_start, future_avg = future_price
-        future_end = future_start + timedelta(hours=duration_hours)
-        if future_start != start_time:
-            logger.info(
-                "Rescheduled window: was %s-%s, now %s-%s (avg €%.4f)",
-                start_time.strftime("%H:%M"),
-                end_time.strftime("%H:%M"),
-                future_start.strftime("%H:%M"),
-                future_end.strftime("%H:%M"),
-                future_avg,
-            )
-        start_time, end_time = future_start, future_end
+        last_run = state.get_last_cycle_end()
+        if last_run and last_run.date() == now.date():
+            logger.info("Cycle finished at %s. Done for today.", last_run.strftime("%H:%M"))
+        else:
+            logger.info("Scheduled window %s-%s passed. Missed cycle for today.", 
+                       start_time.strftime("%H:%M"), end_time.strftime("%H:%M"))
 
     if use_legionella_protection:
         start_price = prices_today.get(start_time, current_price)
@@ -682,6 +668,12 @@ def set_water_temperature(
                    decision_reason or "Standard operation")
         
         if in_window:
+            # Update last cycle end to track that we ran today
+            last_run = state.get_last_cycle_end()
+            if not last_run or last_run.date() < now.date():
+                state.set_last_cycle_end(now)
+                state.save()
+
             # Inside heating window
             if program_temperature <= state.target_temperature and state.heater_on:
                 # Already heating at same or higher temp
