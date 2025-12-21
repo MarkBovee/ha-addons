@@ -16,6 +16,7 @@ from .charger_api import ChargerApi
 from .price_slot_analyzer import DailyPriceAnalysis, PriceSlot, PriceSlotAnalyzer
 
 logger = logging.getLogger(__name__)
+WEEK_SECONDS = 7 * 24 * 60 * 60
 
 
 @dataclass
@@ -324,18 +325,20 @@ class ChargingAutomationCoordinator:
         return None
 
     def _get_week_start(self, dt: datetime) -> datetime:
-        """Get the start of the week (Monday 00:00 local time) for a given datetime.
-        
-        The Charge Amps API uses Monday as week start for European timezones.
-        The startOfSchedule should be Monday 00:00 local time, converted to UTC.
-        For Europe/Amsterdam (UTC+1 in winter), that means Sunday 23:00 UTC.
+        """Get the start of the Charge Amps week (Sunday 00:00 local time).
+
+        The API expects schedule periods to be within a single week window of
+        0..604800 seconds from the provided startOfSchedule. Using Sunday as the
+        anchor keeps both "today" and "tomorrow" slots within that range.
         """
         local_dt = dt.astimezone(self._tz)
-        # Monday = 0, so days_since_monday = weekday()
-        days_since_monday = local_dt.weekday()
-        monday_local = local_dt.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_since_monday)
-        # Convert to UTC for the API
-        return monday_local.astimezone(timezone.utc)
+        # weekday(): Monday=0, Sunday=6. days_since_sunday yields 0 on Sunday.
+        days_since_sunday = (local_dt.weekday() + 1) % 7
+        sunday_local = (
+            local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=days_since_sunday)
+        )
+        return sunday_local.astimezone(timezone.utc)
 
     def _slot_to_week_seconds(self, slot: PriceSlot, week_start: datetime) -> tuple[int, int]:
         """Convert a price slot to seconds from start of week (from, to)."""
@@ -356,13 +359,24 @@ class ChargingAutomationCoordinator:
         if not slots:
             return []
         
-        # Convert all slots to (from, to) seconds
+        # Convert all slots to (from, to) seconds and clamp to the current week window
         raw_periods = []
         for slot in slots:
             from_sec, to_sec = self._slot_to_week_seconds(slot, week_start)
-            # Only include slots that are within the current week (positive seconds)
-            if from_sec >= 0:
-                raw_periods.append({"from": from_sec, "to": to_sec})
+            if from_sec < 0:
+                continue
+
+            if from_sec >= WEEK_SECONDS:
+                logger.warning(
+                    "Skipping slot starting at %s because it exceeds the current week window",
+                    slot.start.isoformat(),
+                )
+                continue
+
+            if to_sec > WEEK_SECONDS:
+                to_sec = WEEK_SECONDS
+
+            raw_periods.append({"from": from_sec, "to": to_sec})
         
         if not raw_periods:
             return []
