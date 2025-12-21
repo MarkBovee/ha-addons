@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.1] - 2025-12-21
+
+### Fixed
+- Prevent `SCHEDULE_INVALID_DATA` ("Periods From value can not exceed 604800") by anchoring the schedule week at Sunday 00:00 and clamping pushed periods to the Charge Amps 7-day window.
+
 ## [1.3.0] - 2025-01-XX
 
 ### Added
