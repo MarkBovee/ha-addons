@@ -1,6 +1,6 @@
 name: Charge Amps - EV Charger Monitor
 description: Monitor Charge Amps EV charger status and create Home Assistant entities
-version: "1.3.1"
+version: "1.3.2"
 slug: charge_amps_ev_charger_monitor
 init: false
 homeassistant_api: true

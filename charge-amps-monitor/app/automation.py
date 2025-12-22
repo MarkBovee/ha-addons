@@ -325,20 +325,16 @@ class ChargingAutomationCoordinator:
         return None
 
     def _get_week_start(self, dt: datetime) -> datetime:
-        """Get the start of the Charge Amps week (Sunday 00:00 local time).
+        """Get the start of the Charge Amps schedule week (today 00:00 local time).
 
         The API expects schedule periods to be within a single week window of
-        0..604800 seconds from the provided startOfSchedule. Using Sunday as the
-        anchor keeps both "today" and "tomorrow" slots within that range.
+        0..604800 seconds from the provided startOfSchedule. Using today at midnight
+        as the anchor ensures today's slots start at offset 0 and tomorrow's slots
+        fit comfortably within the 7-day window.
         """
         local_dt = dt.astimezone(self._tz)
-        # weekday(): Monday=0, Sunday=6. days_since_sunday yields 0 on Sunday.
-        days_since_sunday = (local_dt.weekday() + 1) % 7
-        sunday_local = (
-            local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-            - timedelta(days=days_since_sunday)
-        )
-        return sunday_local.astimezone(timezone.utc)
+        today_midnight_local = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        return today_midnight_local.astimezone(timezone.utc)
 
     def _slot_to_week_seconds(self, slot: PriceSlot, week_start: datetime) -> tuple[int, int]:
         """Convert a price slot to seconds from start of week (from, to)."""
