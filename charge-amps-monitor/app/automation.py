@@ -200,6 +200,19 @@ class ChargingAutomationCoordinator:
             )
             return self._status
 
+        # Check if we've crossed into a new week (Monday) - need to reset week anchor
+        current_week_start = self._get_week_start(now_local)
+        last_week_start = (
+            self._get_week_start(self._last_analysis_time)
+            if self._last_analysis_time
+            else None
+        )
+        week_changed = last_week_start is not None and current_week_start != last_week_start
+
+        if week_changed:
+            logger.info("New week detected - resetting schedule cache")
+            self._last_pushed_periods = None  # Force schedule push with new week anchor
+
         # Analyze prices if needed (force refresh or first run or new day)
         needs_analysis = (
             self._force_refresh 
@@ -325,16 +338,22 @@ class ChargingAutomationCoordinator:
         return None
 
     def _get_week_start(self, dt: datetime) -> datetime:
-        """Get the start of the Charge Amps schedule week (today 00:00 local time).
+        """Get the start of the Charge Amps schedule week (Monday 00:00 local time).
 
-        The API expects schedule periods to be within a single week window of
-        0..604800 seconds from the provided startOfSchedule. Using today at midnight
-        as the anchor ensures today's slots start at offset 0 and tomorrow's slots
-        fit comfortably within the 7-day window.
+        The API expects a stable startOfSchedule anchor for the week. Using Monday
+        at midnight ensures:
+        - Schedule persists across daily updates (same anchor all week)
+        - All days Mon-Sun fit within the 7-day (604800s) window
+        - Only needs refresh when we cross into a new week
         """
         local_dt = dt.astimezone(self._tz)
-        today_midnight_local = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        return today_midnight_local.astimezone(timezone.utc)
+        # weekday(): Monday=0, Sunday=6
+        days_since_monday = local_dt.weekday()
+        monday_midnight_local = (
+            local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=days_since_monday)
+        )
+        return monday_midnight_local.astimezone(timezone.utc)
 
     def _slot_to_week_seconds(self, slot: PriceSlot, week_start: datetime) -> tuple[int, int]:
         """Convert a price slot to seconds from start of week (from, to)."""
