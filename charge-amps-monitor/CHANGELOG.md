@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.4] - 2025-12-24
+
+### Fixed
+- Fixed `top_x_charge_count`, `price_threshold`, and `operation_mode` config settings not being read from options.json
+- Added missing environment variable exports in run.sh
+- These settings now properly affect schedule generation
+
 ## [1.3.3] - 2025-12-24
 
 ### Fixed
