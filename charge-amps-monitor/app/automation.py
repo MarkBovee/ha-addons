@@ -139,6 +139,26 @@ class ChargingAutomationCoordinator:
             attributes={"automation_enabled": config.enabled},
         )
 
+        def _should_refresh_for_tomorrow(self, now: datetime) -> bool:
+            """Check if we should re-run analysis when tomorrow prices become available.
+
+            Tomorrow's prices typically publish around 13:00 local. If we analyzed
+            earlier and had no tomorrow slots, refresh once after 13:00 to pick them up.
+            """
+            if self._last_schedule is None or self._last_analysis_time is None:
+                return False
+
+            if self._last_analysis_time.date() != now.date():
+                return False  # will refresh anyway due to date change
+
+            if self._last_schedule.tomorrow_slots:
+                return False  # already have tomorrow data
+
+            past_publish_time = now.hour >= 13
+            stale_analysis = (now - self._last_analysis_time) >= timedelta(minutes=30)
+
+            return past_publish_time and stale_analysis
+
     def update_config(self, config: AutomationConfig) -> None:
         """Update the configuration."""
         self._config = config
@@ -213,16 +233,22 @@ class ChargingAutomationCoordinator:
             logger.info("New week detected - resetting schedule cache")
             self._last_pushed_periods = None  # Force schedule push with new week anchor
 
-        # Analyze prices if needed (force refresh or first run or new day)
+        refresh_for_tomorrow = self._should_refresh_for_tomorrow(now_local)
+
+        # Analyze prices if needed (force refresh, first run, new day, or tomorrow prices released)
         needs_analysis = (
             self._force_refresh 
             or self._last_schedule is None 
             or self._last_analysis_time is None
             or self._last_analysis_time.date() != now_local.date()
+            or refresh_for_tomorrow
         )
 
         if needs_analysis:
             try:
+                if refresh_for_tomorrow:
+                    logger.info("Detected likely availability of tomorrow's prices - refreshing schedule")
+
                 schedule = self.analyze_prices()
                 schedule.log_schedule()
                 self._force_refresh = False

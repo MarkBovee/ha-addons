@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.5] - 2025-12-26
+
+### Fixed
+- Re-run price analysis after 13:00 when tomorrow's prices become available (without needing a restart)
+- Adds a once-per-afternoon refresh if tomorrow slots were missing earlier in the day
+
 ## [1.3.4] - 2025-12-24
 
 ### Fixed
