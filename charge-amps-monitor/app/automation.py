@@ -139,25 +139,25 @@ class ChargingAutomationCoordinator:
             attributes={"automation_enabled": config.enabled},
         )
 
-        def _should_refresh_for_tomorrow(self, now: datetime) -> bool:
-            """Check if we should re-run analysis when tomorrow prices become available.
+    def _should_refresh_for_tomorrow(self, now: datetime) -> bool:
+        """Check if we should re-run analysis when tomorrow prices become available.
 
-            Tomorrow's prices typically publish around 13:00 local. If we analyzed
-            earlier and had no tomorrow slots, refresh once after 13:00 to pick them up.
-            """
-            if self._last_schedule is None or self._last_analysis_time is None:
-                return False
+        Tomorrow's prices typically publish around 13:00 local. If we analyzed
+        earlier and had no tomorrow slots, refresh once after 13:00 to pick them up.
+        """
+        if self._last_schedule is None or self._last_analysis_time is None:
+            return False
 
-            if self._last_analysis_time.date() != now.date():
-                return False  # will refresh anyway due to date change
+        if self._last_analysis_time.date() != now.date():
+            return False  # will refresh anyway due to date change
 
-            if self._last_schedule.tomorrow_slots:
-                return False  # already have tomorrow data
+        if self._last_schedule.tomorrow_slots:
+            return False  # already have tomorrow data
 
-            past_publish_time = now.hour >= 13
-            stale_analysis = (now - self._last_analysis_time) >= timedelta(minutes=30)
+        past_publish_time = now.hour >= 13
+        stale_analysis = (now - self._last_analysis_time) >= timedelta(minutes=30)
 
-            return past_publish_time and stale_analysis
+        return past_publish_time and stale_analysis
 
     def update_config(self, config: AutomationConfig) -> None:
         """Update the configuration."""
