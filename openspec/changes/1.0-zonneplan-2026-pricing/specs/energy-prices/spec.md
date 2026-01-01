@@ -1,9 +1,14 @@
-# Pricing Specification
+# Delta for Energy Prices
+
+## REMOVED Requirements
+
+### Requirement: Jinja2 Template Processing
+The system SHALL apply user-defined Jinja2 templates to calculate final import and export prices from market prices.
 
 ## ADDED Requirements
 
 ### Requirement: Zonneplan 2026 Import Pricing
-The system SHALL calculate import prices using the formula: `(spot_price + markup + energy_tax) * vat_multiplier`.
+The system SHALL calculate the import price by applying VAT to the sum of spot price, markup, and energy tax.
 
 #### Scenario: Standard Import Calculation
 - **WHEN** spot price is 0.10, markup 0.02, tax 0.1108, vat 1.21
@@ -26,15 +31,5 @@ The system SHALL calculate export prices including VAT (due to netting) and appl
 
 #### Scenario: Negative Price
 - **WHEN** spot price is -0.05
-- **THEN** price is -0.05 (no bonus, no fixed fee added in base calculation for bonus?)
-- **WAIT** User said: "Bij negatieve spotprijzen: geen zonnebonus, exportvergoeding = spotprijs".
-- **AND** VAT applied: -0.05 * 1.21 = -0.0605 (Netting implies VAT follows the price)
-
-## MODIFIED Requirements
-
-### Requirement: Import Price Formula
-The system SHALL calculate the import price by applying VAT to the sum of spot price, markup, and energy tax.
-
-#### Scenario: Modified Import Calculation
-- **WHEN** spot price is 0.10, markup 0.02, tax 0.1108, vat 1.21
-- **THEN** price is (0.10 + 0.02 + 0.1108) * 1.21 = 0.2793
+- **THEN** price is -0.05 (no bonus)
+- **AND** VAT applied: -0.05 * 1.21 = -0.0605
