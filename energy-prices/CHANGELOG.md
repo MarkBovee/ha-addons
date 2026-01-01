@@ -5,6 +5,22 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-01-01
+
+### Added
+- **Zonneplan 2026 Pricing Support**: Implemented new pricing logic for Zonneplan dynamic contracts effective Jan 1, 2026.
+- **Solar Bonus**: Added support for calculating solar bonus (+10%) during daylight hours on positive spot prices.
+- **Daylight Calculation**: Added `astral` library to accurately determine daylight hours based on configured location.
+- **New Configuration Options**:
+  - `export_fixed_bonus`: Fixed bonus per kWh for export (default €0.02).
+  - `export_bonus_pct`: Solar bonus percentage (default 10%).
+  - `latitude` / `longitude`: Location for daylight calculations (default: Utrecht).
+
+### Changed
+- **Import Formula**: Updated to `(spot + markup + tax) * vat` to match Zonneplan 2026 model.
+- **Export Formula**: Updated to include fixed bonus and conditional solar bonus, with VAT applied to the total (netting).
+- **Defaults**: Updated default markup and tax values to match Zonneplan 2026 rates.
+
 ## [1.4.0] - 2025-12-05
 
 ### Added
