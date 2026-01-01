@@ -239,12 +239,10 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
             min_price_today = round(min(today_import_prices), 4)
             max_price_today = round(max(today_import_prices), 4)
             avg_price_today = round(sum(today_import_prices) / len(today_import_prices), 4)
-            max_profit_today = round(max_price_today - min_price_today, 4)  # Spread/arbitrage potential
         else:
             min_price_today = current_import
             max_price_today = current_import
             avg_price_today = current_import
-            max_profit_today = 0.0
             
         if today_export_prices:
             min_export_today = round(min(today_export_prices), 4)
@@ -254,12 +252,21 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
             min_export_today = current_export
             max_export_today = current_export
             avg_export_today = current_export
+
+        # Calculate max profit (Arbitrage: Sell High (Export) - Buy Low (Import))
+        if today_import_prices and today_export_prices:
+            max_profit_today = round(max(today_export_prices) - min(today_import_prices), 4)
+        elif today_import_prices:
+            # Fallback if no export prices (unlikely)
+            max_profit_today = round(max(today_import_prices) - min(today_import_prices), 4)
+        else:
+            max_profit_today = 0.0
         
         # Check if tomorrow's prices are available
         # Nord Pool typically publishes around 13:00 CET, we check for any tomorrow intervals
         tomorrow_available = len(tomorrow_intervals) > 0
         
-        logger.info("Today Import stats: min=%.4f, max=%.4f, avg=%.4f, spread=%.4f",
+        logger.info("Today Import stats: min=%.4f, max=%.4f, avg=%.4f, profit=%.4f",
                    min_price_today, max_price_today, avg_price_today, max_profit_today)
         logger.info("Today Export stats: min=%.4f, max=%.4f, avg=%.4f",
                    min_export_today, max_export_today, avg_export_today)
@@ -466,9 +473,9 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
                 state_class="measurement",
                 icon="mdi:cash-multiple",
                 attributes={
-                    'description': 'Price spread between highest and lowest price today',
-                    'min_price': data['min_price_today'],
-                    'max_price': data['max_price_today'],
+                    'description': 'Price spread between highest export and lowest import price today',
+                    'min_import_price': data['min_price_today'],
+                    'max_export_price': data['max_export_today'],
                     'last_update': data['last_update']
                 }
             ))
@@ -573,8 +580,8 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
             
             mqtt_client.update_state("sensor", "max_profit_today",
                                      str(data['max_profit_today']),
-                                     {'min_price': data['min_price_today'],
-                                      'max_price': data['max_price_today'],
+                                     {'min_import_price': data['min_price_today'],
+                                      'max_export_price': data['max_export_today'],
                                       'last_update': data['last_update']})
             
             # Update export statistics sensors
