@@ -38,32 +38,6 @@ The system SHALL convert Nord Pool prices from EUR/MWh to cents/kWh with proper 
 - **AND** deliveryStart and deliveryEnd are preserved exactly as provided
 - **AND** no timezone conversion is applied during storage
 
-### Requirement: Jinja2 Template Processing
-The system SHALL apply user-defined Jinja2 templates to calculate final import and export prices from market prices.
-
-#### Scenario: Valid template with VAT calculation
-- **WHEN** the import template is `{{ (marktprijs * 1.21 + 2.48 + 12.28) | round(4) }}`
-- **AND** the market price is 9.794 cents/kWh
-- **THEN** the system calculates 26.6307 cents/kWh
-- **AND** the result is rounded to exactly 4 decimal places
-
-#### Scenario: Invalid template syntax at startup
-- **WHEN** the import_price_template contains syntax error: `{{ marktprijs *`
-- **THEN** the add-on fails to start
-- **AND** logs a clear error message with the line number and syntax issue
-- **AND** exits with non-zero status code
-
-#### Scenario: Template rendering error during calculation
-- **WHEN** a template attempts to divide by zero or produces non-numeric output
-- **THEN** the system logs the error with template content and input value
-- **AND** skips that specific price interval
-- **AND** continues processing remaining intervals
-
-#### Scenario: Export price template without fees
-- **WHEN** the export template is `{{ marktprijs | round(4) }}`
-- **AND** the market price is 9.794 cents/kWh
-- **THEN** the system calculates 9.7940 cents/kWh (no additional fees)
-
 ### Requirement: Template Variable Exposure
 The system SHALL expose the `marktprijs` variable in Jinja2 template context representing the market price in cents/kWh.
 
@@ -260,4 +234,31 @@ The system SHALL provide working example templates in documentation for Dutch en
 - **WHEN** user views documentation
 - **THEN** example shows simple pass-through: `{{ marktprijs | round(4) }}`
 - **AND** explains that export typically has no additional fees
+
+### Requirement: Zonneplan 2026 Import Pricing
+The system SHALL calculate the import price by applying VAT to the sum of spot price, markup, and energy tax.
+
+#### Scenario: Standard Import Calculation
+- **WHEN** spot price is 0.10, markup 0.02, tax 0.1108, vat 1.21
+- **THEN** price is (0.10 + 0.02 + 0.1108) * 1.21 = 0.2793
+
+### Requirement: Zonneplan 2026 Export Pricing
+The system SHALL calculate export prices including VAT (due to netting) and apply a solar bonus during daylight hours for positive prices.
+
+#### Scenario: Daylight Positive Price
+- **WHEN** spot price is 0.10, fixed bonus 0.02, bonus 10%, daylight is TRUE
+- **THEN** base is 0.10 + 0.02 = 0.12
+- **AND** bonus applied: 0.12 * 1.10 = 0.132
+- **AND** VAT applied: 0.132 * 1.21 = 0.1597
+
+#### Scenario: Night Positive Price
+- **WHEN** spot price is 0.10, fixed bonus 0.02, daylight is FALSE
+- **THEN** base is 0.10 + 0.02 = 0.12
+- **AND** no bonus applied
+- **AND** VAT applied: 0.12 * 1.21 = 0.1452
+
+#### Scenario: Negative Price
+- **WHEN** spot price is -0.05
+- **THEN** price is -0.05 (no bonus)
+- **AND** VAT applied: -0.05 * 1.21 = -0.0605
 
