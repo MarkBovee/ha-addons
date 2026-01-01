@@ -11,7 +11,11 @@
 - [x] 2.3 Implement `calculate_export_price` with Zonneplan logic
 - [x] 2.4 Update `fetch_and_process_prices` to use new logic
 
-## Phase 3: Verification
-- [x] 3.1 Verify import formula
-- [x] 3.2 Verify export logic (day/night, positive/negative)
-- [x] 3.3 Verify logging updates
+## Phase 3: Refactoring
+- [x] 3.1 Move solar bonus logic to `app/solar_bonus.py`
+- [x] 3.2 Update `main.py` to import from `solar_bonus.py`
+
+## Phase 4: Verification
+- [x] 4.1 Verify import formula
+- [x] 4.2 Verify export logic (day/night, positive/negative)
+- [x] 4.3 Verify logging updates

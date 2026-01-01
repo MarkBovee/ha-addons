@@ -7,12 +7,10 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from zoneinfo import ZoneInfo
 
-from astral import LocationInfo
-from astral.sun import sun
-
 from .nordpool_api import NordPoolApi
 from .models import PriceInterval
 from .price_calculator import PriceCalculator
+from .solar_bonus import is_daylight, calculate_export_price
 
 # Import shared modules
 from shared.addon_base import setup_logging, setup_signal_handlers, sleep_with_shutdown_check
@@ -83,32 +81,6 @@ def load_config() -> dict:
     return config
 
 
-def is_daylight(timestamp: datetime, latitude: float, longitude: float) -> bool:
-    """Check if timestamp is between sunrise and sunset at location.
-    
-    Args:
-        timestamp: Datetime to check
-        latitude: Location latitude
-        longitude: Location longitude
-        
-    Returns:
-        True if between sunrise and sunset, False otherwise
-    """
-    try:
-        # Create location info (name/region/timezone not strictly needed for coords)
-        city = LocationInfo("", "", "", latitude, longitude)
-        
-        # Calculate sun times for the specific date
-        # Ensure we use the same timezone as the timestamp
-        s = sun(city.observer, date=timestamp.date(), tzinfo=timestamp.tzinfo)
-        
-        return s['sunrise'] <= timestamp < s['sunset']
-    except Exception as e:
-        logger.warning("Failed to calculate daylight for %s: %s", timestamp, e)
-        # Fallback: 06:00 to 22:00 roughly covers daylight
-        return 6 <= timestamp.hour < 22
-
-
 def calculate_import_price(market_price: float, vat_multiplier: float, markup: float, energy_tax: float) -> float:
     """Calculate import price (Zonneplan 2026).
     
@@ -124,43 +96,6 @@ def calculate_import_price(market_price: float, vat_multiplier: float, markup: f
         Final price in EUR/kWh rounded to 4 decimals
     """
     result = (market_price + markup + energy_tax) * vat_multiplier
-    return round(result, 4)
-
-
-def calculate_export_price(market_price: float, vat_multiplier: float, fixed_bonus: float, 
-                         bonus_pct: float, is_daylight_active: bool) -> float:
-    """Calculate export price (Zonneplan 2026).
-    
-    Rules:
-    - Base: market_price + fixed_bonus
-    - Solar Bonus (+10%): Only during daylight AND positive market price
-    - Night: No bonus
-    - Negative price: No bonus, price = market_price
-    - All calculated including VAT (netting)
-    
-    Args:
-        market_price: Market price in EUR/kWh
-        vat_multiplier: VAT multiplier (e.g., 1.21)
-        fixed_bonus: Fixed bonus in EUR/kWh
-        bonus_pct: Bonus percentage (e.g., 0.10 for 10%)
-        is_daylight_active: Whether it is currently daylight
-        
-    Returns:
-        Final price in EUR/kWh rounded to 4 decimals
-    """
-    # Negative prices: no bonus, just the market price
-    if market_price < 0:
-        base_price = market_price
-    else:
-        # Positive prices: market + fixed bonus
-        base_price = market_price + fixed_bonus
-        
-        # Apply solar bonus if daylight and price is positive
-        if is_daylight_active:
-            base_price = base_price * (1 + bonus_pct)
-            
-    # Apply VAT (netting)
-    result = base_price * vat_multiplier
     return round(result, 4)
 
 
