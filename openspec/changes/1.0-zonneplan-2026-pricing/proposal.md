@@ -4,10 +4,10 @@
 **Status:** 100%
 **Date:** 2026-01-01
 
-## Executive Summary
+## Why
 Update the Energy Prices add-on to support the Zonneplan (NL) dynamic energy contract pricing model effective from January 1, 2026. This model accounts for the continuation of the netting scheme (salderingsregeling) in 2026.
 
-## What's Changing
+## What Changes
 
 | Feature | Before | After |
 | :--- | :--- | :--- |

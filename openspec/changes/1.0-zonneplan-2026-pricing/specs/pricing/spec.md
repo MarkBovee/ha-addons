@@ -33,4 +33,8 @@ The system SHALL calculate export prices including VAT (due to netting) and appl
 ## MODIFIED Requirements
 
 ### Requirement: Import Price Formula
-The import price formula is modified to apply VAT to the sum of spot, markup, and tax.
+The system SHALL calculate the import price by applying VAT to the sum of spot price, markup, and energy tax.
+
+#### Scenario: Modified Import Calculation
+- **WHEN** spot price is 0.10, markup 0.02, tax 0.1108, vat 1.21
+- **THEN** price is (0.10 + 0.02 + 0.1108) * 1.21 = 0.2793
