@@ -233,6 +233,8 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         
         # Calculate today's statistics (only from today_intervals)
         today_import_prices = import_prices[:len(today_intervals)] if today_intervals else import_prices
+        today_export_prices = export_prices[:len(today_intervals)] if today_intervals else export_prices
+        
         if today_import_prices:
             min_price_today = round(min(today_import_prices), 4)
             max_price_today = round(max(today_import_prices), 4)
@@ -243,13 +245,24 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
             max_price_today = current_import
             avg_price_today = current_import
             max_profit_today = 0.0
+            
+        if today_export_prices:
+            min_export_today = round(min(today_export_prices), 4)
+            max_export_today = round(max(today_export_prices), 4)
+            avg_export_today = round(sum(today_export_prices) / len(today_export_prices), 4)
+        else:
+            min_export_today = current_export
+            max_export_today = current_export
+            avg_export_today = current_export
         
         # Check if tomorrow's prices are available
         # Nord Pool typically publishes around 13:00 CET, we check for any tomorrow intervals
         tomorrow_available = len(tomorrow_intervals) > 0
         
-        logger.info("Today stats: min=%.4f, max=%.4f, avg=%.4f, spread=%.4f",
+        logger.info("Today Import stats: min=%.4f, max=%.4f, avg=%.4f, spread=%.4f",
                    min_price_today, max_price_today, avg_price_today, max_profit_today)
+        logger.info("Today Export stats: min=%.4f, max=%.4f, avg=%.4f",
+                   min_export_today, max_export_today, avg_export_today)
         logger.info("Tomorrow prices available: %s (%d intervals)", 
                    tomorrow_available, len(tomorrow_intervals))
         
@@ -261,11 +274,15 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
             'percentiles': percentiles,
             'price_level': price_level,
             'last_update': datetime.now(ZoneInfo('UTC')).isoformat(),
-            # New statistics
+            # Import statistics
             'min_price_today': min_price_today,
             'max_price_today': max_price_today,
             'avg_price_today': avg_price_today,
             'max_profit_today': max_profit_today,
+            # Export statistics
+            'min_export_today': min_export_today,
+            'max_export_today': max_export_today,
+            'avg_export_today': avg_export_today,
             'tomorrow_available': tomorrow_available,
             'tomorrow_intervals_count': len(tomorrow_intervals),
         }
@@ -456,6 +473,46 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
                 }
             ))
             
+            # Export statistics sensors
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="average_export_price",
+                name="Average Export Price Today",
+                state=str(data['avg_export_today']),
+                unit_of_measurement="EUR/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:chart-line-variant",
+                attributes={
+                    'last_update': data['last_update']
+                }
+            ))
+            
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="minimum_export_price",
+                name="Minimum Export Price Today",
+                state=str(data['min_export_today']),
+                unit_of_measurement="EUR/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:arrow-down-bold",
+                attributes={
+                    'last_update': data['last_update']
+                }
+            ))
+            
+            mqtt_client.publish_sensor(EntityConfig(
+                object_id="maximum_export_price",
+                name="Maximum Export Price Today",
+                state=str(data['max_export_today']),
+                unit_of_measurement="EUR/kWh",
+                device_class="monetary",
+                state_class="measurement",
+                icon="mdi:arrow-up-bold",
+                attributes={
+                    'last_update': data['last_update']
+                }
+            ))
+            
             # Binary sensor for tomorrow prices availability
             mqtt_client.publish_binary_sensor(EntityConfig(
                 object_id="tomorrow_available",
@@ -476,6 +533,9 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
             logger.info("  • sensor.energy_prices_minimum_price: %.4f EUR/kWh", data['min_price_today'])
             logger.info("  • sensor.energy_prices_maximum_price: %.4f EUR/kWh", data['max_price_today'])
             logger.info("  • sensor.energy_prices_max_profit_today: %.4f EUR/kWh", data['max_profit_today'])
+            logger.info("  • sensor.energy_prices_average_export_price: %.4f EUR/kWh", data['avg_export_today'])
+            logger.info("  • sensor.energy_prices_minimum_export_price: %.4f EUR/kWh", data['min_export_today'])
+            logger.info("  • sensor.energy_prices_maximum_export_price: %.4f EUR/kWh", data['max_export_today'])
             logger.info("  • binary_sensor.energy_prices_tomorrow_available: %s", data['tomorrow_available'])
             logger.info("Entities have unique_id and can be managed from HA UI")
         else:
@@ -516,6 +576,19 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
                                      {'min_price': data['min_price_today'],
                                       'max_price': data['max_price_today'],
                                       'last_update': data['last_update']})
+            
+            # Update export statistics sensors
+            mqtt_client.update_state("sensor", "average_export_price",
+                                     str(data['avg_export_today']),
+                                     {'last_update': data['last_update']})
+            
+            mqtt_client.update_state("sensor", "minimum_export_price",
+                                     str(data['min_export_today']),
+                                     {'last_update': data['last_update']})
+            
+            mqtt_client.update_state("sensor", "maximum_export_price",
+                                     str(data['max_export_today']),
+                                     {'last_update': data['last_update']})
             
             # Update binary sensor
             mqtt_client.update_state("binary_sensor", "tomorrow_available",
