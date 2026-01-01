@@ -56,43 +56,52 @@ Configure the addon through the Home Assistant UI:
 | `timezone` | string | `CET` | Timezone for display (data stored in UTC) |
 | `import_vat_multiplier` | float | `1.21` | VAT multiplier for import (1.21 = 21% VAT) |
 | `import_markup` | float | `2.48` | Fixed markup in cents/kWh (€0.0248) |
-| `import_energy_tax` | float | `12.28` | Energy tax in cents/kWh (€0.1228) |
-| `export_vat_multiplier` | float | `1.21` | VAT multiplier for export (same as import for salderingsregeling) |
-| `export_markup` | float | `2.48` | Fixed markup in cents/kWh for export |
-| `export_energy_tax` | float | `12.28` | Energy tax in cents/kWh for export |
+| `import_energy_tax` | float | `11.08` | Energy tax in cents/kWh (€0.1108) |
+| `export_vat_multiplier` | float | `1.21` | VAT multiplier for export (1.21 = 21% VAT) |
+| `export_fixed_bonus` | float | `2.00` | Fixed bonus in cents/kWh (€0.02) |
+| `export_bonus_pct` | float | `0.10` | Solar bonus percentage (0.10 = 10%) |
+| `latitude` | float | `52.0907` | Latitude for daylight calculation (default: Utrecht) |
+| `longitude` | float | `5.1214` | Longitude for daylight calculation (default: Utrecht) |
 | `fetch_interval_minutes` | integer | `60` | How often to fetch new prices (1-1440 minutes) |
 
-### Price Calculation Formula
+### Price Calculation Formula (Zonneplan 2026)
 
-The final price is calculated using a simple formula for both import and export:
+The addon uses the Zonneplan 2026 dynamic contract logic (with netting/salderen):
 
+**Import Price:**
 ```
-final_price = (market_price × vat_multiplier) + markup + energy_tax
+final_price = (market_price + markup + energy_tax) × vat_multiplier
 ```
 
-### Dutch Defaults
+**Export Price:**
+- **Base:** `market_price + fixed_bonus`
+- **Solar Bonus:** +10% of base (only during daylight AND positive market price)
+- **Night/Negative:** No bonus
+- **Final:** `(base_with_bonus) × vat_multiplier`
 
-The defaults are configured for a typical Dutch energy contract with salderingsregeling:
+### Dutch Defaults (2026)
+
+The defaults are configured for Zonneplan 2026:
 
 | Component | Value | EUR/kWh | Description |
 |-----------|-------|---------|-------------|
 | VAT Multiplier | 1.21 | - | 21% BTW |
-| Markup | 2.48 | €0.0248 | Supplier margin + grid costs |
-| Energy Tax | 12.28 | €0.1228 | Energiebelasting |
+| Import Markup | 2.00 | €0.0200 | Inkoopopslag |
+| Energy Tax | 11.08 | €0.1108 | Energiebelasting |
+| Export Bonus | 2.00 | €0.0200 | Vaste vergoeding |
+| Solar Bonus | 10% | - | Extra vergoeding overdag |
 
-**Example**: If market price is 10 cents/kWh:
+**Example Import**: If market price is 10 cents/kWh:
 ```
-(10 × 1.21) + 2.48 + 12.28 = 26.86 cents/kWh
+(10 + 2.00 + 11.08) × 1.21 = 27.93 cents/kWh
 ```
 
-### Export Settings (Salderingsregeling)
-
-By default, export uses the **same values** as import for Dutch salderingsregeling (net metering).
-
-If you want export to use only the market price (no fees), set:
-- `export_vat_multiplier`: 1.0
-- `export_markup`: 0.0
-- `export_energy_tax`: 0.0
+**Example Export (Daylight)**: If market price is 10 cents/kWh:
+```
+Base: 10 + 2.00 = 12.00
+Bonus: 12.00 × 1.10 = 13.20
+Final: 13.20 × 1.21 = 15.97 cents/kWh
+```
 
 ## Created Entities
 
