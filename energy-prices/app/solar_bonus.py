@@ -34,6 +34,26 @@ def is_daylight(timestamp: datetime, latitude: float, longitude: float) -> bool:
         return 6 <= timestamp.hour < 22
 
 
+def get_sun_times(date_obj, latitude: float, longitude: float):
+    """Get sunrise and sunset times for a specific date and location.
+    
+    Args:
+        date_obj: Date to check
+        latitude: Location latitude
+        longitude: Location longitude
+        
+    Returns:
+        Tuple of (sunrise, sunset) datetimes, or (None, None) on error
+    """
+    try:
+        city = LocationInfo("", "", "", latitude, longitude)
+        s = sun(city.observer, date=date_obj)
+        return s['sunrise'], s['sunset']
+    except Exception as e:
+        logger.warning("Failed to calculate sun times for %s: %s", date_obj, e)
+        return None, None
+
+
 def calculate_export_price(market_price: float, vat_multiplier: float, fixed_bonus: float, 
                          bonus_pct: float, is_daylight_active: bool) -> float:
     """Calculate export price (Zonneplan 2026).

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from .nordpool_api import NordPoolApi
 from .models import PriceInterval
 from .price_calculator import PriceCalculator
-from .solar_bonus import is_daylight, calculate_export_price
+from .solar_bonus import is_daylight, calculate_export_price, get_sun_times
 
 # Import shared modules
 from shared.addon_base import setup_logging, setup_signal_handlers, sleep_with_shutdown_check
@@ -143,12 +143,24 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         latitude = config['latitude']
         longitude = config['longitude']
         
+        # Log sun times for today and tomorrow
+        for d in [today, tomorrow]:
+            rise, set_time = get_sun_times(d, latitude, longitude)
+            if rise and set_time:
+                # Convert to configured timezone
+                rise_local = rise.astimezone(tz)
+                set_local = set_time.astimezone(tz)
+                logger.info("Sun times for %s: Rise %s, Set %s", 
+                           d, rise_local.strftime('%H:%M'), set_local.strftime('%H:%M'))
+
         # Calculate final prices using component formula
         import_prices = []
         export_prices = []
         price_curve_import = []
         price_curve_export = []
         
+        logger.info("Price schedule (Spot | Import | Export | Daylight | Bonus):")
+
         for interval in all_intervals:
             market_price = interval.price_eur_kwh()
             
@@ -159,6 +171,15 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
             export_price = calculate_export_price(market_price, export_vat, export_fixed_bonus, 
                                                 export_bonus_pct, daylight)
             
+            # Log details
+            bonus_applied = "Yes" if daylight and market_price > 0 else "No"
+            logger.info(
+                "%s: %.4f | %.4f | %.4f | %s | %s",
+                interval.start.astimezone(tz).strftime('%Y-%m-%d %H:%M'), 
+                market_price, import_price, export_price, 
+                "Yes" if daylight else "No", bonus_applied
+            )
+
             import_prices.append(import_price)
             export_prices.append(export_price)
             

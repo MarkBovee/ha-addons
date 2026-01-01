@@ -5,6 +5,11 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-01-01
+
+### Added
+- **Detailed Logging**: Added logging of sunrise/sunset times and a detailed price schedule table showing spot, import, export, daylight status, and bonus application for each interval.
+
 ## [1.5.0] - 2026-01-01
 
 ### Added

@@ -1,6 +1,6 @@
 name: Energy Prices
 description: Fetch Nord Pool electricity prices and calculate final costs with configurable price components
-version: "1.5.0"
+version: "1.5.1"
 slug: energy_prices
 init: false
 homeassistant_api: true
