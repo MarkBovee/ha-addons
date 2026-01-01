@@ -54,20 +54,22 @@ def get_sun_times(date_obj, latitude: float, longitude: float):
         return None, None
 
 
-def calculate_export_price(market_price: float, vat_multiplier: float, fixed_bonus: float, 
-                         bonus_pct: float, is_daylight_active: bool) -> float:
+def calculate_export_price(market_price: float, vat_multiplier: float, markup: float, energy_tax: float,
+                         fixed_bonus: float, bonus_pct: float, is_daylight_active: bool) -> float:
     """Calculate export price (Zonneplan 2026).
     
     Rules:
-    - Base: market_price + fixed_bonus
+    - Base: market_price + markup + energy_tax + fixed_bonus
     - Solar Bonus (+10%): Only during daylight AND positive market price
     - Night: No bonus
-    - Negative price: No bonus, price = market_price
+    - Negative price: No bonus, price = market_price + markup + energy_tax (netting applies)
     - All calculated including VAT (netting)
     
     Args:
         market_price: Market price in EUR/kWh
         vat_multiplier: VAT multiplier (e.g., 1.21)
+        markup: Fixed markup in EUR/kWh
+        energy_tax: Energy tax in EUR/kWh
         fixed_bonus: Fixed bonus in EUR/kWh
         bonus_pct: Bonus percentage (e.g., 0.10 for 10%)
         is_daylight_active: Whether it is currently daylight
@@ -75,16 +77,16 @@ def calculate_export_price(market_price: float, vat_multiplier: float, fixed_bon
     Returns:
         Final price in EUR/kWh rounded to 4 decimals
     """
-    # Negative prices: no bonus, just the market price
-    if market_price < 0:
-        base_price = market_price
-    else:
-        # Positive prices: market + fixed bonus
-        base_price = market_price + fixed_bonus
-        
-        # Apply solar bonus if daylight and price is positive
-        if is_daylight_active:
-            base_price = base_price * (1 + bonus_pct)
+    # Base price includes markup and tax (netting)
+    # Note: For negative prices, Zonneplan might have specific rules, but assuming full netting
+    # implies you get back what you would have paid (including tax/markup).
+    base_price = market_price + markup + energy_tax + fixed_bonus
+    
+    # Apply solar bonus if daylight and price is positive
+    # Bonus is applied to the base price (including tax/markup) or just spot?
+    # Assuming bonus applies to the total value for now to ensure Export > Import.
+    if is_daylight_active and market_price > 0:
+        base_price = base_price * (1 + bonus_pct)
             
     # Apply VAT (netting)
     result = base_price * vat_multiplier

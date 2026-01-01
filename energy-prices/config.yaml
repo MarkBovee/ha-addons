@@ -1,6 +1,6 @@
 name: Energy Prices
 description: Fetch Nord Pool electricity prices and calculate final costs with configurable price components
-version: "1.5.1"
+version: "1.5.2"
 slug: energy_prices
 init: false
 homeassistant_api: true
@@ -28,6 +28,8 @@ options:
   # Zonneplan 2026 dynamic contract (with netting)
   # Values in EUR/kWh (e.g., 0.02 = 2.00 cents)
   export_vat_multiplier: 1.21
+  export_markup: 0.02
+  export_energy_tax: 0.1108
   export_fixed_bonus: 0.02
   export_bonus_pct: 0.10
   
