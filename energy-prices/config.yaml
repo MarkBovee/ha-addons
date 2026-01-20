@@ -1,6 +1,6 @@
 name: Energy Prices
 description: Fetch Nord Pool electricity prices and calculate final costs with configurable price components
-version: "1.4.0"
+version: "1.5.0"
 slug: energy_prices
 init: false
 homeassistant_api: true
@@ -50,6 +50,7 @@ schema:
   export_vat_multiplier: float
   export_markup: float
   export_energy_tax: float
+  use_hourly_prices: bool?
   # Advanced: MQTT settings (optional - auto-detects core-mosquitto by default)
   mqtt_host: str?
   mqtt_port: int?

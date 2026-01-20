@@ -54,6 +54,7 @@ Configure the addon through the Home Assistant UI:
 | `delivery_area` | string | `NL` | Nord Pool delivery area (NL for Netherlands) |
 | `currency` | string | `EUR` | Currency for price data |
 | `timezone` | string | `CET` | Timezone for display (data stored in UTC) |
+| `use_hourly_prices` | boolean | `false` | Average 15-minute prices to hourly (see below) |
 | `import_vat_multiplier` | float | `1.21` | VAT multiplier for import (1.21 = 21% VAT) |
 | `import_markup` | float | `2.48` | Fixed markup in cents/kWh (€0.0248) |
 | `import_energy_tax` | float | `12.28` | Energy tax in cents/kWh (€0.1228) |
@@ -69,6 +70,36 @@ The final price is calculated using a simple formula for both import and export:
 ```
 final_price = (market_price × vat_multiplier) + markup + energy_tax
 ```
+
+### Hourly Price Averaging
+
+Some energy providers use hourly pricing instead of 15-minute intervals. When `use_hourly_prices` is enabled, the add-on averages each 4 consecutive 15-minute intervals into 1 hourly price:
+
+**Example with `use_hourly_prices: false` (default):**
+```
+08:00-08:15: 30.0 cents/kWh
+08:15-08:30: 32.0 cents/kWh
+08:30-08:45: 32.0 cents/kWh
+08:45-09:00: 30.0 cents/kWh
+```
+
+**Example with `use_hourly_prices: true`:**
+```
+08:00-09:00: 31.0 cents/kWh (average of all 4 intervals)
+08:15-09:00: 31.0 cents/kWh (same hourly average)
+08:30-09:00: 31.0 cents/kWh (same hourly average)
+08:45-09:00: 31.0 cents/kWh (same hourly average)
+```
+
+**When to use hourly pricing:**
+- ✅ Your energy provider uses hourly prices (average of 4 quarters)
+- ✅ You want smoother price curves without 15-minute spikes
+- ❌ Your provider bills on actual 15-minute intervals (keep default `false`)
+
+**Trade-offs:**
+- **Smoothing**: Hourly averaging eliminates short-term price spikes
+- **Granularity**: You lose visibility into 15-minute price variations
+- **Data points**: Price curves have 24 hourly points instead of 96 quarter-hourly points
 
 ### Dutch Defaults
 

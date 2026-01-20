@@ -5,6 +5,20 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-01-20
+
+### Added
+- **Hourly price averaging option** (`use_hourly_prices`)
+  - When enabled, averages 4 consecutive 15-minute intervals into hourly prices
+  - Matches pricing model used by some energy providers
+  - Reduces price curve from 96 to 24 data points per day
+  - Example: 08:00-08:15 (30¢), 08:15-08:30 (32¢), 08:30-08:45 (32¢), 08:45-09:00 (30¢) → All become 31¢ average
+- New configuration option `use_hourly_prices` (boolean, default: `false`)
+
+### Changed
+- Price processing logic now conditionally averages intervals based on `use_hourly_prices` setting
+- Percentiles and statistics now calculated from hourly averages when enabled (smoother but less granular)
+
 ## [1.4.0] - 2025-12-05
 
 ### Added

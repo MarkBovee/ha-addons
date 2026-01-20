@@ -40,6 +40,7 @@ EP_CONFIG_DEFAULTS = {
     'export_vat_multiplier': 1.21,
     'export_markup': 0.0248,
     'export_energy_tax': 0.1228,
+    'use_hourly_prices': False,
 }
 
 EP_REQUIRED_FIELDS = ['delivery_area', 'currency', 'timezone', 'fetch_interval_minutes']
@@ -73,6 +74,7 @@ def load_config() -> dict:
                config['import_vat_multiplier'], config['import_markup'], config['import_energy_tax'])
     logger.info("Export: VAT=%.2f, markup=%.4f, tax=%.4f",
                config['export_vat_multiplier'], config['export_markup'], config['export_energy_tax'])
+    logger.info("Use hourly prices: %s", config.get('use_hourly_prices', False))
     
     return config
 
@@ -93,6 +95,60 @@ def calculate_final_price(market_price: float, vat_multiplier: float, markup: fl
     """
     result = (market_price * vat_multiplier) + markup + energy_tax
     return round(result, 4)
+
+
+def average_to_hourly(intervals: List[PriceInterval]) -> List[PriceInterval]:
+    """Average 15-minute intervals to hourly intervals.
+    
+    Groups 4 consecutive 15-minute intervals into 1-hour intervals.
+    Averages their prices, uses the first interval's start time and last interval's end time.
+    
+    Example:
+        Input (15-minute intervals):
+            08:00-08:15: 0.30 EUR/MWh
+            08:15-08:30: 0.32 EUR/MWh
+            08:30-08:45: 0.32 EUR/MWh
+            08:45-09:00: 0.30 EUR/MWh
+        
+        Output (hourly interval):
+            08:00-09:00: 0.31 EUR/MWh (average of 4 intervals)
+    
+    Args:
+        intervals: List of 15-minute PriceInterval objects
+        
+    Returns:
+        List of hourly PriceInterval objects (24 per day instead of 96)
+    """
+    hourly_intervals = []
+    skipped_count = 0
+    
+    # Process intervals in groups of 4 (4 x 15min = 1 hour)
+    for i in range(0, len(intervals), 4):
+        chunk = intervals[i:i+4]
+        
+        # Only create hourly interval if we have exactly 4 consecutive intervals
+        if len(chunk) == 4:
+            # Average the prices from all 4 intervals
+            avg_price = sum(iv.price_eur_mwh for iv in chunk) / 4
+            
+            # Create new interval with averaged price
+            # Use first interval's start and last interval's end for the hour span
+            hourly_intervals.append(PriceInterval(
+                start=chunk[0].start,
+                end=chunk[-1].end,
+                price_eur_mwh=avg_price
+            ))
+        else:
+            # Incomplete hour (e.g., last interval of day might have < 4 intervals)
+            skipped_count += len(chunk)
+    
+    if skipped_count > 0:
+        logger.debug("Skipped %d incomplete intervals when averaging to hourly", skipped_count)
+    
+    logger.info("Averaged %d 15-minute intervals into %d hourly intervals", 
+               len(intervals), len(hourly_intervals))
+    
+    return hourly_intervals
 
 
 def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[dict]:
@@ -126,6 +182,19 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         
         logger.info("Fetched %d intervals total (%d today, %d tomorrow)", 
                    len(all_intervals), len(today_intervals), len(tomorrow_intervals))
+        
+        # Conditionally average to hourly prices if configured
+        use_hourly = config.get('use_hourly_prices', False)
+        if use_hourly:
+            logger.info("Hourly price averaging enabled - converting 15-minute intervals to hourly averages")
+            all_intervals = average_to_hourly(all_intervals)
+            # Recalculate split between today and tomorrow after averaging
+            # Assumption: today has 96 15-min intervals -> 24 hourly, tomorrow same
+            today_hourly_count = len(today_intervals) // 4
+            today_intervals = all_intervals[:today_hourly_count]
+            tomorrow_intervals = all_intervals[today_hourly_count:]
+            logger.info("After averaging: %d hourly intervals (%d today, %d tomorrow)",
+                       len(all_intervals), len(today_intervals), len(tomorrow_intervals))
         
         # Extract price components from config
         import_vat = config['import_vat_multiplier']
