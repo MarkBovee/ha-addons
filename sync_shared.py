@@ -23,6 +23,7 @@ from pathlib import Path
 # Add-ons that use the shared folder
 ADDONS = [
     'battery-api',
+    'battery-manager',
     'charge-amps-monitor',
     'energy-prices',
     'water-heater-scheduler',
