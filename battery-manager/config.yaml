@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.1.0"
+version: "0.2.0"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -26,21 +26,27 @@ options:
   timing:
     update_interval: 3600
     monitor_interval: 60
+    adaptive_power_grace_seconds: 60
+    schedule_regen_cooldown_seconds: 60
 
   power:
     max_charge_power: 8000
     max_discharge_power: 8000
-    min_discharge_power: 4000
+    min_discharge_power: 0
+    min_scaled_power: 2500
 
   soc:
     min_soc: 5
     conservative_soc: 40
     target_eod_soc: 20
+    max_soc: 100
 
   heuristics:
     top_x_charge_hours: 3
     top_x_discharge_hours: 2
     excess_solar_threshold: 1000
+    min_profit_threshold: 0.1
+    overnight_wait_threshold: 0.02
 
   temperature_based_discharge:
     enabled: true
@@ -59,7 +65,7 @@ options:
   ev_charger:
     enabled: true
     charging_threshold: 500
-    entity_id: "sensor.ev_charger_power"
+    entity_id: "sensor.charge_amps_monitor_charger_current_power"
 
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
@@ -81,21 +87,27 @@ schema:
   timing:
     update_interval: int(300,7200)
     monitor_interval: int(10,300)
+    adaptive_power_grace_seconds: int(0,600)
+    schedule_regen_cooldown_seconds: int(0,600)
 
   power:
     max_charge_power: int(1000,10000)
     max_discharge_power: int(1000,10000)
-    min_discharge_power: int(1000,10000)
+    min_discharge_power: int(0,10000)
+    min_scaled_power: int(0,10000)
 
   soc:
     min_soc: int(0,100)
     conservative_soc: int(0,100)
     target_eod_soc: int(0,100)
+    max_soc: int(0,100)
 
   heuristics:
-    top_x_charge_hours: int(1,8)
-    top_x_discharge_hours: int(1,8)
-    excess_solar_threshold: int(100,5000)
+    top_x_charge_hours: int(0,24)
+    top_x_discharge_hours: int(0,24)
+    excess_solar_threshold: int(0,5000)
+    min_profit_threshold: float(0,2)
+    overnight_wait_threshold: float(0,1)
 
   temperature_based_discharge:
     enabled: bool?

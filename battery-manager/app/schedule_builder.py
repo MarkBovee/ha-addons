@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Iterable, List, Sequence
+
+from dateutil.parser import isoparse
 
 
 def build_charge_schedule(
@@ -14,8 +17,10 @@ def build_charge_schedule(
 
     schedule = []
     for period in charge_periods:
-        start = period.get("start")
+        start = _normalize_start_time(period.get("start"))
         duration = period.get("duration", duration_minutes)
+        if not start:
+            continue
         schedule.append({"start": start, "power": power, "duration": duration})
     return schedule
 
@@ -32,10 +37,28 @@ def build_discharge_schedule(
 
     schedule = []
     for period, power in zip(discharge_periods, power_ranks, strict=True):
-        start = period.get("start")
+        start = _normalize_start_time(period.get("start"))
         duration = period.get("duration", duration_minutes)
+        if not start:
+            continue
         schedule.append({"start": start, "power": power, "duration": duration})
     return schedule
+
+
+def _normalize_start_time(value: object) -> str | None:
+    if not value:
+        return None
+    if isinstance(value, str) and len(value) == 5 and value[2] == ":":
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = isoparse(value)
+            return parsed.strftime("%H:%M")
+        except Exception:
+            return None
+    if isinstance(value, datetime):
+        return value.strftime("%H:%M")
+    return None
 
 
 def merge_schedules(charge: Iterable[dict], discharge: Iterable[dict]) -> dict:

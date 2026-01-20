@@ -4,7 +4,7 @@ Optimize battery charging and discharging using dynamic electricity prices, sola
 
 ## Overview
 
-Battery Manager generates daily charge/discharge schedules based on price curves from the Energy Prices add-on. It adjusts discharge behavior in real time for SOC protection, grid export prevention, solar surplus, and EV charging.
+Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into load, discharge, and adaptive ranges, adjusts discharge power in real time, and applies SOC protection, grid export prevention, solar surplus, and EV charging rules.
 
 ## Prerequisites
 
@@ -27,6 +27,8 @@ Key options (defaults in config.yaml):
 
 - **timing.update_interval**: schedule refresh interval (seconds)
 - **timing.monitor_interval**: real-time monitoring interval (seconds)
+- **timing.adaptive_power_grace_seconds**: minimum seconds between adaptive power changes
+- **timing.schedule_regen_cooldown_seconds**: cooldown for rolling schedule regeneration
 - **dry_run**: log schedules without publishing to MQTT
 - **entities.price_curve_entity**: price curve sensor entity
 - **entities.export_price_curve_entity**: export price curve sensor entity
@@ -37,13 +39,17 @@ Key options (defaults in config.yaml):
 - **entities.temperature_entity**: outdoor temperature sensor
 - **power.max_charge_power**: maximum charge power (W)
 - **power.max_discharge_power**: maximum discharge power (W)
-- **power.min_discharge_power**: minimum discharge power (W)
+- **power.min_discharge_power**: baseline discharge power for adaptive periods (W)
+- **power.min_scaled_power**: minimum scaled power for ranked charge/discharge (W)
 - **soc.min_soc**: hard minimum SOC (%)
 - **soc.conservative_soc**: conservative SOC threshold (%)
 - **soc.target_eod_soc**: end-of-day target SOC (%)
+- **soc.max_soc**: max SOC allowed for charging
 - **heuristics.top_x_charge_hours**: cheapest periods to charge
 - **heuristics.top_x_discharge_hours**: most expensive periods to discharge
 - **heuristics.excess_solar_threshold**: surplus solar threshold (W)
+- **heuristics.min_profit_threshold**: minimum spread between load and discharge prices (EUR/kWh)
+- **heuristics.overnight_wait_threshold**: evening vs overnight price gap to wait for cheaper charging (EUR/kWh)
 - **temperature_based_discharge.enabled**: enable temperature mapping
 - **temperature_based_discharge.thresholds**: temperature → discharge hours mapping
 - **ev_charger.enabled**: enable EV charger integration
