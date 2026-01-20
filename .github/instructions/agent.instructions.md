@@ -14,14 +14,15 @@ define expectations, plan steps, implement clean code, and verify results.
 **These rules are MANDATORY and must be followed before any other action:**
 
 ### 1. ⚠️ ALWAYS CREATE BRANCH FIRST (Phase 0)
-**Before writing ANY code, ALWAYS create a branch:**
+**Before writing ANY code, ALWAYS work from a non-main branch:**
+- ✅ If a related branch already exists for this change, continue using it (do NOT create a new branch).
 - ✅ New feature/breaking change → `git checkout -b feature/[change-id]` + create OpenSpec change folder
 - ✅ Bug fix → `git checkout -b fix/[descriptive-name]`
 - ✅ Refactor → `git checkout -b refactor/[descriptive-name]`
 - ✅ Documentation → `git checkout -b docs/[descriptive-name]`
 
 **❌ NEVER work on main branch directly**
-**❌ NEVER write code before creating a branch**
+**❌ NEVER write code before moving to or creating the appropriate branch**
 
 ### 2. ⚠️ NO TEMPORARY REPORT FILES
 **NEVER create these files:**
