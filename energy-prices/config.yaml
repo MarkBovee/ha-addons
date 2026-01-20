@@ -17,6 +17,7 @@ options:
   currency: "EUR"
   timezone: "CET"
   fetch_interval_minutes: 60
+  use_hourly_prices: false
   
   # Import price components (buying from grid)
   # Values in EUR/kWh (e.g., 0.0248 = 2.48 cents)
