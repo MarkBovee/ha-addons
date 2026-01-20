@@ -1,0 +1,114 @@
+name: Battery Manager
+description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
+version: "0.1.0"
+slug: battery_manager
+init: false
+homeassistant_api: true
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+options:
+  enabled: true
+  dry_run: false
+  entities:
+    price_curve_entity: "sensor.energy_prices_electricity_import_price"
+    export_price_curve_entity: "sensor.energy_prices_electricity_export_price"
+    soc_entity: "sensor.battery_api_battery_soc"
+    grid_power_entity: "sensor.battery_api_grid_power"
+    solar_power_entity: "sensor.battery_api_pv_power"
+    house_load_entity: "sensor.battery_api_load_power"
+    temperature_entity: "sensor.weather_forecast_temperature"
+
+  timing:
+    update_interval: 3600
+    monitor_interval: 60
+
+  power:
+    max_charge_power: 8000
+    max_discharge_power: 8000
+    min_discharge_power: 4000
+
+  soc:
+    min_soc: 5
+    conservative_soc: 40
+    target_eod_soc: 20
+
+  heuristics:
+    top_x_charge_hours: 3
+    top_x_discharge_hours: 2
+    excess_solar_threshold: 1000
+
+  temperature_based_discharge:
+    enabled: true
+    thresholds:
+      - temp_max: 0
+        discharge_hours: 1
+      - temp_max: 8
+        discharge_hours: 1
+      - temp_max: 16
+        discharge_hours: 2
+      - temp_max: 20
+        discharge_hours: 2
+      - temp_max: 999
+        discharge_hours: 3
+
+  ev_charger:
+    enabled: true
+    charging_threshold: 500
+    entity_id: "sensor.ev_charger_power"
+
+  mqtt_host: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_password: ""
+
+schema:
+  enabled: bool?
+  dry_run: bool?
+  entities:
+    price_curve_entity: str
+    export_price_curve_entity: str
+    soc_entity: str
+    grid_power_entity: str
+    solar_power_entity: str
+    house_load_entity: str
+    temperature_entity: str
+
+  timing:
+    update_interval: int(300,7200)
+    monitor_interval: int(10,300)
+
+  power:
+    max_charge_power: int(1000,10000)
+    max_discharge_power: int(1000,10000)
+    min_discharge_power: int(1000,10000)
+
+  soc:
+    min_soc: int(0,100)
+    conservative_soc: int(0,100)
+    target_eod_soc: int(0,100)
+
+  heuristics:
+    top_x_charge_hours: int(1,8)
+    top_x_discharge_hours: int(1,8)
+    excess_solar_threshold: int(100,5000)
+
+  temperature_based_discharge:
+    enabled: bool?
+    thresholds:
+      - temp_max: int
+        discharge_hours: int(1,6)
+
+  ev_charger:
+    enabled: bool?
+    charging_threshold: int(100,5000)
+    entity_id: str
+
+  mqtt_host: str?
+  mqtt_port: int?
+  mqtt_user: str?
+  mqtt_password: password?

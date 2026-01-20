@@ -18,6 +18,7 @@ ha-addons/
 │   ├── ha_api.py             # Home Assistant REST API client
 │   ├── config_loader.py      # Configuration loading utilities
 │   └── mqtt_setup.py         # MQTT Discovery client setup
+├── battery-manager/          # Battery strategy optimization add-on
 ├── charge-amps-monitor/      # Charge Amps EV Charger Monitor addon
 ├── energy-prices/            # Nord Pool-based Energy Prices addon
 ├── water-heater-scheduler/   # Price-based water heater scheduling
@@ -102,6 +103,25 @@ Schedule domestic hot water heating based on electricity prices to optimize cost
 6. Click **Start**
 
 For detailed documentation, see [water-heater-scheduler/README.md](water-heater-scheduler/README.md)
+
+### Battery Manager
+
+Optimize battery charging and discharging using dynamic price curves, solar surplus, grid export detection, and EV charging awareness.
+
+**Features:**
+- Price-based charge/discharge schedules using Energy Prices data
+- Real-time safety adjustments (SOC protection, grid export prevention)
+- EV charger integration to avoid inefficient discharge
+- MQTT Discovery entities with unique_id support
+
+**Installation:**
+1. Add this repository (see above)
+2. Install **Energy Prices** and **Battery API** add-ons first
+3. Find **Battery Manager** in the Add-on Store
+4. Configure your thresholds and preferences
+5. Click **Start**
+
+For detailed documentation, see [battery-manager/README.md](battery-manager/README.md)
 
 ## Development
 
