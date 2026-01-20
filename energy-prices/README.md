@@ -63,6 +63,37 @@ Configure the addon through the Home Assistant UI:
 | `latitude` | float | `52.0907` | Latitude for daylight calculation (default: Utrecht) |
 | `longitude` | float | `5.1214` | Longitude for daylight calculation (default: Utrecht) |
 | `fetch_interval_minutes` | integer | `60` | How often to fetch new prices (1-1440 minutes) |
+| `use_hourly_prices` | boolean | `false` | Average 15-minute intervals to hourly (see below) |
+
+### Hourly Price Averaging
+
+By default, the add-on provides 15-minute price intervals (96 per day) from Nord Pool. However, some energy providers (like certain Dutch suppliers) use the average of the 4 quarters in each hour for their pricing.
+
+Enable hourly averaging with:
+```yaml
+use_hourly_prices: true
+```
+
+**How it works:**
+- Groups 4 consecutive 15-minute intervals (one hour)
+- Averages their prices into a single hourly price
+- Creates 24 hourly intervals instead of 96 quarter-hour intervals
+
+**Example:** For the hour 08:00-09:00 with 15-minute prices:
+- 08:00-08:15: 30 cents/kWh
+- 08:15-08:30: 32 cents/kWh
+- 08:30-08:45: 32 cents/kWh
+- 08:45-09:00: 30 cents/kWh
+
+Average: (30+32+32+30) ÷ 4 = **31 cents/kWh** for the entire 08:00-09:00 hour.
+
+**Trade-offs:**
+- ✅ **Matches some provider billing** - Accurate for providers using hourly averages
+- ✅ **Smoother prices** - Reduces short-term volatility
+- ❌ **Less granular** - Cannot optimize on 15-minute basis
+- ❌ **May hide peaks** - Short price spikes are averaged out
+
+**Consumer compatibility:** The NetDaemonApps battery optimization, charge-amps-monitor, and water-heater-scheduler add-ons automatically detect and work with both 15-minute and hourly intervals.
 
 ### Price Calculation Formula (Zonneplan 2026)
 

@@ -45,6 +45,7 @@ EP_CONFIG_DEFAULTS = {
     'export_bonus_pct': 0.10,
     'latitude': 52.0907,
     'longitude': 5.1214,
+    'use_hourly_prices': False,
 }
 
 EP_REQUIRED_FIELDS = ['delivery_area', 'currency', 'timezone', 'fetch_interval_minutes']
@@ -79,8 +80,95 @@ def load_config() -> dict:
     logger.info("Export: VAT=%.2f, fixed_bonus=%.4f, bonus_pct=%.2f",
                config['export_vat_multiplier'], config['export_fixed_bonus'], config['export_bonus_pct'])
     logger.info("Location: lat=%.4f, lon=%.4f", config['latitude'], config['longitude'])
+    logger.info("Use hourly prices: %s", config.get('use_hourly_prices', False))
     
     return config
+
+
+def average_to_hourly(intervals: List[PriceInterval]) -> List[PriceInterval]:
+    """Average 15-minute price intervals into hourly intervals.
+    
+    Groups 4 consecutive 15-minute intervals (1 hour) and averages their prices.
+    Creates new hourly intervals with averaged price_eur_mwh values.
+    Skips incomplete hours (< 4 intervals).
+    
+    Args:
+        intervals: List of PriceInterval objects (15-minute intervals)
+        
+    Returns:
+        List of PriceInterval objects with hourly averages
+        
+    Example:
+        Input: 4 intervals from 08:00-08:45 with prices [30, 32, 32, 30] cents/kWh
+        Output: 1 interval from 08:00-09:00 with price 31 cents/kWh
+    """
+    if not intervals:
+        return []
+    
+    # Sort intervals by start time to ensure proper grouping
+    sorted_intervals = sorted(intervals, key=lambda x: x.start)
+    
+    hourly_intervals = []
+    i = 0
+    
+    while i < len(sorted_intervals):
+        # Take up to 4 intervals (1 hour)
+        chunk = sorted_intervals[i:i+4]
+        
+        # Skip incomplete hours (< 4 intervals)
+        if len(chunk) < 4:
+            logger.warning("Skipping incomplete hour with only %d intervals starting at %s",
+                          len(chunk), chunk[0].start.isoformat())
+            break
+        
+        # Verify all 4 intervals are from the same hour
+        hour_start = chunk[0].start.replace(minute=0, second=0, microsecond=0)
+        expected_times = [
+            hour_start,
+            hour_start + timedelta(minutes=15),
+            hour_start + timedelta(minutes=30),
+            hour_start + timedelta(minutes=45)
+        ]
+        
+        valid_hour = all(
+            interval.start == expected
+            for interval, expected in zip(chunk, expected_times)
+        )
+        
+        if not valid_hour:
+            logger.warning("Intervals not aligned to hour boundary, skipping chunk starting at %s",
+                          chunk[0].start.isoformat())
+            i += 1
+            continue
+        
+        # Calculate average price
+        avg_price_mwh = sum(interval.price_eur_mwh for interval in chunk) / 4
+        
+        # Create hourly interval (start of first, end of last)
+        hourly_interval = PriceInterval(
+            start=chunk[0].start,
+            end=chunk[-1].end,
+            price_eur_mwh=avg_price_mwh
+        )
+        
+        hourly_intervals.append(hourly_interval)
+        
+        # Log the averaging
+        logger.debug("Averaged %s - %s: %.2f EUR/MWh (from [%.2f, %.2f, %.2f, %.2f])",
+                    hourly_interval.start.isoformat(),
+                    hourly_interval.end.isoformat(),
+                    avg_price_mwh,
+                    chunk[0].price_eur_mwh,
+                    chunk[1].price_eur_mwh,
+                    chunk[2].price_eur_mwh,
+                    chunk[3].price_eur_mwh)
+        
+        i += 4
+    
+    logger.info("Averaged %d 15-minute intervals into %d hourly intervals",
+               len(sorted_intervals), len(hourly_intervals))
+    
+    return hourly_intervals
 
 
 def calculate_import_price(market_price: float, vat_multiplier: float, markup: float, energy_tax: float) -> float:
@@ -132,6 +220,27 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         
         logger.info("Fetched %d intervals total (%d today, %d tomorrow)", 
                    len(all_intervals), len(today_intervals), len(tomorrow_intervals))
+        
+        # Apply hourly averaging if configured
+        use_hourly = config.get('use_hourly_prices', False)
+        if use_hourly:
+            logger.info("Averaging 15-minute intervals to hourly prices")
+            all_intervals = average_to_hourly(all_intervals)
+            
+            # Recalculate today/tomorrow split after averaging
+            today_intervals_hourly = []
+            tomorrow_intervals_hourly = []
+            for interval in all_intervals:
+                if interval.start.date() == today:
+                    today_intervals_hourly.append(interval)
+                else:
+                    tomorrow_intervals_hourly.append(interval)
+            
+            today_intervals = today_intervals_hourly
+            tomorrow_intervals = tomorrow_intervals_hourly
+            
+            logger.info("After averaging: %d hourly intervals total (%d today, %d tomorrow)",
+                       len(all_intervals), len(today_intervals), len(tomorrow_intervals))
         
         # Extract price components from config
         import_vat = config['import_vat_multiplier']
