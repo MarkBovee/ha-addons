@@ -623,6 +623,21 @@ def generate_schedule(
     return schedule
 
 
+def _get_temperature_icon(temperature: Optional[float]) -> str:
+    """Get icon based on temperature thresholds matching legacy C# app."""
+    if temperature is None:
+        return ""
+    if temperature < 0:
+        return "❄️"
+    if temperature < 8:
+        return "🥶"
+    if temperature < 16:
+        return "🌥️"
+    if temperature < 20:
+        return "🌤️"
+    return "☀️"
+
+
 def monitor_and_adjust_active_period(
     config: Dict[str, Any], ha_api: HomeAssistantApi, mqtt_client: Any, state: RuntimeState
 ) -> None:
@@ -685,10 +700,12 @@ def monitor_and_adjust_active_period(
     top_x_charge_count = calculate_top_x_count(
         config["heuristics"]["top_x_charge_hours"], interval_minutes
     )
+
+    # Always fetch temperature for status logging and potential heuristics
+    temperature = _get_sensor_float(ha_api, config["entities"]["temperature_entity"])
+
     top_x_discharge_hours = config["heuristics"]["top_x_discharge_hours"]
-    temperature = None
     if config["temperature_based_discharge"]["enabled"]:
-        temperature = _get_sensor_float(ha_api, config["entities"]["temperature_entity"])
         top_x_discharge_hours = get_discharge_hours(
             temperature,
             config["temperature_based_discharge"]["thresholds"],
@@ -781,6 +798,10 @@ def monitor_and_adjust_active_period(
         status_parts.append("✅ Discharging")
     else:
         status_parts.append("💤 Idle")
+
+    if temperature is not None:
+        icon = _get_temperature_icon(temperature)
+        status_parts.append(f"{icon} {temperature}°C")
 
     if active_discharge and should_pause:
         logger.info("%s | 🛑 Paused | Reasons: %s", " | ".join(status_parts), ", ".join(pause_reasons))
@@ -886,28 +907,10 @@ def monitor_and_adjust_active_period(
                 delta = target_power - current_power
                 delta_str = f"+{delta}" if delta > 0 else f"{delta}"
 
-                period_str = "Active"
-                if active_period:
-                    try:
-                        p_start = isoparse(active_period["start"])
-                        p_end = p_start + timedelta(minutes=int(active_period["duration"]))
-                        period_str = f"{p_start.strftime('%H:%M')}-{p_end.strftime('%H:%M')}"
-                    except Exception:
-                        pass
-
-                temp_str = ""
-                if temperature is not None:
-                    icon = "🥶" if temperature < 10 else "🌡️"
-                    temp_str = f" | {icon} {temperature}°C"
-
                 logger.info(
-                    "⚡ Adaptive Adjustment: %sW (%sW) | Discharge %s: %sW -> %sW%s",
+                    "Power adjustment applied: %sW (%sW)",
                     target_power,
                     delta_str,
-                    period_str,
-                    current_power,
-                    target_power,
-                    temp_str,
                 )
                 updated = []
                 for period in discharge_periods:
