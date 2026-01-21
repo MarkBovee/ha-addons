@@ -641,15 +641,11 @@ def monitor_and_adjust_active_period(
     house_load = _get_sensor_float(ha_api, load_entity)
 
     logger.info(
-        "  Sensors: soc(%s)=%s grid(%s)=%s solar(%s)=%s load(%s)=%s",
-        soc_entity,
-        soc,
-        grid_entity,
-        grid_power,
-        solar_entity,
-        solar_power,
-        load_entity,
-        house_load,
+        "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW",
+        soc if soc is not None else "?",
+        grid_power if grid_power is not None else "?",
+        solar_power if solar_power is not None else "?",
+        house_load if house_load is not None else "?",
     )
 
     if grid_power is None and not state.warned_missing_grid:
@@ -690,6 +686,7 @@ def monitor_and_adjust_active_period(
         config["heuristics"]["top_x_charge_hours"], interval_minutes
     )
     top_x_discharge_hours = config["heuristics"]["top_x_discharge_hours"]
+    temperature = None
     if config["temperature_based_discharge"]["enabled"]:
         temperature = _get_sensor_float(ha_api, config["entities"]["temperature_entity"])
         top_x_discharge_hours = get_discharge_hours(
@@ -761,35 +758,38 @@ def monitor_and_adjust_active_period(
     reduce_discharge = False
     pause_reasons: List[str] = []
     reduce_reasons: List[str] = []
+
     if config["ev_charger"]["enabled"]:
         ev_threshold = config["ev_charger"]["charging_threshold"]
-        should_pause = should_pause_discharge(ev_power, ev_threshold)
-        if should_pause:
-            pause_reasons.append(f"ev_charging>{ev_threshold}W")
+        if should_pause_discharge(ev_power, ev_threshold):
+            should_pause = True
+            pause_reasons.append(f"EV Charging >{ev_threshold}W")
 
-    reduce_discharge = should_reduce_discharge(grid_power, threshold=500)
-    if reduce_discharge:
-        reduce_reasons.append("grid_export<-500W")
+    if should_reduce_discharge(grid_power, threshold=500):
+        reduce_discharge = True
+        reduce_reasons.append("High Grid Export")
 
     if soc is not None:
         if soc <= config["soc"]["min_soc"]:
             should_pause = True
-            pause_reasons.append(f"soc<=min({config['soc']['min_soc']}%)")
-        elif soc < config["soc"]["conservative_soc"]:
-            reduce_discharge = True
-            reduce_reasons.append(f"soc<conservative({config['soc']['conservative_soc']}%)")
+            pause_reasons.append(f"Low SOC ({soc}% <= {config['soc']['min_soc']}%)")
 
-    logger.info(
-        "  Decision flags: active_charge=%s active_discharge=%s pause=%s reduce=%s",
-        active_charge,
-        active_discharge,
-        should_pause,
-        reduce_discharge,
-    )
-    if pause_reasons:
-        logger.info("🛑 Pause reasons: %s", pause_reasons)
-    if reduce_reasons:
-        logger.info("🟡 Reduce reasons: %s", reduce_reasons)
+    status_parts = []
+    if active_charge:
+        status_parts.append("✅ Charging")
+    elif active_discharge:
+        status_parts.append("✅ Discharging")
+    else:
+        status_parts.append("💤 Idle")
+
+    if active_discharge and should_pause:
+        logger.info("%s | 🛑 Paused | Reasons: %s", " | ".join(status_parts), ", ".join(pause_reasons))
+    elif active_discharge and reduce_discharge:
+        logger.info("%s | 🟡 Reduced | Reasons: %s", " | ".join(status_parts), ", ".join(reduce_reasons))
+    elif active_charge or active_discharge:
+        logger.info("%s | Active | Mode: %s", " | ".join(status_parts), price_range)
+    else:
+        logger.info("%s", " | ".join(status_parts))
 
     if active_discharge and (should_pause or reduce_discharge):
         if should_pause:
@@ -883,7 +883,32 @@ def monitor_and_adjust_active_period(
             ):
                 logger.info("⏱️ Adaptive adjustment skipped (grace period active)")
             elif target_power != current_power:
-                logger.info("⚡ Adjusting power: %sW -> %sW", current_power, target_power)
+                delta = target_power - current_power
+                delta_str = f"+{delta}" if delta > 0 else f"{delta}"
+
+                period_str = "Active"
+                if active_period:
+                    try:
+                        p_start = isoparse(active_period["start"])
+                        p_end = p_start + timedelta(minutes=int(active_period["duration"]))
+                        period_str = f"{p_start.strftime('%H:%M')}-{p_end.strftime('%H:%M')}"
+                    except Exception:
+                        pass
+
+                temp_str = ""
+                if temperature is not None:
+                    icon = "🥶" if temperature < 10 else "🌡️"
+                    temp_str = f" | {icon} {temperature}°C"
+
+                logger.info(
+                    "⚡ Adaptive Adjustment: %sW (%sW) | Discharge %s: %sW -> %sW%s",
+                    target_power,
+                    delta_str,
+                    period_str,
+                    current_power,
+                    target_power,
+                    temp_str,
+                )
                 updated = []
                 for period in discharge_periods:
                     if period is active_period:
@@ -927,7 +952,10 @@ def monitor_and_adjust_active_period(
             solar_power, house_load, config["heuristics"]["excess_solar_threshold"]
         )
         if should_charge_from_solar(excess, config["heuristics"]["excess_solar_threshold"]):
-            logger.info("☀️ Opportunistic charging available (excess: %sW)", excess)
+            logger.info(
+                "☀️ Solar Opportunity | Excess: %sW | Initiating opportunistic charge", 
+                excess
+            )
             _safe_update_entity_state(
                 mqtt_client,
                 build_entity_configs()[4],
