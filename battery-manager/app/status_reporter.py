@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
 
 DEVICE_INFO = {
     "identifiers": ["battery_manager_addon"],
@@ -72,7 +75,19 @@ def update_entity_state(
     entity_config: Dict[str, Any],
     state: str,
     attributes: Dict[str, Any] | None = None,
+    dry_run: bool = False,
 ) -> None:
+    if dry_run:
+        logger.info(
+            "📝 [Dry-Run] Output state for %s (%s): %s",
+            entity_config["name"],
+            entity_config["unique_id"],
+            state,
+        )
+        if attributes:
+            logger.info("   Attributes: %s", json.dumps(attributes, ensure_ascii=False))
+        return
+
     if mqtt_client is None:
         raise ValueError("mqtt_client is required")
 

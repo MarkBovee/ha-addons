@@ -65,6 +65,14 @@ def detect_interval_minutes(prices: Sequence[Union[float, int, dict]]) -> int:
     return 60
 
 
+from datetime import datetime, timezone
+
+def _ensure_aware(dt: datetime) -> datetime:
+    """Ensure datetime is timezone-aware (UTC default if naive)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
 def calculate_top_x_count(hours: int, interval_minutes: int) -> int:
     """Convert hours into interval count based on interval length."""
 
@@ -119,6 +127,9 @@ def get_current_price_entry(curve: Sequence[dict], now: datetime, interval_minut
         return None
 
     interval_minutes = max(interval_minutes, 1)
+    
+    # Ensure consistent timezone for comparison
+    now = _ensure_aware(now)
     rounded = now.replace(minute=(now.minute // interval_minutes) * interval_minutes, second=0, microsecond=0)
 
     for entry in curve:
@@ -127,8 +138,8 @@ def get_current_price_entry(curve: Sequence[dict], now: datetime, interval_minut
         if not start:
             continue
         try:
-            start_dt = isoparse(start)
-            end_dt = isoparse(end) if end else start_dt
+            start_dt = _ensure_aware(isoparse(start))
+            end_dt = _ensure_aware(isoparse(end)) if end else start_dt
         except Exception:
             continue
         if start_dt <= rounded < end_dt:
@@ -152,6 +163,8 @@ def get_current_period_rank(
     if not points or top_x <= 0:
         return None
 
+    now = _ensure_aware(now)
+
     ranked = _select_top(points, top_x=top_x, reverse=reverse)
     for index, point in enumerate(ranked, start=1):
         if isinstance(point.value, dict):
@@ -160,8 +173,8 @@ def get_current_period_rank(
             if not start:
                 continue
             try:
-                start_dt = isoparse(start)
-                end_dt = isoparse(end) if end else start_dt
+                start_dt = _ensure_aware(isoparse(start))
+                end_dt = _ensure_aware(isoparse(end)) if end else start_dt
             except Exception:
                 continue
             if start_dt <= now < end_dt:
