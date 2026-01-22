@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.2.0"
+version: "0.2.1"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -21,7 +21,7 @@ options:
     grid_power_entity: "sensor.battery_api_grid_power"
     solar_power_entity: "sensor.battery_api_pv_power"
     house_load_entity: "sensor.battery_api_load_power"
-    temperature_entity: "sensor.weather_forecast_temperature"
+    temperature_entity: "sensor.temperatuur_1d"
 
   timing:
     update_interval: 3600
@@ -33,7 +33,7 @@ options:
     max_charge_power: 8000
     max_discharge_power: 8000
     min_discharge_power: 0
-    min_scaled_power: 2500
+    min_scaled_power: 4000
 
   soc:
     min_soc: 5

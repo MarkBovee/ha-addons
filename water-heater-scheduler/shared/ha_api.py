@@ -297,3 +297,25 @@ class HomeAssistantApi:
         if cfg:
             return cfg.get("time_zone") or cfg.get("timeZone")
         return None
+
+    def get_error_log(self) -> Optional[str]:
+        """Get the Home Assistant error log (home-assistant.log).
+        
+        Returns:
+            The content of the error log as a string, or None if failed.
+        """
+        try:
+            url = f"{self.base_url}/error_log"
+            response = requests.get(url, headers=self._headers, timeout=20)
+            
+            if response.ok:
+                return response.text
+            else:
+                logger.warning(
+                    "Failed to fetch error log: %d - %s",
+                    response.status_code, response.text[:200]
+                )
+                return None
+        except Exception as e:
+            logger.error("Exception fetching error log: %s", e)
+            return None
