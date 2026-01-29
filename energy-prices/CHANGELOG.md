@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Zonneplan 2026 Pricing**: Updated default configuration and calculation formulas for 2026 dynamic contracts.
-- **Tax Rates**: Default Energy Tax updated to €0.0790/kWh (2026 rate).
-- **Export Formula**: Implemented Zonneplan export formula: `((Market * 1.10) * VAT) + FixedBonus + (Tax * VAT)`.
-- **Config**: Reordered Import/Export settings for clarity. Added `import_markup` comment (Zonneplan Inkoopvergoeding).
-- **Deprecated**: `calculate_export_price` in `solar_bonus.py` removed; logic consolidated in `price_calculator.py`.
+- **Tax Rates**: Default Energy Tax updated to €0.11085/kWh (2026 rate incl VAT).
+- **Import Formula**: `(Market * VAT) + Tax_InclVAT + Markup`.
+- **Export Formula**: `((Market * 1.10) * VAT) + FixedBonus + Tax_InclVAT`.
+- **Config**: Reordered Import/Export settings. `import_markup` clarified as Inkoopvergoeding.
+- **Simplified**: Tax is now configured inclusive of VAT to simplify formulas.
+- **Deprecated**: `calculate_export_price` in `solar_bonus.py` removed.
 
 ## [1.5.5] - 2026-01-02
 

@@ -23,7 +23,7 @@ options:
   # Values in EUR/kWh (e.g., 0.0248 = 2.48 cents)
   import_vat_multiplier: 1.21
   import_markup: 0.02  # Zonneplan Inkoopvergoeding (incl BTW)
-  import_energy_tax: 0.0790  # Energiebelasting 2026 (excl BTW)
+  import_energy_tax: 0.11085  # Energiebelasting 2026 (incl BTW)
   
   # Export price components (selling to grid / feed-in)
   # Zonneplan 2026 dynamic contract (with netting)
@@ -31,7 +31,7 @@ options:
   export_vat_multiplier: 1.21
   export_bonus_pct: 0.10  # Zonnebonus percentage (10%)
   export_fixed_bonus: 0.02  # Zonnebonus fixed (2 cents)
-  export_energy_tax: 0.0790  # Energiebelasting 2026 (excl BTW)
+  export_energy_tax: 0.11085  # Energiebelasting 2026 (incl BTW)
   
   # Location for daylight calculation (Zonneplan solar bonus)
   # Default: Utrecht, NL

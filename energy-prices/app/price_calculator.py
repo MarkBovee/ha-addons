@@ -8,18 +8,18 @@ from .models import PriceInterval
 def calculate_import_price(market_price: float, vat_multiplier: float, markup: float, energy_tax: float) -> float:
     """Calculate import price (Zonneplan 2026).
     
-    Formula: ((market_price + energy_tax) * vat_multiplier) + markup
+    Formula: (market_price * vat_multiplier) + energy_tax + markup
     
     Args:
         market_price: Market price in EUR/kWh
         vat_multiplier: VAT multiplier (e.g. 1.21)
         markup: Fixed markup in EUR/kWh (Zonneplan Inkoopvergoeding, incl VAT)
-        energy_tax: Energy tax in EUR/kWh (excl VAT)
+        energy_tax: Energy tax in EUR/kWh (incl VAT)
         
     Returns:
         Final import price in EUR/kWh
     """
-    total = ((market_price + energy_tax) * vat_multiplier) + markup
+    total = (market_price * vat_multiplier) + energy_tax + markup
     return round(total, 4)
 
 
@@ -27,14 +27,14 @@ def calculate_export_price(market_price: float, vat_multiplier: float, bonus_pct
                          fixed_bonus: float, energy_tax: float) -> float:
     """Calculate export price (Zonneplan 2026).
     
-    Formula: ((market * (1 + bonus_pct)) * vat) + fixed_bonus + (tax * vat)
+    Formula: ((market * (1 + bonus_pct)) * vat) + fixed_bonus + tax
     
     Args:
         market_price: Market price in EUR/kWh
         vat_multiplier: VAT multiplier (e.g. 1.21)
         bonus_pct: Bonus percentage (e.g. 0.10 for 10%)
         fixed_bonus: Fixed bonus in EUR/kWh (Zonneplus Zonnebonus)
-        energy_tax: Energy tax in EUR/kWh (excl VAT)
+        energy_tax: Energy tax in EUR/kWh (incl VAT, only for netting/saldering)
         
     Returns:
         Final export price in EUR/kWh
@@ -46,7 +46,7 @@ def calculate_export_price(market_price: float, vat_multiplier: float, bonus_pct
     term2 = fixed_bonus
     
     # Term 3: Energy tax (incl VAT)
-    term3 = energy_tax * vat_multiplier
+    term3 = energy_tax
     
     total = term1 + term2 + term3
     return round(total, 4)
