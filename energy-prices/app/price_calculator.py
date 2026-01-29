@@ -5,7 +5,51 @@ from typing import List
 
 from .models import PriceInterval
 
-logger = logging.getLogger(__name__)
+def calculate_import_price(market_price: float, vat_multiplier: float, markup: float, energy_tax: float) -> float:
+    """Calculate import price (Zonneplan 2026).
+    
+    Formula: ((market_price + energy_tax) * vat_multiplier) + markup
+    
+    Args:
+        market_price: Market price in EUR/kWh
+        vat_multiplier: VAT multiplier (e.g. 1.21)
+        markup: Fixed markup in EUR/kWh (Zonneplan Inkoopvergoeding, incl VAT)
+        energy_tax: Energy tax in EUR/kWh (excl VAT)
+        
+    Returns:
+        Final import price in EUR/kWh
+    """
+    total = ((market_price + energy_tax) * vat_multiplier) + markup
+    return round(total, 4)
+
+
+def calculate_export_price(market_price: float, vat_multiplier: float, bonus_pct: float, 
+                         fixed_bonus: float, energy_tax: float) -> float:
+    """Calculate export price (Zonneplan 2026).
+    
+    Formula: ((market * (1 + bonus_pct)) * vat) + fixed_bonus + (tax * vat)
+    
+    Args:
+        market_price: Market price in EUR/kWh
+        vat_multiplier: VAT multiplier (e.g. 1.21)
+        bonus_pct: Bonus percentage (e.g. 0.10 for 10%)
+        fixed_bonus: Fixed bonus in EUR/kWh (Zonneplus Zonnebonus)
+        energy_tax: Energy tax in EUR/kWh (excl VAT)
+        
+    Returns:
+        Final export price in EUR/kWh
+    """
+    # Term 1: Market price + bonus % (incl VAT)
+    term1 = (market_price * (1 + bonus_pct)) * vat_multiplier
+    
+    # Term 2: Fixed bonus (Zonnebonus)
+    term2 = fixed_bonus
+    
+    # Term 3: Energy tax (incl VAT)
+    term3 = energy_tax * vat_multiplier
+    
+    total = term1 + term2 + term3
+    return round(total, 4)
 
 
 class PriceCalculator:

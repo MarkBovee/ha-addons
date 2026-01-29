@@ -5,6 +5,15 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-01-29
+
+### Changed
+- **Zonneplan 2026 Pricing**: Updated default configuration and calculation formulas for 2026 dynamic contracts.
+- **Tax Rates**: Default Energy Tax updated to €0.0790/kWh (2026 rate).
+- **Export Formula**: Implemented Zonneplan export formula: `((Market * 1.10) * VAT) + FixedBonus + (Tax * VAT)`.
+- **Config**: Reordered Import/Export settings for clarity. Added `import_markup` comment (Zonneplan Inkoopvergoeding).
+- **Deprecated**: `calculate_export_price` in `solar_bonus.py` removed; logic consolidated in `price_calculator.py`.
+
 ## [1.5.5] - 2026-01-02
 
 ### Added

@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 
 from .nordpool_api import NordPoolApi
 from .models import PriceInterval
-from .price_calculator import PriceCalculator
-from .solar_bonus import is_daylight, calculate_export_price, get_sun_times
+from .price_calculator import PriceCalculator, calculate_import_price, calculate_export_price
+from .solar_bonus import is_daylight, get_sun_times
 
 # Import shared modules
 from shared.addon_base import setup_logging, setup_signal_handlers, sleep_with_shutdown_check
@@ -37,10 +37,9 @@ EP_CONFIG_DEFAULTS = {
     'fetch_interval_minutes': 60,
     'import_vat_multiplier': 1.21,
     'import_markup': 0.02,
-    'import_energy_tax': 0.1108,
+    'import_energy_tax': 0.0790,
     'export_vat_multiplier': 1.21,
-    'export_markup': 0.02,
-    'export_energy_tax': 0.1108,
+    'export_energy_tax': 0.0790,
     'export_fixed_bonus': 0.02,
     'export_bonus_pct': 0.10,
     'latitude': 52.0907,
@@ -171,24 +170,6 @@ def average_to_hourly(intervals: List[PriceInterval]) -> List[PriceInterval]:
     return hourly_intervals
 
 
-def calculate_import_price(market_price: float, vat_multiplier: float, markup: float, energy_tax: float) -> float:
-    """Calculate import price (Zonneplan 2026).
-    
-    Formula: (market_price + markup + energy_tax) * vat_multiplier
-    
-    Args:
-        market_price: Market price in EUR/kWh
-        vat_multiplier: VAT multiplier (e.g., 1.21)
-        markup: Fixed markup in EUR/kWh
-        energy_tax: Energy tax in EUR/kWh
-        
-    Returns:
-        Final price in EUR/kWh rounded to 4 decimals
-    """
-    result = (market_price + markup + energy_tax) * vat_multiplier
-    return round(result, 4)
-
-
 def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[dict]:
     """Fetch prices, apply price components, calculate percentiles.
     
@@ -248,7 +229,6 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         import_tax = config['import_energy_tax']
         
         export_vat = config['export_vat_multiplier']
-        export_markup = config['export_markup']
         export_tax = config['export_energy_tax']
         export_fixed_bonus = config['export_fixed_bonus']
         export_bonus_pct = config['export_bonus_pct']
@@ -272,7 +252,7 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         price_curve_import = []
         price_curve_export = []
         
-        logger.info("Price schedule (Spot | Import | Export | Daylight | Bonus):")
+        logger.info("Price schedule (Spot | Import | Export | Daylight):")
 
         for interval in all_intervals:
             market_price = interval.price_eur_kwh()
@@ -281,16 +261,15 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
             daylight = is_daylight(interval.start, latitude, longitude)
             
             import_price = calculate_import_price(market_price, import_vat, import_markup, import_tax)
-            export_price = calculate_export_price(market_price, export_vat, export_markup, export_tax, 
-                                                export_fixed_bonus, export_bonus_pct, daylight)
+            export_price = calculate_export_price(market_price, export_vat, export_bonus_pct, 
+                                                export_fixed_bonus, export_tax)
             
             # Log details
-            bonus_applied = "Yes" if daylight and market_price > 0 else "No"
             logger.info(
-                "%s: %.4f | %.4f | %.4f | %s | %s",
+                "%s: %.4f | %.4f | %.4f | %s",
                 interval.start.astimezone(tz).strftime('%Y-%m-%d %H:%M'), 
                 market_price, import_price, export_price, 
-                "Yes" if daylight else "No", bonus_applied
+                "Yes" if daylight else "No"
             )
 
             import_prices.append(import_price)
@@ -301,15 +280,12 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
                 'end': interval.end.isoformat(),
                 'price': import_price
             })
+            
             price_curve_export.append({
                 'start': interval.start.isoformat(),
                 'end': interval.end.isoformat(),
                 'price': export_price
             })
-        
-        if not import_prices:
-            logger.error("No prices calculated successfully")
-            return None
         
         # Calculate percentiles from import prices
         percentiles = PriceCalculator.calculate_percentiles(import_prices)

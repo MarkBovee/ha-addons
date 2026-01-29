@@ -1,6 +1,6 @@
 name: Energy Prices
 description: Fetch Nord Pool electricity prices and calculate final costs with configurable price components
-version: "1.5.5"
+version: "1.6.0"
 slug: energy_prices
 init: false
 homeassistant_api: true
@@ -22,17 +22,16 @@ options:
   # Import price components (buying from grid)
   # Values in EUR/kWh (e.g., 0.0248 = 2.48 cents)
   import_vat_multiplier: 1.21
-  import_markup: 0.02
-  import_energy_tax: 0.1108
+  import_markup: 0.02  # Zonneplan Inkoopvergoeding (incl BTW)
+  import_energy_tax: 0.0790  # Energiebelasting 2026 (excl BTW)
   
   # Export price components (selling to grid / feed-in)
   # Zonneplan 2026 dynamic contract (with netting)
-  # Values in EUR/kWh (e.g., 0.02 = 2.00 cents)
+  # Values in EUR/kWh
   export_vat_multiplier: 1.21
-  export_markup: 0.02
-  export_energy_tax: 0.1108
-  export_fixed_bonus: 0.02
-  export_bonus_pct: 0.10
+  export_bonus_pct: 0.10  # Zonnebonus percentage (10%)
+  export_fixed_bonus: 0.02  # Zonnebonus fixed (2 cents)
+  export_energy_tax: 0.0790  # Energiebelasting 2026 (excl BTW)
   
   # Location for daylight calculation (Zonneplan solar bonus)
   # Default: Utrecht, NL
@@ -61,7 +60,6 @@ schema:
   export_bonus_pct: float
   latitude: float
   longitude: float
-  export_markup: float
   export_energy_tax: float
   # Advanced: MQTT settings (optional - auto-detects core-mosquitto by default)
   mqtt_host: str?
