@@ -52,15 +52,18 @@ schema:
   timezone: str
   fetch_interval_minutes: int
   use_hourly_prices: bool?
+  # Import price components
   import_vat_multiplier: float
   import_markup: float
   import_energy_tax: float
+  # Export price components
   export_vat_multiplier: float
   export_fixed_bonus: float
   export_bonus_pct: float
+  export_energy_tax: float
+  # Location for daylight calculation
   latitude: float
   longitude: float
-  export_energy_tax: float
   # Advanced: MQTT settings (optional - auto-detects core-mosquitto by default)
   mqtt_host: str?
   mqtt_port: int?
