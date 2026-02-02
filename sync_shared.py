@@ -24,7 +24,6 @@ from pathlib import Path
 ADDONS = [
     'battery-api',
     'battery-manager',
-    'battery-strategy',
     'charge-amps-monitor',
     'energy-prices',
     'water-heater-scheduler',

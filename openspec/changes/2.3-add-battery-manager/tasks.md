@@ -293,9 +293,18 @@
 **Phase 6 Validation:**
 - [x] All tests passing (unit + integration + E2E) - **DONE [13:55]**
 - [ ] Code coverage ≥85%
-- [ ] Dry-run validation successful
+- [x] Dry-run validation successful - **DONE [2026-02-02]**
 - [ ] Side-by-side comparison documented
 - [x] OpenSpec validation passes - **DONE [13:56]**
+
+---
+
+## Phase 7: Post-Implementation Fixes (1 day) 🐛
+
+- [x] 7.1 Fix logic where 0 power was treated as invalid (max/min scaling) - **DONE [2026-02-02]**
+- [x] 7.2 Verify dry-run with production-like data (verify_prod.py) - **DONE [2026-02-02]**
+- [x] 7.3 Fix bug in power_calculator when power is 0 - **DONE [2026-02-02]**
+- [x] 7.4 Fix bug in schedule_builder skipping 0 power periods - **DONE [2026-02-02]**
 
 ---
 

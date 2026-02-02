@@ -47,7 +47,9 @@ Key options (defaults in config.yaml):
 - **soc.max_soc**: max SOC allowed for charging
 - **heuristics.top_x_charge_hours**: cheapest periods to charge
 - **heuristics.top_x_discharge_hours**: most expensive periods to discharge
-- **heuristics.excess_solar_threshold**: surplus solar threshold (W)
+- **passive_solar.enabled**: enable 0W charge gap on excess solar
+- **passive_solar.entry_threshold**: grid export threshold to enter passive mode (W, default 1000)
+- **passive_solar.exit_threshold**: grid import threshold to exit passive mode (W, default 200)
 - **heuristics.min_profit_threshold**: minimum spread between load and discharge prices (EUR/kWh)
 - **heuristics.overnight_wait_threshold**: evening vs overnight price gap to wait for cheaper charging (EUR/kWh)
 - **temperature_based_discharge.enabled**: enable temperature mapping

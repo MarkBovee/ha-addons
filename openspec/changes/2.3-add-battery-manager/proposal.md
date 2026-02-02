@@ -1,98 +1,67 @@
-# Battery Strategy Optimizer Add-on Proposal
+# Battery Manager Add-on Proposal
 
 **Version:** 2.3  
-**Status:** 🟡 **IN PROGRESS - 82% COMPLETE**  
+**Status:** 🟡 **IN PROGRESS**  
 **Created:** 2026-01-20  
-**Target Completion:** 2026-02-03  
-**Completed Tasks:** 113 of 138  
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-02-02
 
 ---
 
 ## Executive Summary
 
-This change introduces a new **battery-strategy** Home Assistant add-on that optimizes home battery charging and discharging based on dynamic electricity prices, weather conditions, solar production, grid import/export, and EV charger status. The add-on migrates core battery management logic from the existing NetDaemonApps C# implementation to a native Python add-on with a modular, maintainable architecture.
+This change introduces a consolidated **battery-manager** Home Assistant add-on that unifies strategy optimization and battery management. It optimizes home battery charging and discharging based on dynamic electricity prices, weather conditions, solar production (Passive Solar Mode), grid import/export, and EV charger status.
 
 ### Why This Change?
 
 **Current State:**
-- Battery optimization logic lives in NetDaemonApps (C# .NET 9.0) running as a separate service
-- 1,438-line monolithic RangeBasedStrategy.cs class with complex interdependencies
-- Requires .NET runtime and NetDaemon framework
-- Difficult to test, debug, and maintain
+- Battery optimization logic lives in NetDaemonApps (C# .NET 9.0)
+- "Passive Solar" strategy proven in production but requires migration
+- Need for "Dry Run" capabilities to compare new add-on decisions against live production data
 
 **Desired State:**
-- Standalone Python add-on following ha-addons architecture patterns
-- 11 independent modules averaging <100 lines each with single responsibilities
-- Pure functions for core calculations (testable without mocks)
-- Native Home Assistant integration via MQTT Discovery
-- Simple configuration via Home Assistant UI
-
-**Key Benefits:**
-- **Maintainability**: Small, focused modules vs. 1,438-line monolith
-- **Testability**: Pure functions with no external dependencies for core logic
-- **Integration**: Native HA entities via MQTT Discovery (proper unique_id support)
-- **Simplicity**: Python-based, aligns with other add-ons (energy-prices, water-heater-scheduler)
-- **Performance**: Removes .NET runtime dependency, runs on Alpine Linux base
-
----
-
-## What's Changing
-
-| Aspect | Before | After |
-|--------|--------|-------|
-| **Runtime** | .NET 9.0 + NetDaemon | Python 3.12+ native add-on |
-| **Architecture** | 1,438-line RangeBasedStrategy class | 11 modular sub-routines (<100 lines each) |
-| **Configuration** | JSON in NetDaemon appsettings | YAML in Home Assistant UI |
-| **Entity Management** | NetDaemon REST API calls | MQTT Discovery (proper unique_id) |
-| **Testing** | Complex mocking required | Pure functions testable in isolation |
-| **Dependencies** | .NET runtime, NetDaemon framework | Python stdlib, requests, paho-mqtt |
-| **Deployment** | Separate NetDaemon container | Standard HA add-on (via Supervisor) |
+- Single **battery-manager** add-on
+- "Passive Solar" strategy ported and integrated
+- "Dry Run" mode for safe side-by-side comparison with production
+- "Adaptive Monitoring" logs to visualize decision tree differences
 
 ---
 
 ## Architecture Overview
 
-### 11 Sub-Routine Modules
+### Modules
 
 **Core Calculators (Pure Functions):**
 1. **price_analyzer.py** - Sort price curve, find TopX cheapest/expensive periods
-2. **temperature_advisor.py** - Map temperature to discharge hours (1-3 based on <0°C, <8°C, <16°C, <20°C, ≥20°C)
-3. **power_calculator.py** - Rank-based power scaling (8000W rank 1 → 4000W minimum)
-4. **soc_guardian.py** - Battery protection (5% minimum, 40% conservative, 20% end-of-day target)
+2. **temperature_advisor.py** - Map temperature to discharge hours
+3. **power_calculator.py** - Rank-based power scaling
+4. **soc_guardian.py** - Battery protection limits
 
-**Monitoring Modules (Sensor Readers):**
-5. **solar_monitor.py** - Detect excess solar production (>1000W surplus triggers "Passive Gap")
-6. **grid_monitor.py** - Track grid import/export (prevent unwanted export)
-7. **ev_charger_monitor.py** - Track EV charging, pause battery discharge when EV active (>500W)
+**Monitoring & Strategy Modules:**
+5. **solar_monitor.py** - "Passive Solar" detection (>1000W surplus triggers "Gap")
+6. **gap_scheduler.py** - Generates 0W charge "gap" schedules
+7. **grid_monitor.py** - Track grid net usage (`sensor.average_power_usage`)
+8. **ev_charger_monitor.py** - Track EV charging load
 
-**Integration Modules:**
-8. **gap_scheduler.py** - Generate "Passive Gap" schedules (0W charge + future discharge) for solar self-consumption
-9. **schedule_builder.py** - Combine price periods + temp hours + power levels into unified schedule
-10. **schedule_publisher.py** - Convert to JSON format and publish to MQTT (battery_api/text/schedule/set)
-11. **status_reporter.py** - Publish MQTT Discovery entities (status, reasoning, forecast, current_action)
-12. **main.py** - Orchestrator with 2 functions: generate_schedule (hourly), monitor_active_period (1-min)
+**Orchestration:**
+9. **main.py** - Orchestrator with Dry-Run support
+10. **schedule_publisher.py** - MQTT Interface
 
 ### Data Flow
 
 ```
-energy-prices sensor (96-192 intervals)
+Live Sensors (Grid, Solar, EV)
     ↓
-price_analyzer.py → TopX charge/discharge periods
+solar_monitor.py → Detects Passive Solar Conditions (Entry/Exit)
     ↓
-temperature_advisor.py → Effective discharge hours (1-3)
+    [PASSIVE MODE] → gap_scheduler.py → 0W Charge Command
     ↓
-schedule_builder.py → Combine periods + hours + SOC rules
+    [ACTIVE MODE] → price_analyzer.py + schedule_builder.py → Price Optimization
     ↓
-power_calculator.py → Apply rank-based scaling
-    ↓
-ev_charger_monitor.py → Pause discharge if EV charging
-    ↓
-schedule_publisher.py → MQTT battery_api/text/schedule/set
-    ↓
-Battery inverter executes schedule
-    
-(In parallel: monitor_active_period checks grid/solar/SOC every 1 min)
+main.py (Dry Run Check)
+    ↓ (If Live)
+schedule_publisher.py → MQTT
+    ↓ (If Dry Run)
+Log only: "Would publish: {payload}"
 ```
 
 ---

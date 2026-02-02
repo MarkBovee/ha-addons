@@ -13,11 +13,28 @@ Usage:
 
 import logging
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class HAState:
+    """Type-safe representation of a Home Assistant state."""
+    entity_id: str
+    state: str
+    attributes: Dict[str, Any]
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'HAState':
+        return cls(
+            entity_id=data['entity_id'],
+            state=data['state'],
+            attributes=data.get('attributes', {})
+        )
 
 
 def get_ha_api_config() -> Tuple[str, str]:
@@ -73,6 +90,32 @@ class HomeAssistantApi:
             'Content-Type': 'application/json'
         }
     
+    def get_state(self, entity_id: str) -> Optional[HAState]:
+        """Get the current state of an entity.
+        
+        Args:
+            entity_id: Entity ID to fetch
+            
+        Returns:
+            HAState object or None if not found/error
+        """
+        try:
+            url = f"{self.base_url}/states/{entity_id}"
+            response = requests.get(url, headers=self._headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                return HAState.from_dict(data)
+            elif response.status_code == 404:
+                return None
+            else:
+                logger.debug("Get state %s returned %d: %s", entity_id, response.status_code, response.text[:100])
+                return None
+                
+        except Exception as e:
+            logger.debug("Exception getting state for %s: %s", entity_id, e)
+            return None
+
     def create_or_update_entity(
         self,
         entity_id: str,

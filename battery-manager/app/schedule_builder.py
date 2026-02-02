@@ -48,16 +48,11 @@ def build_discharge_schedule(
 def _normalize_start_time(value: object) -> str | None:
     if not value:
         return None
-    if isinstance(value, str) and len(value) == 5 and value[2] == ":":
-        return value
     if isinstance(value, str):
-        try:
-            parsed = isoparse(value)
-            return parsed.strftime("%H:%M")
-        except Exception:
-            return None
+        # Return as-is, assuming it's already ISO or compatible
+        return value
     if isinstance(value, datetime):
-        return value.strftime("%H:%M")
+        return value.isoformat()
     return None
 
 

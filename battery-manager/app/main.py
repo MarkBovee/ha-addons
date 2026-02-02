@@ -29,7 +29,8 @@ from .price_analyzer import (
 )
 from .schedule_builder import build_charge_schedule, build_discharge_schedule, merge_schedules
 from .schedule_publisher import publish_to_mqtt
-from .solar_monitor import detect_excess_solar, should_charge_from_solar
+from .solar_monitor import SolarMonitor
+from .gap_scheduler import GapScheduler
 from .temperature_advisor import get_discharge_hours
 from .status_reporter import build_entity_configs, publish_discovery, update_entity_state
 
@@ -60,11 +61,15 @@ DEFAULT_CONFIG = {
         "min_discharge_power": 0,
         "min_scaled_power": 2500,
     },
+    "passive_solar": {
+        "enabled": True,
+        "entry_threshold": 1000,
+        "exit_threshold": 200,
+    },
     "soc": {"min_soc": 5, "conservative_soc": 40, "target_eod_soc": 20, "max_soc": 100},
     "heuristics": {
         "top_x_charge_hours": 3,
         "top_x_discharge_hours": 2,
-        "excess_solar_threshold": 1000,
         "min_profit_threshold": 0.1,
         "overnight_wait_threshold": 0.02,
     },
@@ -201,10 +206,33 @@ def _duration_minutes(period: Dict[str, Any], fallback: int) -> int:
         return fallback
 
 
+def _format_schedule_for_api(schedule: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert internal ISO schedule to API format (HH:MM)."""
+    output = {}
+    for key in ["charge", "discharge"]:
+        if key in schedule:
+            periods = []
+            for p in schedule[key]:
+                entry = dict(p)
+                start_val = entry.get("start")
+                if start_val:
+                    try:
+                        # Parse and format to HH:MM
+                        dt = isoparse(start_val)
+                        entry["start"] = dt.strftime("%H:%M")
+                    except Exception:
+                        pass  # Keep original if parse fails
+                periods.append(entry)
+            output[key] = periods
+    return output
+
+
 def _publish_schedule(mqtt_client: Any, schedule: Dict[str, Any], dry_run: bool) -> None:
+    api_schedule = _format_schedule_for_api(schedule)
+    
     if dry_run:
         logger.info("📝 [Dry-Run] Schedule generated (not published)")
-        logger.info("   Content: %s", json.dumps(schedule, ensure_ascii=False))
+        logger.info("   Content: %s", json.dumps(api_schedule, ensure_ascii=False))
         return
 
     if mqtt_client is None:
@@ -212,9 +240,9 @@ def _publish_schedule(mqtt_client: Any, schedule: Dict[str, Any], dry_run: bool)
         return
 
     if hasattr(mqtt_client, "publish_raw"):
-        mqtt_client.publish_raw("battery_api/text/schedule/set", schedule, retain=False)
+        mqtt_client.publish_raw("battery_api/text/schedule/set", api_schedule, retain=False)
     else:
-        publish_to_mqtt(mqtt_client, schedule, "battery_api/text/schedule/set")
+        publish_to_mqtt(mqtt_client, api_schedule, "battery_api/text/schedule/set")
 
 
 def _split_curve_by_date(curve: List[Dict[str, Any]]) -> tuple[list[dict], list[dict]]:
@@ -639,13 +667,19 @@ def _get_temperature_icon(temperature: Optional[float]) -> str:
 
 
 def monitor_and_adjust_active_period(
-    config: Dict[str, Any], ha_api: HomeAssistantApi, mqtt_client: Any, state: RuntimeState
+    config: Dict[str, Any],
+    ha_api: HomeAssistantApi,
+    mqtt_client: Any,
+    state: RuntimeState,
+    solar_monitor: SolarMonitor,
+    gap_scheduler: GapScheduler,
 ) -> None:
     logger.info("🔍 Monitoring active period...")
     soc_entity = config["entities"]["soc_entity"]
     grid_entity = config["entities"]["grid_power_entity"]
     solar_entity = config["entities"]["solar_power_entity"]
     load_entity = config["entities"]["house_load_entity"]
+    batt_entity = config["entities"].get("battery_power_entity")
 
     # Dry run check
     is_dry_run = config.get("dry_run", False)
@@ -654,13 +688,15 @@ def monitor_and_adjust_active_period(
     grid_power = _get_sensor_float(ha_api, grid_entity)
     solar_power = _get_sensor_float(ha_api, solar_entity)
     house_load = _get_sensor_float(ha_api, load_entity)
+    batt_power = _get_sensor_float(ha_api, batt_entity) if batt_entity else None
 
     logger.info(
-        "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW",
+        "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW | Bat: %sW",
         soc if soc is not None else "?",
         grid_power if grid_power is not None else "?",
         solar_power if solar_power is not None else "?",
         house_load if house_load is not None else "?",
+        batt_power if batt_power is not None else "?",
     )
 
     if grid_power is None and not state.warned_missing_grid:
@@ -862,7 +898,9 @@ def monitor_and_adjust_active_period(
     if active_discharge and not should_pause:
         discharge_periods = state.schedule.get("discharge", [])
         active_period = next((p for p in discharge_periods if _is_period_active(p, now)), None)
-        current_power = int(active_period.get("power", 0)) if active_period else 0
+        
+        scheduled_power = int(active_period.get("power", 0)) if active_period else 0
+        current_power = int(batt_power) if batt_power is not None else scheduled_power
 
         effective_range = price_range
         if (
@@ -950,22 +988,24 @@ def monitor_and_adjust_active_period(
                 dry_run=is_dry_run,
             )
 
-    if solar_power is not None and house_load is not None:
-        excess = detect_excess_solar(
-            solar_power, house_load, config["heuristics"]["excess_solar_threshold"]
+    # ---------------------------
+    # Passive Solar / Gap Logic
+    # ---------------------------
+    # Using SolarMonitor to check if we should be in 0W charge mode
+    if solar_monitor.check_passive_state(ha_api):
+        logger.info("☀️ Passive Solar Mode is ACTIVE (0W Charge Gap)")
+        gap_schedule = gap_scheduler.generate_passive_gap_schedule()
+        
+        # We publish a focused schedule: 0W charge now, then discharge fallback
+        _publish_schedule(mqtt_client, gap_schedule, is_dry_run)
+        
+        _safe_update_entity_state(
+            mqtt_client,
+            build_entity_configs()[4],
+            "passive_solar",
+            {"status": "active", "gap_schedule": True},
+            dry_run=is_dry_run,
         )
-        if should_charge_from_solar(excess, config["heuristics"]["excess_solar_threshold"]):
-            logger.info(
-                "☀️ Solar Opportunity | Excess: %sW | Initiating opportunistic charge", 
-                excess
-            )
-            _safe_update_entity_state(
-                mqtt_client,
-                build_entity_configs()[4],
-                "opportunistic_charge",
-                {"excess_solar": excess},
-                dry_run=is_dry_run,
-            )
 
 
 def main() -> int:
@@ -980,6 +1020,9 @@ def main() -> int:
 
     if config.get("dry_run", False):
         logger.info("📝 Dry-run mode enabled - actions will be logged only")
+        logger.info("   Entities configured:")
+        for key, entity_id in config.get("entities", {}).items():
+            logger.info("   - %s: %s", key, entity_id)
 
     ha_api = HomeAssistantApi()
 
@@ -993,6 +1036,10 @@ def main() -> int:
 
     if mqtt_client:
         publish_discovery(_mqtt_adapter(mqtt_client), build_entity_configs())
+
+    # Initialize helpers
+    solar_monitor = SolarMonitor(config, logger)
+    gap_scheduler = GapScheduler(logger)
 
     # Initialize runtime state
     state = RuntimeState(
@@ -1011,7 +1058,9 @@ def main() -> int:
 
     while not shutdown_event.is_set():
         try:
-            monitor_and_adjust_active_period(config, ha_api, mqtt_client, state)
+            monitor_and_adjust_active_period(
+                config, ha_api, mqtt_client, state, solar_monitor, gap_scheduler
+            )
         except Exception as exc:
             logger.error("Monitoring loop error: %s", exc, exc_info=True)
 
