@@ -38,7 +38,7 @@ def sync_shared():
     if not shared_src.exists():
         return
     
-    addons_needing_shared = ['charge-amps-monitor', 'energy-prices', 'battery-api', 'water-heater-scheduler']
+    addons_needing_shared = ['charge-amps-monitor', 'energy-prices', 'battery-api', 'water-heater-scheduler', 'battery-manager']
     for addon_name in addons_needing_shared:
         addon_dir = ROOT / addon_name
         if addon_dir.exists():

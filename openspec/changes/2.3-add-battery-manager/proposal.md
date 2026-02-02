@@ -1,0 +1,267 @@
+# Battery Manager Add-on Proposal
+
+**Version:** 2.3  
+**Status:** 🟡 **IN PROGRESS**  
+**Created:** 2026-01-20  
+**Last Updated:** 2026-02-02
+
+---
+
+## Executive Summary
+
+This change introduces a consolidated **battery-manager** Home Assistant add-on that unifies strategy optimization and battery management. It optimizes home battery charging and discharging based on dynamic electricity prices, weather conditions, solar production (Passive Solar Mode), grid import/export, and EV charger status.
+
+### Why This Change?
+
+**Current State:**
+- Battery optimization logic lives in NetDaemonApps (C# .NET 9.0)
+- "Passive Solar" strategy proven in production but requires migration
+- Need for "Dry Run" capabilities to compare new add-on decisions against live production data
+
+**Desired State:**
+- Single **battery-manager** add-on
+- "Passive Solar" strategy ported and integrated
+- "Dry Run" mode for safe side-by-side comparison with production
+- "Adaptive Monitoring" logs to visualize decision tree differences
+
+---
+
+## Architecture Overview
+
+### Modules
+
+**Core Calculators (Pure Functions):**
+1. **price_analyzer.py** - Sort price curve, find TopX cheapest/expensive periods
+2. **temperature_advisor.py** - Map temperature to discharge hours
+3. **power_calculator.py** - Rank-based power scaling
+4. **soc_guardian.py** - Battery protection limits
+
+**Monitoring & Strategy Modules:**
+5. **solar_monitor.py** - "Passive Solar" detection (>1000W surplus triggers "Gap")
+6. **gap_scheduler.py** - Generates 0W charge "gap" schedules
+7. **grid_monitor.py** - Track grid net usage (`sensor.average_power_usage`)
+8. **ev_charger_monitor.py** - Track EV charging load
+
+**Orchestration:**
+9. **main.py** - Orchestrator with Dry-Run support
+10. **schedule_publisher.py** - MQTT Interface
+
+### Data Flow
+
+```
+Live Sensors (Grid, Solar, EV)
+    ↓
+solar_monitor.py → Detects Passive Solar Conditions (Entry/Exit)
+    ↓
+    [PASSIVE MODE] → gap_scheduler.py → 0W Charge Command
+    ↓
+    [ACTIVE MODE] → price_analyzer.py + schedule_builder.py → Price Optimization
+    ↓
+main.py (Dry Run Check)
+    ↓ (If Live)
+schedule_publisher.py → MQTT
+    ↓ (If Dry Run)
+Log only: "Would publish: {payload}"
+```
+
+---
+
+## Configuration Schema
+
+```yaml
+timing:
+  update_interval: 3600  # Hourly schedule generation
+  monitor_interval: 60   # Real-time monitoring (1 min)
+  
+power:
+  max_charge_power: 8000     # Watts
+  max_discharge_power: 8000  # Watts
+  min_discharge_power: 4000  # Minimum to prevent wear
+  
+soc:
+  min_soc: 5           # Hard minimum (%)
+  conservative_soc: 40 # Conservative discharge threshold (%)
+  target_eod_soc: 20   # End-of-day target (%)
+  
+heuristics:
+  top_x_charge_hours: 3       # Number of cheapest periods
+  top_x_discharge_hours: 2    # Number of most expensive periods
+  excess_solar_threshold: 1000 # Watts surplus to trigger opportunistic charging
+  
+temperature_based_discharge:
+  enabled: true
+  thresholds:
+    - temp_max: 0   # < 0°C
+      discharge_hours: 1
+    - temp_max: 8   # < 8°C
+      discharge_hours: 1
+    - temp_max: 16  # < 16°C
+      discharge_hours: 2
+    - temp_max: 20  # < 20°C
+      discharge_hours: 2
+    - temp_max: 999 # >= 20°C
+      discharge_hours: 3
+      
+ev_charger:
+  enabled: true
+  charging_threshold: 500  # Watts (pause discharge if EV >500W)
+  entity_id: "sensor.ev_charger_power"
+```
+
+---
+
+## Smart Behaviors
+
+### 1. EV Charger Awareness
+**Scenario:** Expensive period + EV charging
+- **Condition:** Price in top 3 expensive periods AND EV drawing >500W
+- **Behavior:** Pause battery discharge (avoid round-trip losses)
+- **Reasoning:** Battery → EV transfer loses ~20% efficiency vs. grid → EV direct
+
+**Scenario:** Solar + EV charging
+- **Condition:** Solar surplus >1000W AND EV charging
+- **Behavior:** Allow solar export to EV, don't trigger battery charge
+- **Reasoning:** Solar → EV direct is more efficient than Solar → Battery → EV
+
+**Scenario:** Cheap period + EV not charging
+- **Condition:** Price in bottom 3 periods AND EV idle
+- **Behavior:** Battery charges at 8000W, EV can charge simultaneously
+- **Reasoning:** Both battery and EV benefit from cheap grid power
+
+### 2. Temperature-Based Discharge Duration
+**Rationale:** Heating costs dominate in cold weather; discharge longer to offset heating load
+- **<0°C:** 1 hour discharge (extreme cold, heating very expensive)
+- **0-8°C:** 1 hour (moderate heating needs)
+- **8-16°C:** 2 hours (lower heating, extend discharge)
+- **16-20°C:** 2 hours (minimal heating)
+- **≥20°C:** 3 hours (no heating, maximize discharge value)
+
+### 3. Rank-Based Power Scaling
+**Purpose:** Higher-ranked expensive periods get more aggressive discharge
+- **Rank 1 (most expensive):** 8000W
+- **Rank 2:** 6000W (75%)
+- **Rank 3:** 4000W (50%)
+- **Minimum:** 4000W (prevent battery wear from low-power cycling)
+
+### 4. Excess Solar Opportunistic Charging
+**Trigger:** Solar production - house load > 1000W
+- **Action:** Enable battery charge to prevent grid export
+- **Benefit:** Store surplus solar instead of exporting at low rates
+
+### 5. Grid Export Prevention
+**Trigger:** Grid power < -500W (exporting to grid)
+- **Action:** Reduce battery discharge or pause
+- **Benefit:** Avoid exporting battery power at unfavorable export prices
+
+---
+
+## Dependencies
+
+### Data Sources (Home Assistant Entities)
+- `sensor.energy_prices_electricity_import_price` - Price curve (96-192 intervals in attributes)
+- `sensor.battery_api_state_of_charge` - Current SOC (%)
+- `sensor.grid_power` - Import/export power (W, negative = export)
+- `sensor.solar_power` - Solar production (W)
+- `sensor.house_load_power` - House consumption (W)
+- `sensor.weather_forecast_temperature` - Outdoor temperature (°C)
+- `sensor.ev_charger_power` - EV charging power (W, 0 when idle)
+
+### Integrations
+- **energy-prices** add-on - Provides price data (already implemented)
+- **battery-api** add-on - MQTT interface to SAJ inverter (already implemented)
+- **MQTT broker** - Mosquitto add-on (required for MQTT Discovery)
+
+### External APIs
+- None (all data from Home Assistant entities)
+
+---
+
+## Breaking Changes
+
+### Removed
+- ❌ NetDaemon dependency (C# runtime no longer needed)
+- ❌ REST API entity creation pattern (replaced by MQTT Discovery)
+
+### Changed
+- ⚠️ Configuration format: JSON → YAML
+- ⚠️ Entity names: `battery.` prefix → `battery_strategy.` prefix
+- ⚠️ Schedule format: Internal representation changes (MQTT JSON format unchanged)
+
+### Migration Path
+1. Keep NetDaemonApps battery app running during transition
+2. Deploy battery-strategy add-on with `enabled: false` initially
+3. Validate schedule output matches NetDaemon output for 24 hours
+4. Switch `enabled: true` and stop NetDaemon battery app
+5. Monitor for 1 week, rollback to NetDaemon if issues detected
+
+---
+
+## Risk Assessment
+
+| Risk | Severity | Likelihood | Mitigation |
+|------|----------|------------|------------|
+| **Logic Errors** | High | Medium | Comprehensive unit tests for pure functions; integration tests with mock HA API |
+| **Schedule Conflicts** | Medium | Low | Validate JSON format matches existing battery-api expectations |
+| **MQTT Availability** | Medium | Low | Graceful degradation if MQTT unavailable; log warnings |
+| **Price Data Missing** | Medium | Medium | Fallback to previous day's prices if energy-prices unavailable |
+| **EV Integration Issues** | Low | Low | EV monitoring is optional (enabled: false disables feature) |
+| **Battery Wear** | Medium | Low | SOC protection rules (5% min, 40% conservative threshold) |
+
+**Testing Strategy:**
+- ✅ Unit tests for all pure functions (price_analyzer, temperature_advisor, power_calculator, soc_guardian)
+- ✅ Integration tests with mocked HA API
+- ✅ Dry-run mode (log schedules without publishing to MQTT)
+- ✅ Side-by-side comparison with NetDaemon output for 1 week
+
+---
+
+## Timeline
+
+| Phase | Duration | Deliverable |
+|-------|----------|-------------|
+| **Phase 0: Setup** | 1 day | Branch created, OpenSpec structure validated |
+| **Phase 1: Core Calculators** | 3 days | price_analyzer, temperature_advisor, power_calculator, soc_guardian + unit tests |
+| **Phase 2: Monitoring** | 2 days | solar_monitor, grid_monitor, ev_charger_monitor + integration tests |
+| **Phase 3: Integration** | 3 days | schedule_builder, schedule_publisher, status_reporter + MQTT Discovery |
+| **Phase 4: Orchestrator** | 2 days | main.py with generate_schedule + monitor_active_period |
+| **Phase 5: Configuration** | 1 day | config.yaml, Dockerfile, requirements.txt, README |
+| **Phase 6: Testing** | 2 days | End-to-end tests, dry-run validation, side-by-side comparison |
+| **Total** | **14 days** | Fully functional battery-strategy add-on |
+
+**Target Completion:** 2026-02-03
+
+---
+
+## Success Criteria
+
+✅ **Functional Requirements:**
+- [ ] Generates charge/discharge schedules based on price curve TopX periods
+- [ ] Adjusts discharge duration based on outdoor temperature (1-3 hours)
+- [ ] Scales discharge power based on period rank (8000W → 4000W)
+- [ ] Pauses battery discharge when EV charging detected (>500W)
+- [ ] Opportunistic charging when excess solar >1000W
+- [ ] Prevents grid export when grid power < -500W
+- [ ] Publishes schedule to battery_api/text/schedule/set via MQTT
+- [ ] Creates MQTT Discovery entities with unique_id
+
+✅ **Quality Requirements:**
+- [ ] All pure functions have unit tests (≥85% coverage)
+- [ ] Integration tests for monitoring modules
+- [ ] Dry-run mode validates logic without affecting battery
+- [ ] Configuration schema validates on startup
+- [ ] Graceful shutdown on SIGTERM/SIGINT
+
+✅ **Operational Requirements:**
+- [ ] README with setup instructions and troubleshooting
+- [ ] Example configuration in README
+- [ ] CHANGELOG with migration notes
+- [ ] Side-by-side validation report comparing with NetDaemon output
+
+---
+
+## Version History
+
+| Date | Version | Changes |
+|------|---------|---------|
+| 2026-01-20 | 2.3 | Initial proposal - migrate battery management from NetDaemonApps to Python add-on |
+

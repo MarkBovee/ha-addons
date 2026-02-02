@@ -25,6 +25,13 @@
       "url": "https://github.com/MarkBovee/ha-addons/tree/main/battery-api"
     },
     {
+      "name": "Battery Manager",
+      "slug": "battery-manager",
+      "description": "Optimize battery charging and discharging using dynamic prices and sensors",
+      "version": "0.1.0",
+      "url": "https://github.com/MarkBovee/ha-addons/tree/main/battery-manager"
+    },
+    {
       "name": "Water Heater Scheduler",
       "slug": "water-heater-scheduler",
       "description": "Schedule domestic hot water heating based on electricity prices",
