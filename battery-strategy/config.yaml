@@ -1,0 +1,57 @@
+name: "Battery Strategy Optimizer"
+version: "0.1.0"
+slug: "battery_strategy"
+description: "Optimizes battery charging and discharging based on prices, solar, and weather."
+url: "https://github.com/MarkBovee/ha-addons"
+startup: application
+arch:
+  - aarch64
+  - amd64
+  - armv7
+options:
+  update_interval: 60
+  
+  # Sensor Inputs
+  energy_prices_entity: "sensor.energy_prices_today"
+  battery_soc_entity: "sensor.battery_soc"
+  power_production_entity: "sensor.power_production"
+  power_net_entity: "sensor.power_net_meter"
+  ev_charge_power_entity: "sensor.ev_charger_power"  # Optional
+  outdoor_temperature_entity: "sensor.outdoor_temperature"
+
+  # Passive Solar Settings
+  passive_solar_enabled: true
+  passive_solar_entry_threshold: 1000
+  passive_solar_exit_threshold: 200
+
+  # Strategy Settings
+  top_x_charge_hours: 4
+  top_x_discharge_hours: 4
+  max_discharge_power: 8000
+  min_discharge_power: 4000
+  min_soc: 5
+  conservative_soc: 40
+  target_eod_soc: 20
+
+schema:
+  update_interval: int
+  
+  energy_prices_entity: str
+  battery_soc_entity: str
+  power_production_entity: str
+  power_net_entity: str
+  ev_charge_power_entity: str
+  outdoor_temperature_entity: str
+
+  passive_solar_enabled: bool
+  passive_solar_entry_threshold: int
+  passive_solar_exit_threshold: int
+
+  top_x_charge_hours: int
+  top_x_discharge_hours: int
+  max_discharge_power: int
+  min_discharge_power: int
+  min_soc: int
+  conservative_soc: int
+  target_eod_soc: int
+image: markbovee/battery-strategy-{arch}
