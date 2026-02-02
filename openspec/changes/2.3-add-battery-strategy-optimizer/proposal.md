@@ -62,15 +62,16 @@ This change introduces a new **battery-strategy** Home Assistant add-on that opt
 4. **soc_guardian.py** - Battery protection (5% minimum, 40% conservative, 20% end-of-day target)
 
 **Monitoring Modules (Sensor Readers):**
-5. **solar_monitor.py** - Detect excess solar production (>1000W surplus)
+5. **solar_monitor.py** - Detect excess solar production (>1000W surplus triggers "Passive Gap")
 6. **grid_monitor.py** - Track grid import/export (prevent unwanted export)
 7. **ev_charger_monitor.py** - Track EV charging, pause battery discharge when EV active (>500W)
 
 **Integration Modules:**
-8. **schedule_builder.py** - Combine price periods + temp hours + power levels into unified schedule
-9. **schedule_publisher.py** - Convert to JSON format and publish to MQTT (battery_api/text/schedule/set)
-10. **status_reporter.py** - Publish MQTT Discovery entities (status, reasoning, forecast, current_action)
-11. **main.py** - Orchestrator with 2 functions: generate_schedule (hourly), monitor_active_period (1-min)
+8. **gap_scheduler.py** - Generate "Passive Gap" schedules (0W charge + future discharge) for solar self-consumption
+9. **schedule_builder.py** - Combine price periods + temp hours + power levels into unified schedule
+10. **schedule_publisher.py** - Convert to JSON format and publish to MQTT (battery_api/text/schedule/set)
+11. **status_reporter.py** - Publish MQTT Discovery entities (status, reasoning, forecast, current_action)
+12. **main.py** - Orchestrator with 2 functions: generate_schedule (hourly), monitor_active_period (1-min)
 
 ### Data Flow
 

@@ -79,6 +79,25 @@ The system **SHALL** scale discharge power based on period rank to maximize valu
 
 ---
 
+### Requirement: Passive Solar Charging
+The system **SHALL** enable "Passive Solar Mode" when excess solar production is detected, allowing the inverter to self-consume renewable energy without grid interaction.
+
+#### Scenario: Solar surplus detected (Entry Condition)
+- **WHEN** solar production exceeds consumption by >1000W (instant) OR >500W (sustained 5 min)
+- **AND** battery SOC is below 100%
+- **THEN** system triggers "Passive Gap" schedule
+- **AND** schedule sets 0W charge for 1 minute followed by discharge
+- **AND** reasoning logged: "Passive Solar Mode: Surplus >1000W detected"
+
+#### Scenario: Solar surplus drop (Exit Condition)
+- **WHEN** net grid import exceeds 200W for >3 minutes
+- **OR** solar production drops below 200W
+- **THEN** system cancels "Passive Gap" schedule
+- **AND** system reverts to default/previous schedule
+- **AND** reasoning logged: "Passive Solar Mode ended: Import/Low Solar detected"
+
+---
+
 ### Requirement: State of Charge Protection
 The system **SHALL** protect battery health by enforcing minimum and maximum SOC limits.
 
