@@ -56,6 +56,7 @@ DEFAULT_CONFIG = {
         "schedule_regen_cooldown_seconds": 60,
     },
     "power": {
+        "charging_power_limit": 1000,
         "max_charge_power": 8000,
         "max_discharge_power": 8000,
         "min_discharge_power": 0,
@@ -68,6 +69,7 @@ DEFAULT_CONFIG = {
     },
     "soc": {"min_soc": 5, "conservative_soc": 40, "target_eod_soc": 20, "max_soc": 100},
     "heuristics": {
+        "charging_price_threshold": 0.26,
         "top_x_charge_hours": 3,
         "top_x_discharge_hours": 2,
         "min_profit_threshold": 0.1,
