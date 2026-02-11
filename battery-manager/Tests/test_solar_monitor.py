@@ -42,7 +42,7 @@ class TestSolarMonitor:
     def test_activates_on_high_export(self, monitor):
         ha = FakeHaApi({
             "sensor.pv_power": {"state": "3000"},
-            "sensor.grid_power": {"state": "-1500"},  # negative = exporting
+            "sensor.grid_power": {"state": "1500"},  # positive = exporting
         })
         assert monitor.check_passive_state(ha) is True
         assert monitor.is_passive_active is True
@@ -50,7 +50,7 @@ class TestSolarMonitor:
     def test_stays_inactive_below_threshold(self, monitor):
         ha = FakeHaApi({
             "sensor.pv_power": {"state": "500"},
-            "sensor.grid_power": {"state": "-500"},
+            "sensor.grid_power": {"state": "500"},  # below 1000W threshold
         })
         assert monitor.check_passive_state(ha) is False
 
@@ -58,14 +58,14 @@ class TestSolarMonitor:
         # Activate first
         ha_export = FakeHaApi({
             "sensor.pv_power": {"state": "3000"},
-            "sensor.grid_power": {"state": "-1500"},
+            "sensor.grid_power": {"state": "1500"},  # positive = exporting
         })
         monitor.check_passive_state(ha_export)
 
         # Now grid importing
         ha_import = FakeHaApi({
             "sensor.pv_power": {"state": "1000"},
-            "sensor.grid_power": {"state": "300"},
+            "sensor.grid_power": {"state": "-300"},  # negative = importing
         })
         assert monitor.check_passive_state(ha_import) is False
         assert monitor.is_passive_active is False
@@ -74,14 +74,14 @@ class TestSolarMonitor:
         # Activate
         ha_export = FakeHaApi({
             "sensor.pv_power": {"state": "3000"},
-            "sensor.grid_power": {"state": "-1500"},
+            "sensor.grid_power": {"state": "1500"},  # positive = exporting
         })
         monitor.check_passive_state(ha_export)
 
         # Low solar
         ha_low = FakeHaApi({
             "sensor.pv_power": {"state": "100"},
-            "sensor.grid_power": {"state": "-50"},
+            "sensor.grid_power": {"state": "50"},  # still exporting but low solar
         })
         assert monitor.check_passive_state(ha_low) is False
 
@@ -90,7 +90,7 @@ class TestSolarMonitor:
         mon = SolarMonitor(config, logging.getLogger("test"))
         ha = FakeHaApi({
             "sensor.pv_power": {"state": "5000"},
-            "sensor.grid_power": {"state": "-3000"},
+            "sensor.grid_power": {"state": "3000"},  # positive = exporting
         })
         assert mon.check_passive_state(ha) is False
 

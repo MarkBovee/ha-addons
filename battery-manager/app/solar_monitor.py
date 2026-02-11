@@ -44,19 +44,19 @@ class SolarMonitor:
                 return False
 
             if not self.is_passive_active:
-                if net_w < -self.entry_threshold:
+                if net_w > self.entry_threshold:
                     self.is_passive_active = True
                     self.active_since = datetime.datetime.now(datetime.timezone.utc)
                     self.logger.info(
                         "☀️ Passive Solar Mode ACTIVATED: Net Export %.0fW > %sW",
-                        -net_w, self.entry_threshold,
+                        net_w, self.entry_threshold,
                     )
                     return True
             else:
-                if net_w > self.exit_threshold:
+                if net_w < -self.exit_threshold:
                     self.logger.info(
                         "☁️ Passive Solar Mode DEACTIVATED: Grid Import %.0fW > %sW",
-                        net_w, self.exit_threshold,
+                        -net_w, self.exit_threshold,
                     )
                     self.is_passive_active = False
                     self.active_since = None
