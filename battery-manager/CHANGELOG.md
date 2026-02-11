@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+- **Invalid spread handling**: When profit margin is too small (discharge_min > discharge_max), discharge_range returns None instead of invalid range
+- **Informative messages**: Discharge schedule shows helpful message when no profitable windows exist
+  - Example: `📉 No profitable discharge today (spread €0.062 < €0.10 minimum)`
+- **Tests**: 87 tests (up from 83), covering invalid spread cases and no-range messages
+
 ## 0.5.0
 - **Schedule entities populated**: Scan full price curve to find all upcoming charge/discharge windows
   - **Charge Schedule**: shows all upcoming load-range windows with times, power, avg price (e.g. `⚡ 00:00–05:00 8000W (€0.232)`)

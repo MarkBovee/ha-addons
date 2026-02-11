@@ -110,12 +110,18 @@ def calculate_price_ranges(
 
     min_import_price = min(p.price for p in import_points)
     discharge_min = max(min(highest_prices), min_import_price + min_profit)
-    discharge_range = PriceRange(min_price=discharge_min, max_price=max(highest_prices))
-
-    if discharge_range.min_price <= load_range.max_price:
-        adaptive_range = None
+    discharge_max = max(highest_prices)
+    
+    # If spread is too small, no profitable discharge range exists
+    if discharge_min > discharge_max:
+        discharge_range = None
+        adaptive_range = PriceRange(min_price=load_range.max_price, max_price=discharge_max)
     else:
-        adaptive_range = PriceRange(min_price=load_range.max_price, max_price=discharge_range.min_price)
+        discharge_range = PriceRange(min_price=discharge_min, max_price=discharge_max)
+        if discharge_range.min_price <= load_range.max_price:
+            adaptive_range = None
+        else:
+            adaptive_range = PriceRange(min_price=load_range.max_price, max_price=discharge_range.min_price)
 
     return load_range, discharge_range, adaptive_range
 

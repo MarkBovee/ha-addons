@@ -647,6 +647,12 @@ def generate_schedule(
         charging_price_threshold, now,
     )
 
+    # Determine informative messages when ranges don't exist
+    discharge_no_range_msg = None
+    if discharge_range is None and load_range is not None:
+        spread = max(p.get("price", 0) for p in export_curve) - min(p.get("price", 999) for p in import_curve)
+        discharge_no_range_msg = f"📉 No profitable discharge today (spread €{spread:.3f} < €{min_profit:.2f} minimum)"
+
     update_entity(
         mqtt_client,
         ENTITY_CHARGE_SCHEDULE,
@@ -657,7 +663,7 @@ def generate_schedule(
     update_entity(
         mqtt_client,
         ENTITY_DISCHARGE_SCHEDULE,
-        build_windows_display(upcoming_windows["discharge"], "discharge", discharge_power, now),
+        build_windows_display(upcoming_windows["discharge"], "discharge", discharge_power, now, discharge_no_range_msg),
         {"windows": _serialize_windows(upcoming_windows["discharge"])},
         dry_run=is_dry_run,
     )

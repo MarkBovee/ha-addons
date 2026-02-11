@@ -341,6 +341,14 @@ class TestBuildWindowsDisplay:
         result = build_windows_display([], "charge", 8000, datetime.now(timezone.utc))
         assert result == "No charge windows today"
 
+    def test_no_windows_with_reason(self):
+        result = build_windows_display(
+            [], "discharge", 6000, datetime.now(timezone.utc),
+            no_range_reason="📉 No profitable discharge today (spread €0.062 < €0.10 minimum)",
+        )
+        assert "No profitable discharge" in result
+        assert "spread" in result
+
     def test_upcoming_windows(self):
         now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
         windows = [

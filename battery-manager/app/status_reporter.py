@@ -572,6 +572,7 @@ def build_windows_display(
     window_type: str,
     power: int,
     now: datetime,
+    no_range_reason: Optional[str] = None,
 ) -> str:
     """Build readable display for charge or discharge windows.
 
@@ -580,6 +581,8 @@ def build_windows_display(
         "⚡ 02:00–04:00 8000W (€0.231) | ⚡ 22:00–23:00 8000W (€0.234)"
     """
     if not windows:
+        if no_range_reason:
+            return no_range_reason
         label = "charge" if window_type == "charge" else "discharge"
         return f"No {label} windows today"
 
