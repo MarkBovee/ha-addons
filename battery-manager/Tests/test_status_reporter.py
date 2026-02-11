@@ -12,9 +12,14 @@ from app.status_reporter import (
     build_next_event_summary,
     build_schedule_display,
     build_schedule_markdown,
+    build_today_story,
+    build_tomorrow_story,
+    build_price_ranges_display,
+    build_charge_forecast,
     get_temperature_icon,
     update_entity,
 )
+from app.price_analyzer import PriceRange
 
 
 class TestGetTemperatureIcon:
@@ -145,3 +150,123 @@ class TestUpdateEntityDryRun:
     def test_none_mqtt_returns_silently(self):
         """update_entity with mqtt=None and dry_run=False returns without error."""
         update_entity(None, "status", "idle", dry_run=False)
+
+
+class TestBuildTodayStory:
+    def test_contains_market_header(self):
+        result = build_today_story(
+            "adaptive", 0.276, 0.291,
+            PriceRange(0.231, 0.234), PriceRange(0.331, 0.341),
+            PriceRange(0.234, 0.331),
+        )
+        assert "Today's Energy Market" in result
+
+    def test_contains_price_ranges(self):
+        result = build_today_story(
+            "load", 0.231, 0.241,
+            PriceRange(0.231, 0.234), PriceRange(0.331, 0.341),
+            PriceRange(0.234, 0.331),
+        )
+        assert "€0.231" in result
+        assert "€0.341" in result
+
+    def test_contains_spread(self):
+        result = build_today_story(
+            "adaptive", 0.276, 0.291,
+            PriceRange(0.231, 0.234), PriceRange(0.331, 0.341),
+            PriceRange(0.234, 0.331),
+        )
+        assert "Spread" in result
+
+    def test_contains_current_zone(self):
+        now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
+        result = build_today_story(
+            "adaptive", 0.276, 0.291,
+            PriceRange(0.231, 0.234), PriceRange(0.331, 0.341),
+            PriceRange(0.234, 0.331), now=now,
+        )
+        assert "10:00" in result
+        assert "€0.276" in result
+
+    def test_no_ranges_still_works(self):
+        result = build_today_story("adaptive", 0.276, 0.291, None, None, None)
+        assert "Today's Energy Market" in result
+        assert "€0.276" in result
+
+
+class TestBuildTomorrowStory:
+    def test_no_data(self):
+        result = build_tomorrow_story(None, None, None)
+        assert "not yet available" in result
+
+    def test_with_ranges(self):
+        result = build_tomorrow_story(
+            PriceRange(0.20, 0.22), PriceRange(0.35, 0.40),
+            PriceRange(0.22, 0.35),
+        )
+        assert "Tomorrow's Forecast" in result
+        assert "€0.200" in result
+        assert "€0.400" in result
+
+    def test_with_spread(self):
+        result = build_tomorrow_story(
+            PriceRange(0.20, 0.22), PriceRange(0.35, 0.40),
+            PriceRange(0.22, 0.35),
+        )
+        assert "Spread" in result
+
+    def test_first_charge_window(self):
+        curve = [
+            {"start": "2026-02-12T02:00:00+00:00", "price": 0.21},
+            {"start": "2026-02-12T03:00:00+00:00", "price": 0.20},
+        ]
+        result = build_tomorrow_story(
+            PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None,
+            tomorrow_curve=curve,
+        )
+        assert "02:00" in result
+
+
+class TestBuildPriceRangesDisplay:
+    def test_all_ranges(self):
+        result = build_price_ranges_display(
+            PriceRange(0.231, 0.234), PriceRange(0.331, 0.341),
+            PriceRange(0.234, 0.331),
+        )
+        assert "Load:" in result
+        assert "Adaptive:" in result
+        assert "Discharge:" in result
+
+    def test_no_data(self):
+        assert build_price_ranges_display(None, None, None) == "No price data"
+
+    def test_with_threshold_no_adaptive(self):
+        result = build_price_ranges_display(
+            PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None,
+            charging_price_threshold=0.26,
+        )
+        assert "Passive:" in result
+
+
+class TestBuildChargeForecast:
+    def test_active_charge(self):
+        now = datetime.now(timezone.utc)
+        schedule = {"charge": [{"start": (now - timedelta(minutes=5)).isoformat(), "duration": 60, "power": 8000}]}
+        result = build_charge_forecast(schedule, None, None, now, 8000)
+        assert "Active" in result
+
+    def test_upcoming_from_price_curve(self):
+        now = datetime.now(timezone.utc)
+        schedule = {"charge": []}
+        curve = [
+            {"start": (now + timedelta(hours=3)).isoformat(), "price": 0.232},
+        ]
+        result = build_charge_forecast(schedule, curve, PriceRange(0.231, 0.234), now, 8000)
+        assert "Planned" in result
+        assert "8000W" in result
+        assert "€0.232" in result
+
+    def test_no_charge_available(self):
+        now = datetime.now(timezone.utc)
+        result = build_charge_forecast({"charge": []}, None, None, now, 8000)
+        assert result == "No charge planned"

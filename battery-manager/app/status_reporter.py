@@ -15,19 +15,21 @@ from typing import Any, Dict, List, Optional
 from dateutil.parser import isoparse
 
 from shared.ha_mqtt_discovery import MqttDiscovery, EntityConfig
+from .price_analyzer import PriceRange
 
 logger = logging.getLogger(__name__)
 
 # --- Entity object_id constants (used as keys into MqttDiscovery) ---
-ENTITY_STATUS = "status"
-ENTITY_REASONING = "reasoning"
-ENTITY_FORECAST = "forecast"
-ENTITY_PRICE_RANGES = "price_ranges"
-ENTITY_CURRENT_ACTION = "current_action"
-ENTITY_CHARGE_SCHEDULE = "charge_schedule"
-ENTITY_DISCHARGE_SCHEDULE = "discharge_schedule"
-ENTITY_SCHEDULE = "schedule"
-ENTITY_MODE = "mode"
+# Using bm_ prefix to produce clean HA entity IDs (sensor.battery_manager_*)
+ENTITY_STATUS = "bm_status"
+ENTITY_REASONING = "bm_reasoning"
+ENTITY_FORECAST = "bm_forecast"
+ENTITY_PRICE_RANGES = "bm_price_ranges"
+ENTITY_CURRENT_ACTION = "bm_current_action"
+ENTITY_CHARGE_SCHEDULE = "bm_charge_schedule"
+ENTITY_DISCHARGE_SCHEDULE = "bm_discharge_schedule"
+ENTITY_SCHEDULE = "bm_schedule"
+ENTITY_MODE = "bm_mode"
 
 ALL_ENTITIES = [
     ENTITY_STATUS,
@@ -43,59 +45,63 @@ ALL_ENTITIES = [
 
 
 def publish_all_entities(mqtt: MqttDiscovery) -> None:
-    """Register all Battery Manager entities via MQTT Discovery."""
+    """Register all Battery Manager entities via MQTT Discovery.
+
+    Entity names are short (device 'Battery Manager' provides context).
+    HA entity IDs: sensor.battery_manager_status, sensor.battery_manager_reasoning, etc.
+    """
     configs = [
         EntityConfig(
             object_id=ENTITY_STATUS,
-            name="Battery Manager Status",
+            name="Status",
             state="idle",
             icon="mdi:battery-sync",
         ),
         EntityConfig(
             object_id=ENTITY_REASONING,
-            name="Battery Manager Reasoning",
+            name="Reasoning",
             state="unknown",
             icon="mdi:head-lightbulb",
         ),
         EntityConfig(
             object_id=ENTITY_FORECAST,
-            name="Battery Manager Forecast",
+            name="Forecast",
             state="unknown",
             icon="mdi:crystal-ball",
         ),
         EntityConfig(
             object_id=ENTITY_PRICE_RANGES,
-            name="Battery Manager Price Ranges",
+            name="Price Ranges",
             state="unknown",
             icon="mdi:chart-bar",
         ),
         EntityConfig(
             object_id=ENTITY_CURRENT_ACTION,
-            name="Battery Manager Current Action",
+            name="Current Action",
             state="idle",
             icon="mdi:play-circle",
         ),
         EntityConfig(
             object_id=ENTITY_CHARGE_SCHEDULE,
-            name="Battery Manager Charge Schedule",
+            name="Charge Schedule",
             state="No charge planned",
             icon="mdi:battery-charging",
         ),
         EntityConfig(
             object_id=ENTITY_DISCHARGE_SCHEDULE,
-            name="Battery Manager Discharge Schedule",
+            name="Discharge Schedule",
             state="No discharge planned",
             icon="mdi:battery-arrow-down",
         ),
         EntityConfig(
             object_id=ENTITY_SCHEDULE,
-            name="Battery Manager Schedule",
+            name="Schedule",
             state="No schedule",
             icon="mdi:calendar-clock",
         ),
         EntityConfig(
             object_id=ENTITY_MODE,
-            name="Battery Manager Mode",
+            name="Mode",
             state="unknown",
             icon="mdi:cog",
         ),
@@ -331,3 +337,156 @@ def build_schedule_markdown(schedule: Dict[str, Any], now: datetime) -> str:
     for row in rows:
         lines.append(f"|{row['time']}|{row['type']}|{row['power']}|")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Rich text builders (matching legacy NetDaemon quality)
+# ---------------------------------------------------------------------------
+
+_RANGE_ICONS = {
+    "load": "🔋 Charging",
+    "discharge": "💰 Profit",
+    "adaptive": "⚖️ Adaptive",
+    "passive": "💤 Passive",
+}
+
+
+def _trading_quality(spread: float) -> str:
+    """Rate the trading spread quality."""
+    if spread >= 0.10:
+        return "🚀 Excellent"
+    if spread >= 0.05:
+        return "💰 Good"
+    if spread >= 0.02:
+        return "📊 Moderate"
+    return "📉 Limited"
+
+
+def build_today_story(
+    price_range: str,
+    import_price: float,
+    export_price: float,
+    load_range: Optional[PriceRange],
+    discharge_range: Optional[PriceRange],
+    adaptive_range: Optional[PriceRange],
+    charging_price_threshold: Optional[float] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    """Build rich 'Today's Energy Market' text for the reasoning entity."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    lines = ["📊 Today's Energy Market"]
+
+    if load_range:
+        lines.append(f"🔋 Charging: €{load_range.min_price:.3f} – €{load_range.max_price:.3f}")
+    if adaptive_range:
+        lines.append(f"⚖️ Balancing: €{adaptive_range.min_price:.3f} – €{adaptive_range.max_price:.3f}")
+    if charging_price_threshold is not None and not adaptive_range:
+        lines.append(f"💤 Passive below €{charging_price_threshold:.3f}")
+    if discharge_range:
+        lines.append(f"💰 Profit: €{discharge_range.min_price:.3f} – €{discharge_range.max_price:.3f}")
+
+    if load_range and discharge_range:
+        spread = discharge_range.min_price - load_range.max_price
+        lines.append(f"📈 Spread: €{spread:.3f} — {_trading_quality(spread)}")
+
+    range_label = _RANGE_ICONS.get(price_range, price_range.capitalize())
+    lines.append(f"📍 Now ({now.strftime('%H:%M')}): €{import_price:.3f}/kWh — {range_label}")
+
+    return "\n".join(lines)
+
+
+def build_tomorrow_story(
+    tomorrow_load: Optional[PriceRange],
+    tomorrow_discharge: Optional[PriceRange],
+    tomorrow_adaptive: Optional[PriceRange],
+    tomorrow_curve: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Build rich 'Tomorrow's Forecast' text for the forecast entity."""
+    if not tomorrow_load and not tomorrow_discharge:
+        return "🔮 Tomorrow: Prices not yet available (usually after 14:00)"
+
+    lines = ["🔮 Tomorrow's Forecast"]
+
+    if tomorrow_load:
+        lines.append(f"🔋 Charging: €{tomorrow_load.min_price:.3f} – €{tomorrow_load.max_price:.3f}")
+    if tomorrow_adaptive:
+        lines.append(f"⚖️ Balancing: €{tomorrow_adaptive.min_price:.3f} – €{tomorrow_adaptive.max_price:.3f}")
+    if tomorrow_discharge:
+        lines.append(f"💰 Profit: €{tomorrow_discharge.min_price:.3f} – €{tomorrow_discharge.max_price:.3f}")
+
+    if tomorrow_load and tomorrow_discharge:
+        spread = tomorrow_discharge.min_price - tomorrow_load.max_price
+        lines.append(f"📈 Spread: €{spread:.3f} — {_trading_quality(spread)}")
+
+    # First charge window from curve
+    if tomorrow_curve and tomorrow_load:
+        for entry in sorted(tomorrow_curve, key=lambda e: e.get("start", "")):
+            price = entry.get("price")
+            if price is None:
+                continue
+            if tomorrow_load.min_price <= float(price) <= tomorrow_load.max_price:
+                try:
+                    start_dt = isoparse(entry["start"])
+                    lines.append(f"⏰ First charge window: {start_dt.strftime('%H:%M')}")
+                except Exception:
+                    pass
+                break
+
+    return "\n".join(lines)
+
+
+def build_price_ranges_display(
+    load_range: Optional[PriceRange],
+    discharge_range: Optional[PriceRange],
+    adaptive_range: Optional[PriceRange],
+    charging_price_threshold: Optional[float] = None,
+) -> str:
+    """Build readable price ranges state text for the price_ranges entity."""
+    parts = []
+    if load_range:
+        parts.append(f"Load: €{load_range.min_price:.3f}–{load_range.max_price:.3f}")
+    if adaptive_range:
+        parts.append(f"Adaptive: €{adaptive_range.min_price:.3f}–{adaptive_range.max_price:.3f}")
+    if charging_price_threshold is not None and not adaptive_range:
+        parts.append(f"Passive: <€{charging_price_threshold:.3f}")
+    if discharge_range:
+        parts.append(f"Discharge: €{discharge_range.min_price:.3f}–{discharge_range.max_price:.3f}")
+    return " | ".join(parts) if parts else "No price data"
+
+
+def build_charge_forecast(
+    schedule: Dict[str, Any],
+    price_curve: Optional[List[Dict[str, Any]]],
+    load_range: Optional[PriceRange],
+    now: datetime,
+    charge_power: int,
+) -> str:
+    """Build charge schedule display, including upcoming cheap windows from price curve.
+
+    Falls back to showing next load-range window if the generated schedule has no
+    active or upcoming charge period.
+    """
+    display = build_schedule_display(schedule, "charge", now)
+    if "Active" in display or "Next" in display:
+        return display
+
+    # No active/next charge — look for upcoming load-range windows
+    if price_curve and load_range:
+        now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        for entry in sorted(price_curve, key=lambda e: e.get("start", "")):
+            start_str = entry.get("start")
+            price = entry.get("price")
+            if not start_str or price is None:
+                continue
+            try:
+                start_dt = isoparse(start_str)
+                if start_dt.tzinfo is None:
+                    start_dt = start_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+            if start_dt > now_aware and load_range.min_price <= float(price) <= load_range.max_price:
+                return f"Planned: {charge_power}W at {start_dt.strftime('%H:%M')} (€{float(price):.3f})"
+
+    return "No charge planned"

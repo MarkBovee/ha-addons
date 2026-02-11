@@ -23,8 +23,12 @@ class SolarMonitor:
     def check_passive_state(self, ha_api: Any) -> bool:
         """Check if we should be in 'Passive Solar' mode (0W charge gap).
 
-        Entry: Net Export > entry_threshold (grid_power < -entry_threshold)
-        Exit:  Net Import > exit_threshold (grid_power > exit_threshold) OR low solar
+        Sign convention (standard P1/grid meter):
+            positive = importing from grid
+            negative = exporting to grid
+
+        Entry: Exporting > entry_threshold (grid_power < -entry_threshold)
+        Exit:  Importing > exit_threshold (grid_power > exit_threshold) OR low solar
         """
         if not self.enabled:
             return False
@@ -44,19 +48,21 @@ class SolarMonitor:
                 return False
 
             if not self.is_passive_active:
-                if net_w > self.entry_threshold:
+                # Exporting heavily: grid_power is negative and exceeds threshold
+                if net_w < -self.entry_threshold:
                     self.is_passive_active = True
                     self.active_since = datetime.datetime.now(datetime.timezone.utc)
                     self.logger.info(
                         "☀️ Passive Solar Mode ACTIVATED: Net Export %.0fW > %sW",
-                        net_w, self.entry_threshold,
+                        abs(net_w), self.entry_threshold,
                     )
                     return True
             else:
-                if net_w < -self.exit_threshold:
+                # Importing from grid: positive value exceeds exit threshold
+                if net_w > self.exit_threshold:
                     self.logger.info(
                         "☁️ Passive Solar Mode DEACTIVATED: Grid Import %.0fW > %sW",
-                        -net_w, self.exit_threshold,
+                        net_w, self.exit_threshold,
                     )
                     self.is_passive_active = False
                     self.active_since = None

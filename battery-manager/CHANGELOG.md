@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+- **Entity naming fix**: use `bm_` prefixed object IDs → HA entities are now `sensor.battery_manager_bm_*` (no more doubled `battery_manager_battery_manager` prefix)
+- **Rich entity content** (matching legacy NetDaemon quality):
+  - **Reasoning**: multi-line "Today's Energy Market" with charging/balancing/profit zones, spread rating, current zone
+  - **Forecast**: "Tomorrow's Forecast" with zone ranges, spread, first charge window
+  - **Status**: `build_status_message()` — e.g. "Charging Active (8000W) ☀️ 22°C", "Paused | SOC protection (5.0%)"
+  - **Price Ranges**: readable display — "Load: €0.231–0.234 | Adaptive: €0.234–0.331 | Discharge: €0.331–0.341"
+  - **Current Action**: descriptive state — "Adaptive (discharge to 0W export)", "Charging 8000W"
+  - **Charge Schedule**: shows upcoming load-range windows from price curve when no active charge
+- **Grid sign convention fix**: standard P1 convention (positive = import, negative = export) across all modules
+- **Default grid sensor**: changed from `sensor.battery_api_grid_power` to `sensor.power_usage` (P1 meter)
+- **Tests**: 68 tests (up from 52), covering all new text builders
+
 ## 0.3.1
 - **Bug fix**: Correct grid power sign convention in solar monitor (positive = export, negative = import)
 
