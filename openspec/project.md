@@ -1,94 +1,70 @@
 # Project Context
 
 ## Purpose
-Collection of Home Assistant Supervisor add-ons for home automation and energy management. Focus on:
-- EV charger monitoring and control
-- Energy price optimization
-- Smart appliance scheduling based on dynamic electricity prices
-- Integration with Dutch energy market (Nord Pool)
+Collection of Home Assistant Supervisor add-ons for home energy management. Focus on:
+- EV charger monitoring and control (Charge Amps)
+- Electricity price optimization (Nord Pool, Dutch market)
+- Battery charge/discharge scheduling (SAJ Electric inverters)
+- Smart appliance scheduling based on dynamic prices
 
 ## Tech Stack
-- **Runtime**: Python 3.12+
-- **Platform**: Home Assistant Supervisor add-ons (Docker-based)
-- **Core Libraries**: 
-  - `requests` for HTTP/API calls
-  - `Jinja2` for template processing
-  - Standard library (`logging`, `signal`, `threading`, `json`)
-- **API Integrations**:
-  - Charge Amps Cloud API (EV chargers)
-  - Nord Pool Day-Ahead Prices API (electricity prices)
-  - Home Assistant Supervisor REST API (entity management)
+- **Runtime**: Python 3.12+ on Alpine Linux (Docker)
+- **Platform**: Home Assistant Supervisor add-ons
+- **Libraries**: `requests`, `paho-mqtt`, `Jinja2`
+- **APIs**: Nord Pool, Charge Amps Cloud, SAJ Electric, HA Supervisor REST API
 
-## Project Conventions
+## Add-ons
 
-### Code Style
-- **Python**: Follow PEP 8 conventions with descriptive variable names
-- **Logging**: Use structured logging with `logger.info("Message with %s", variable)` format
-- **Docstrings**: Module, class, and function docstrings required; prefer docstrings over inline comments
-- **Error Handling**: Fail fast with clear error messages; log exceptions with context
-- **Type Hints**: Use where beneficial for clarity (not strictly enforced)
+| Add-on | Slug | Entity Prefix | Purpose |
+|--------|------|--------------|---------|
+| Battery API | battery-api | `ba_` | SAJ inverter battery schedule control |
+| Battery Manager | battery-manager | `bm_` | Price/solar/grid-based battery optimization |
+| Charge Amps Monitor | charge-amps-monitor | `ca_` | EV charger monitoring and control |
+| Energy Prices | energy-prices | `ep_` | Nord Pool prices with import/export calculations |
+| Water Heater Scheduler | water-heater-scheduler | `wh_` | Price-based water heater scheduling |
 
-### Architecture Patterns
-- **Separation of Concerns**:
-  - `app/[api_name]_api.py` - External API clients (requests, auth, parsing)
-  - `app/models.py` - Data models (from_dict/to_dict methods)
-  - `app/[feature]_processor.py` - Business logic (calculations, transformations)
-  - `app/main.py` - Orchestration (main loop, signal handlers, HA entity management)
-- **Session Management**: Reuse `requests.Session` objects for connection pooling and auth headers
-- **Configuration**: YAML-based (`config.yaml`) with schema validation, externalized from code
-- **Graceful Shutdown**: Honor `shutdown_flag` and SIGTERM/SIGINT signals in long-running loops
-- **Entity Management**: Create-or-update pattern (check existence, create if missing, update otherwise)
+## Architecture
 
-### Testing Strategy
-- Local testing scripts (`run_local.py`, `run_local.ps1`, `run_local.sh`) using `.env` files
-- Manual validation in Home Assistant dev instances
-- Unit tests planned but not yet implemented
+### Add-on Layout
+Every add-on follows the same structure:
+- `app/main.py` - Orchestration and main loop
+- `app/models.py` - Data models
+- `app/[name]_api.py` - External API client
+- `app/[feature].py` - Business logic
+- `shared/` - Copy of root `shared/` (synced for Docker builds)
+- `config.yaml` - HA metadata and options schema
 
-### Git Workflow
-- **Branching Strategy**:
-  - `master` branch for stable releases
-  - `feature/[change-id]` for new features (with OpenSpec change folders)
-  - `fix/[descriptive-name]` for bug fixes
-  - `refactor/[descriptive-name]` for code improvements
-  - `docs/[descriptive-name]` for documentation updates
-- **Commit Style**: `feat(scope): description` / `fix(scope): description` / `docs(scope): description`
-- **OpenSpec Workflow**: Feature changes require proposal in `openspec/changes/[number]-[change-id]/`
+### Shared Modules (`shared/`)
+Source of truth is root `shared/`. Synced to each add-on via `sync_shared.py`.
+
+| Module | Purpose |
+|--------|---------|
+| `addon_base.py` | Logging, signal handling, main loop |
+| `ha_api.py` | HA REST API client |
+| `config_loader.py` | Config from JSON and environment |
+| `ha_mqtt_discovery.py` | MQTT Discovery entities with unique_id |
+| `mqtt_setup.py` | MQTT client initialization |
+
+### Entity Creation
+- Preferred: MQTT Discovery (`ha_mqtt_discovery.py`) - entities have `unique_id`, grouped under devices
+- Fallback: REST API (`ha_api.py`) - no `unique_id`, limited UI management
 
 ## Domain Context
 
-### Home Assistant Add-ons
-- Add-ons run as Docker containers managed by Home Assistant Supervisor
-- `config.yaml` defines metadata, supported architectures, options schema
-- `Dockerfile` builds container (typically FROM Python base image)
-- `run.sh` is entrypoint script that executes Python app
-- Add-ons communicate with HA via Supervisor REST API (`/api/states/`, `/api/services/`)
-
 ### Dutch Energy Market
-- 15-minute pricing intervals (96 per day) from Nord Pool
-- Prices in EUR/MWh, converted to cents/kWh for user display
-- Day-ahead prices published ~13:00 CET for next day
-- Need to handle VAT (21%), grid fees, energy tax in price calculations
-- CET timezone important for aligning prices with local time
+- 15-minute pricing intervals from Nord Pool (96 per day)
+- Prices in EUR/MWh, displayed in cents/kWh
+- Day-ahead prices published ~13:00 CET
+- VAT (21%), grid fees, energy tax applied in calculations
 
-### Entity Naming Conventions
-- Prefix entities with add-on identifier (e.g., `ca_` for Charge Amps, `ep_` for Energy Prices)
-- Use descriptive names: `sensor.ep_price_import`, `sensor.ep_price_export`
-- Store rich data in entity attributes (price curves, percentiles, metadata)
+### Conventions
+- Entity IDs use add-on prefix: `sensor.ep_price_import`, `sensor.bm_schedule_next_charge`
+- Structured logging: `logger.info("Fetched %s prices", count)`
+- Graceful shutdown via `shutdown_event.is_set()`
+- Configuration via `/data/options.json` (HA Supervisor) or `.env` (local dev)
 
-## Important Constraints
-- **No Breaking Changes**: Avoid breaking existing entity names or attribute structures
-- **Secrets Management**: Never commit credentials; use `.env` for local testing, config UI for production
-- **Resource Limits**: Add-ons run on Raspberry Pi devices; keep memory/CPU usage minimal
-- **Dependencies**: Pin exact versions in `requirements.txt` to prevent breakage
-- **Documentation**: Update README and repository.json whenever adding/changing add-ons
-
-## External Dependencies
-
-### APIs
-- **Charge Amps Cloud API**: `https://my.charge.space/api/` (authentication via JWT)
-- **Nord Pool Day-Ahead API**: `https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices` (no auth required)
-- **Home Assistant Supervisor API**: `http://supervisor/core/api/` (requires `homeassistant_api: true` in config.yaml)
-
-### Services
-- Home Assistant Supervisor (container orchestration, config management, API proxy)
-- Docker (container runtime)
+## Constraints
+- No breaking changes to entity names or attribute structures
+- Never commit secrets (`.env`, API keys)
+- Keep resource usage minimal (Raspberry Pi target)
+- Pin exact dependency versions
