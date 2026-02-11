@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.1
+- **Bug fix**: Correct grid power sign convention in solar monitor (positive = export, negative = import)
+
 ## 0.3.0
 - **MQTT Discovery overhaul**: 9 sensors via shared MqttDiscovery (replaces ad-hoc entity publishing)
   - New entities: `bm_charge_schedule`, `bm_discharge_schedule`, `bm_schedule`, `bm_mode`
