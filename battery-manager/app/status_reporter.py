@@ -456,37 +456,212 @@ def build_price_ranges_display(
     return " | ".join(parts) if parts else "No price data"
 
 
-def build_charge_forecast(
-    schedule: Dict[str, Any],
-    price_curve: Optional[List[Dict[str, Any]]],
+def find_upcoming_windows(
+    import_curve: List[Dict[str, Any]],
+    export_curve: Optional[List[Dict[str, Any]]],
     load_range: Optional[PriceRange],
+    discharge_range: Optional[PriceRange],
+    charging_price_threshold: Optional[float],
     now: datetime,
-    charge_power: int,
-) -> str:
-    """Build charge schedule display, including upcoming cheap windows from price curve.
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Scan full price curves and find all upcoming charge/discharge windows.
 
-    Falls back to showing next load-range window if the generated schedule has no
-    active or upcoming charge period.
+    Returns dict with 'charge' and 'discharge' lists of grouped windows:
+    [{"start": datetime, "end": datetime, "avg_price": float}, ...]
     """
-    display = build_schedule_display(schedule, "charge", now)
-    if "Active" in display or "Next" in display:
-        return display
+    now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
 
-    # No active/next charge — look for upcoming load-range windows
-    if price_curve and load_range:
-        now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
-        for entry in sorted(price_curve, key=lambda e: e.get("start", "")):
-            start_str = entry.get("start")
-            price = entry.get("price")
-            if not start_str or price is None:
-                continue
-            try:
-                start_dt = isoparse(start_str)
-                if start_dt.tzinfo is None:
-                    start_dt = start_dt.replace(tzinfo=timezone.utc)
-            except Exception:
-                continue
-            if start_dt > now_aware and load_range.min_price <= float(price) <= load_range.max_price:
-                return f"Planned: {charge_power}W at {start_dt.strftime('%H:%M')} (€{float(price):.3f})"
+    # Build export price lookup by start timestamp
+    export_by_start: Dict[str, float] = {}
+    if export_curve:
+        for entry in export_curve:
+            s = entry.get("start")
+            if s and entry.get("price") is not None:
+                export_by_start[s] = float(entry["price"])
 
-    return "No charge planned"
+    charge_slots: List[Dict[str, Any]] = []
+    discharge_slots: List[Dict[str, Any]] = []
+
+    for entry in import_curve:
+        start_str = entry.get("start")
+        end_str = entry.get("end")
+        price = entry.get("price")
+        if not start_str or price is None:
+            continue
+        try:
+            start_dt = isoparse(start_str)
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            if end_str:
+                end_dt = isoparse(end_str)
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=timezone.utc)
+            else:
+                end_dt = start_dt + timedelta(hours=1)
+        except Exception:
+            continue
+
+        # Skip fully elapsed periods
+        if end_dt <= now_aware:
+            continue
+
+        import_price = float(price)
+        export_price = export_by_start.get(start_str, import_price)
+
+        if load_range and load_range.min_price <= import_price <= load_range.max_price:
+            charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
+        elif discharge_range and discharge_range.min_price <= export_price <= discharge_range.max_price:
+            discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
+
+    return {
+        "charge": _group_consecutive_slots(charge_slots),
+        "discharge": _group_consecutive_slots(discharge_slots),
+    }
+
+
+def _group_consecutive_slots(
+    slots: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Group consecutive time slots into windows with averaged price."""
+    if not slots:
+        return []
+    slots.sort(key=lambda s: s["start_dt"])
+    windows: List[Dict[str, Any]] = []
+    cur = {
+        "start": slots[0]["start_dt"],
+        "end": slots[0]["end_dt"],
+        "prices": [slots[0]["price"]],
+    }
+    for slot in slots[1:]:
+        if slot["start_dt"] <= cur["end"]:
+            cur["end"] = slot["end_dt"]
+            cur["prices"].append(slot["price"])
+        else:
+            windows.append({
+                "start": cur["start"],
+                "end": cur["end"],
+                "avg_price": sum(cur["prices"]) / len(cur["prices"]),
+            })
+            cur = {
+                "start": slot["start_dt"],
+                "end": slot["end_dt"],
+                "prices": [slot["price"]],
+            }
+    windows.append({
+        "start": cur["start"],
+        "end": cur["end"],
+        "avg_price": sum(cur["prices"]) / len(cur["prices"]),
+    })
+    return windows
+
+
+def _serialize_windows(windows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert window datetimes to ISO strings for JSON attributes."""
+    return [
+        {
+            "start": w["start"].isoformat(),
+            "end": w["end"].isoformat(),
+            "avg_price": round(w["avg_price"], 4),
+        }
+        for w in windows
+    ]
+
+
+def build_windows_display(
+    windows: List[Dict[str, Any]],
+    window_type: str,
+    power: int,
+    now: datetime,
+) -> str:
+    """Build readable display for charge or discharge windows.
+
+    Examples:
+        "🔴 02:00–04:00 8000W (€0.231)"
+        "⚡ 02:00–04:00 8000W (€0.231) | ⚡ 22:00–23:00 8000W (€0.234)"
+    """
+    if not windows:
+        label = "charge" if window_type == "charge" else "discharge"
+        return f"No {label} windows today"
+
+    now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    icon = "⚡" if window_type == "charge" else "💰"
+
+    parts = []
+    for w in windows:
+        start = w["start"]
+        end = w["end"]
+        avg_price = w["avg_price"]
+
+        if start <= now_aware < end:
+            status = "🔴"
+        elif end <= now_aware:
+            status = "✅"
+        else:
+            status = icon
+
+        parts.append(
+            f"{status} {start.strftime('%H:%M')}–{end.strftime('%H:%M')} {power}W (€{avg_price:.3f})"
+        )
+
+    return "\n".join(parts)
+
+
+def build_combined_schedule_display(
+    windows: Dict[str, List[Dict[str, Any]]],
+    charge_power: int,
+    discharge_power: int,
+    now: datetime,
+) -> str:
+    """Build combined schedule table with all charge/discharge windows.
+
+    Format:
+        |Time|Type|Power|Price|
+        |---|---|---|---|
+        |⚡ 02:00–04:00|Charge|8000W|€0.231|
+        |💰 17:00–18:00|Discharge|6000W|€0.293|
+    """
+    now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    rows: List[Dict[str, Any]] = []
+
+    for w in windows.get("charge", []):
+        rows.append({
+            "start": w["start"],
+            "end": w["end"],
+            "type": "charge",
+            "power": charge_power,
+            "price": w["avg_price"],
+        })
+    for w in windows.get("discharge", []):
+        rows.append({
+            "start": w["start"],
+            "end": w["end"],
+            "type": "discharge",
+            "power": discharge_power,
+            "price": w["avg_price"],
+        })
+
+    rows.sort(key=lambda r: r["start"])
+
+    if not rows:
+        return "No schedule"
+
+    lines = ["|Time|Type|Power|Price|", "|---|---|---|---|"]
+    for row in rows:
+        start = row["start"]
+        end = row["end"]
+        if start <= now_aware < end:
+            status = "🔴"
+        elif end <= now_aware:
+            status = "✅"
+        else:
+            status = "⏰"
+
+        if row["type"] == "charge":
+            icon, label = "⚡", "Charge"
+        else:
+            icon, label = "💰", "Discharge"
+
+        lines.append(
+            f"|{status} {start.strftime('%H:%M')}–{end.strftime('%H:%M')}|{icon} {label}|{row['power']}W|€{row['price']:.3f}|"
+        )
+    return "\n".join(lines)
