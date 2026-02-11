@@ -463,13 +463,19 @@ def find_upcoming_windows(
     discharge_range: Optional[PriceRange],
     charging_price_threshold: Optional[float],
     now: datetime,
+    tomorrow_load_range: Optional[PriceRange] = None,
+    tomorrow_discharge_range: Optional[PriceRange] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Scan full price curves and find all upcoming charge/discharge windows.
+
+    Uses per-day ranges when tomorrow ranges are provided: today's slots are
+    classified with today's ranges, tomorrow's slots with tomorrow's ranges.
 
     Returns dict with 'charge' and 'discharge' lists of grouped windows:
     [{"start": datetime, "end": datetime, "avg_price": float}, ...]
     """
     now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    tomorrow_start = (now_aware + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Build export price lookup by start timestamp
     export_by_start: Dict[str, float] = {}
@@ -511,9 +517,14 @@ def find_upcoming_windows(
         import_price = float(price)
         export_price = export_by_start.get(start_str, import_price)
 
-        if load_range and load_range.min_price <= import_price <= load_range.max_price:
+        # Use per-day ranges when available
+        is_tomorrow = start_dt >= tomorrow_start
+        effective_load = (tomorrow_load_range if is_tomorrow and tomorrow_load_range else load_range)
+        effective_discharge = (tomorrow_discharge_range if is_tomorrow and tomorrow_discharge_range else discharge_range)
+
+        if effective_load and effective_load.min_price <= import_price <= effective_load.max_price:
             charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
-        elif discharge_range and discharge_range.min_price <= export_price <= discharge_range.max_price:
+        elif effective_discharge and effective_discharge.min_price <= export_price <= effective_discharge.max_price:
             discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
 
     return {
@@ -590,13 +601,20 @@ def build_windows_display(
         return f"No {label} windows today"
 
     now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    tomorrow_start = (now_aware + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     icon = "⚡" if window_type == "charge" else "💰"
+    has_tomorrow = any(w["start"] >= tomorrow_start for w in windows)
 
     parts = []
+    shown_tomorrow_header = False
     for w in windows:
         start = w["start"]
         end = w["end"]
         avg_price = w["avg_price"]
+
+        if has_tomorrow and not shown_tomorrow_header and start >= tomorrow_start:
+            parts.append("— Tomorrow —")
+            shown_tomorrow_header = True
 
         if start <= now_aware < end:
             status = "🔴"
@@ -657,9 +675,18 @@ def build_combined_schedule_display(
         return "\n".join(parts)
 
     lines = ["|Time|Type|Power|Price|", "|---|---|---|---|"]
+    tomorrow_start = (now_aware + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    has_tomorrow = any(r["start"] >= tomorrow_start for r in rows)
+    shown_tomorrow_header = False
+
     for row in rows:
         start = row["start"]
         end = row["end"]
+
+        if has_tomorrow and not shown_tomorrow_header and start >= tomorrow_start:
+            lines.append("|**Tomorrow**|||")
+            shown_tomorrow_header = True
+
         if start <= now_aware < end:
             status = "🔴"
         elif end <= now_aware:

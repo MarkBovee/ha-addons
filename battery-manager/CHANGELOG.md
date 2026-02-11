@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+- **Per-day schedule ranges**: Tomorrow's charge/discharge windows use tomorrow's calculated ranges, not today's
+  - Fixes: today's cheaper prices no longer squeeze out tomorrow's charge hours
+  - Respects `top_x_charge_hours` per day (e.g. 3 hours today AND 3 hours tomorrow)
+- **Day labels in schedule**: "Tomorrow" header shown in schedule entities when prices span two days
+- **Tests**: 93 tests (up from 89), covering per-day range logic and day labels
+
 ## 0.6.0
 - **Full-day schedule display**: Past windows from today now shown (marked ✅) instead of disappearing after they pass
 - **Informative combined schedule**: Shows no-discharge reason in combined schedule entity when spread is too small

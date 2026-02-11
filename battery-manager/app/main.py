@@ -529,6 +529,9 @@ def generate_schedule(
                   {"price_range": price_range, "import_price": import_price, "export_price": export_price},
                   dry_run=is_dry_run)
 
+    tomorrow_load: Optional[PriceRange] = None
+    tomorrow_discharge: Optional[PriceRange] = None
+
     if tomorrow_import:
         tomorrow_export = tomorrow_import
         if export_curve:
@@ -654,6 +657,8 @@ def generate_schedule(
     upcoming_windows = find_upcoming_windows(
         import_curve, export_curve, load_range, discharge_range,
         charging_price_threshold, now,
+        tomorrow_load_range=tomorrow_load,
+        tomorrow_discharge_range=tomorrow_discharge,
     )
 
     # Determine informative messages when ranges don't exist

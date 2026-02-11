@@ -359,6 +359,49 @@ class TestFindUpcomingWindows:
         assert result["charge"][0]["start"].hour == 0
         assert result["discharge"][0]["start"].hour == 17
 
+    def test_tomorrow_uses_separate_ranges(self):
+        """Tomorrow's slots should use tomorrow's ranges, not today's."""
+        # Today (Feb 11): cheapest 3h at 0.231-0.234
+        today_prices = [0.231, 0.232, 0.234] + [0.28] * 21
+        # Tomorrow (Feb 12): cheapest 3h at 0.234-0.237
+        tomorrow_prices = [0.237, 0.237, 0.234] + [0.28] * 21
+        base_today = datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc)
+        base_tomorrow = datetime(2026, 2, 12, 0, 0, tzinfo=timezone.utc)
+
+        curve = [
+            {"start": (base_today + timedelta(hours=i)).isoformat(),
+             "end": (base_today + timedelta(hours=i + 1)).isoformat(),
+             "price": p}
+            for i, p in enumerate(today_prices)
+        ] + [
+            {"start": (base_tomorrow + timedelta(hours=i)).isoformat(),
+             "end": (base_tomorrow + timedelta(hours=i + 1)).isoformat(),
+             "price": p}
+            for i, p in enumerate(tomorrow_prices)
+        ]
+
+        now = datetime(2026, 2, 11, 12, 0, tzinfo=timezone.utc)
+        today_load = PriceRange(0.231, 0.234)
+        tomorrow_load = PriceRange(0.234, 0.237)  # Wider range for tomorrow
+
+        result = find_upcoming_windows(
+            curve, curve, today_load, None, None, now,
+            tomorrow_load_range=tomorrow_load,
+        )
+        # Today: 3 charge slots (0.231, 0.232, 0.234)
+        # Tomorrow: 3 charge slots (0.237, 0.237, 0.234) — all within 0.234-0.237
+        today_windows = [w for w in result["charge"] if w["start"].day == 11]
+        tomorrow_windows = [w for w in result["charge"] if w["start"].day == 12]
+        assert len(today_windows) == 1  # Grouped into 1 window
+        assert len(tomorrow_windows) >= 1  # Tomorrow has windows too
+
+        # Count total tomorrow charge hours
+        total_tomorrow_hours = sum(
+            int((w["end"] - w["start"]).total_seconds() / 3600)
+            for w in tomorrow_windows
+        )
+        assert total_tomorrow_hours == 3  # All 3 hours qualify with tomorrow's range
+
 
 class TestBuildWindowsDisplay:
     def test_no_windows(self):
@@ -414,6 +457,31 @@ class TestBuildWindowsDisplay:
         assert "No discharge" not in result
         assert "💰" in result
         assert "6000W" in result
+
+    def test_tomorrow_label_shown(self):
+        """When windows span today and tomorrow, a 'Tomorrow' label should appear."""
+        now = datetime(2026, 2, 11, 14, 0, tzinfo=timezone.utc)
+        windows = [
+            {"start": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 3, 0, tzinfo=timezone.utc),
+             "avg_price": 0.231},
+            {"start": datetime(2026, 2, 12, 2, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 12, 3, 0, tzinfo=timezone.utc),
+             "avg_price": 0.234},
+        ]
+        result = build_windows_display(windows, "charge", 8000, now)
+        assert "Tomorrow" in result
+
+    def test_no_tomorrow_label_for_today_only(self):
+        """When all windows are today, no 'Tomorrow' label."""
+        now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
+        windows = [
+            {"start": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 3, 0, tzinfo=timezone.utc),
+             "avg_price": 0.231},
+        ]
+        result = build_windows_display(windows, "charge", 8000, now)
+        assert "Tomorrow" not in result
 
 
 class TestBuildCombinedScheduleDisplay:
@@ -474,6 +542,22 @@ class TestBuildCombinedScheduleDisplay:
         # Discharge at 17:00 should come before charge at 22:00
         assert "17:00" in data_lines[0]
         assert "22:00" in data_lines[1]
+
+    def test_tomorrow_label_in_combined(self):
+        now = datetime(2026, 2, 11, 14, 0, tzinfo=timezone.utc)
+        windows = {
+            "charge": [
+                {"start": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+                 "end": datetime(2026, 2, 11, 3, 0, tzinfo=timezone.utc),
+                 "avg_price": 0.231},
+                {"start": datetime(2026, 2, 12, 2, 0, tzinfo=timezone.utc),
+                 "end": datetime(2026, 2, 12, 5, 0, tzinfo=timezone.utc),
+                 "avg_price": 0.234},
+            ],
+            "discharge": [],
+        }
+        result = build_combined_schedule_display(windows, 8000, 6000, now)
+        assert "**Tomorrow**" in result
 
 
 class TestGroupConsecutiveSlots:
