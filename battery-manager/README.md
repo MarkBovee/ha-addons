@@ -4,7 +4,7 @@ Optimize battery charging and discharging using dynamic electricity prices, sola
 
 ## Overview
 
-Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into load, discharge, and adaptive ranges, adjusts discharge power in real time, and applies SOC protection, grid export prevention, solar surplus, and EV charging rules.
+Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into four ranges — **load** (cheapest, charge battery), **discharge** (most expensive, sell), **adaptive** (mid-range, discharge to 0W grid), and **passive** (below threshold, battery idle) — adjusts discharge power in real time, and applies SOC protection, grid export prevention, solar surplus, and EV charging rules.
 
 ## Prerequisites
 
@@ -50,6 +50,7 @@ Key options (defaults in config.yaml):
 - **passive_solar.enabled**: enable 0W charge gap on excess solar
 - **passive_solar.entry_threshold**: grid export threshold to enter passive mode (W, default 1000)
 - **passive_solar.exit_threshold**: grid import threshold to exit passive mode (W, default 200)
+- **heuristics.charging_price_threshold**: price below which battery stays idle (passive range, EUR/kWh)
 - **heuristics.min_profit_threshold**: minimum spread between load and discharge prices (EUR/kWh)
 - **heuristics.overnight_wait_threshold**: evening vs overnight price gap to wait for cheaper charging (EUR/kWh)
 - **temperature_based_discharge.enabled**: enable temperature mapping
@@ -60,13 +61,21 @@ Key options (defaults in config.yaml):
 
 ## MQTT Entities
 
-The add-on publishes status entities via MQTT Discovery:
+The add-on publishes status entities via MQTT Discovery under the **Battery Manager** device:
 
-- sensor.battery_manager_status
-- sensor.battery_manager_reasoning
-- sensor.battery_manager_forecast
-- sensor.battery_manager_price_ranges
-- sensor.battery_manager_current_action
+| Entity | Purpose |
+|--------|---------|
+| `sensor.bm_status` | Current operational state (Charging, Discharging, Idle, Paused, Reduced) |
+| `sensor.bm_reasoning` | Human-readable explanation of the current schedule decision |
+| `sensor.bm_forecast` | Price forecast summary with temperature context |
+| `sensor.bm_price_ranges` | Active price range classification (load, discharge, adaptive, passive) |
+| `sensor.bm_current_action` | Real-time action description during monitoring |
+| `sensor.bm_charge_schedule` | Next charge period display (e.g. "⚡ 02:00–04:00") |
+| `sensor.bm_discharge_schedule` | Next discharge period display (e.g. "💰 08:00–10:00") |
+| `sensor.bm_schedule` | Full schedule as markdown table (charge + discharge periods) |
+| `sensor.bm_mode` | Active operating mode (Normal, Passive Solar) |
+
+All entities use `unique_id` for UI management and carry rich attributes (schedule details, price data, timestamps).
 
 ## Troubleshooting
 
