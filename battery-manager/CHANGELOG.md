@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+- **Full-day schedule display**: Past windows from today now shown (marked ✅) instead of disappearing after they pass
+- **Informative combined schedule**: Shows no-discharge reason in combined schedule entity when spread is too small
+- **Tomorrow price detection**: When tomorrow's prices arrive (~14:00), schedule regenerates immediately instead of waiting for next hourly cycle
+- **Tests**: 89 tests (up from 87), covering past window inclusion and yesterday exclusion
+
 ## 0.5.1
 - **Invalid spread handling**: When profit margin is too small (discharge_min > discharge_max), discharge_range returns None instead of invalid range
 - **Informative messages**: Discharge schedule shows helpful message when no profitable windows exist

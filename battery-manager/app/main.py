@@ -128,6 +128,7 @@ class RuntimeState:
     schedule: Dict[str, Any]
     schedule_generated_at: Optional[datetime]
     last_price_curve: Optional[List[Dict[str, Any]]] = None
+    last_curve_length: int = 0
     warned_missing_price: bool = False
     warned_missing_temperature: bool = False
     warned_missing_ev: bool = False
@@ -490,6 +491,14 @@ def generate_schedule(
             price_range = "adaptive"
 
     if state:
+        # Detect new prices (e.g. tomorrow's prices arriving ~14:00)
+        new_length = len(import_curve)
+        if state.last_curve_length > 0 and new_length > state.last_curve_length:
+            logger.info(
+                "📈 Price curve grew from %d to %d entries — tomorrow prices detected, recalculating ranges",
+                state.last_curve_length, new_length,
+            )
+        state.last_curve_length = new_length
         state.last_price_curve = import_curve
 
     range_state = {
@@ -670,7 +679,7 @@ def generate_schedule(
     update_entity(
         mqtt_client,
         ENTITY_SCHEDULE,
-        build_combined_schedule_display(upcoming_windows, charge_power, discharge_power, now),
+        build_combined_schedule_display(upcoming_windows, charge_power, discharge_power, now, discharge_no_range_msg),
         dry_run=is_dry_run,
     )
 
@@ -1105,6 +1114,15 @@ def main() -> int:
         if state.schedule_generated_at:
             elapsed = (datetime.now(timezone.utc) - state.schedule_generated_at).total_seconds()
             if elapsed >= config["timing"]["update_interval"]:
+                schedule_task()
+
+        # Detect tomorrow's prices arriving (curve grows by 12+ entries)
+        import_entity = config["entities"]["price_curve_entity"]
+        cur_curve = _get_price_curve(ha_api, import_entity)
+        if cur_curve and state.last_curve_length > 0:
+            if len(cur_curve) >= state.last_curve_length + 12:
+                logger.info("📈 Tomorrow prices detected (%d → %d entries) — regenerating schedule",
+                            state.last_curve_length, len(cur_curve))
                 schedule_task()
 
         if not sleep_with_shutdown_check(shutdown_event, config["timing"]["monitor_interval"]):

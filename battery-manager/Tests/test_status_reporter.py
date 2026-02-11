@@ -295,16 +295,40 @@ class TestFindUpcomingWindows:
         assert result["discharge"][0]["start"].hour == 7
         assert result["discharge"][0]["end"].hour == 10
 
-    def test_skips_past_periods(self):
+    def test_past_today_windows_still_included(self):
+        """Past windows from today should be included (shown as completed)."""
         prices = [0.20, 0.21, 0.22] + [0.30] * 21
         curve = self._make_curve(prices)
-        # now is past the cheap hours
+        # now is past the cheap hours but same day
         now = datetime(2026, 2, 11, 5, 0, tzinfo=timezone.utc)
 
         result = find_upcoming_windows(
             curve, curve, PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None, now,
         )
-        assert len(result["charge"]) == 0
+        assert len(result["charge"]) == 1  # Past charge window still included
+        assert result["charge"][0]["start"].hour == 0
+        assert result["charge"][0]["end"].hour == 3
+
+    def test_yesterday_windows_excluded(self):
+        """Windows from yesterday should be excluded."""
+        prices = [0.20, 0.21, 0.22] + [0.30] * 21
+        # Curve starts on Feb 10 (yesterday)
+        base = datetime(2026, 2, 10, 0, 0, tzinfo=timezone.utc)
+        curve = [
+            {
+                "start": (base + timedelta(hours=i)).isoformat(),
+                "end": (base + timedelta(hours=i + 1)).isoformat(),
+                "price": p,
+            }
+            for i, p in enumerate(prices)
+        ]
+        # now is the next day
+        now = datetime(2026, 2, 11, 5, 0, tzinfo=timezone.utc)
+
+        result = find_upcoming_windows(
+            curve, curve, PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None, now,
+        )
+        assert len(result["charge"]) == 0  # Yesterday's windows excluded
 
     def test_empty_curve(self):
         result = find_upcoming_windows([], None, None, None, None, datetime.now(timezone.utc))
@@ -397,7 +421,15 @@ class TestBuildCombinedScheduleDisplay:
         result = build_combined_schedule_display(
             {"charge": [], "discharge": []}, 8000, 6000, datetime.now(timezone.utc),
         )
-        assert result == "No schedule"
+        assert "No scheduled windows today" in result
+
+    def test_empty_with_no_discharge_reason(self):
+        result = build_combined_schedule_display(
+            {"charge": [], "discharge": []}, 8000, 6000, datetime.now(timezone.utc),
+            no_discharge_reason="📉 No profitable discharge (spread €0.062 < €0.10)",
+        )
+        assert "No profitable discharge" in result
+        assert "No scheduled windows today" in result
 
     def test_combined_table(self):
         now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)

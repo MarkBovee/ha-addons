@@ -482,6 +482,9 @@ def find_upcoming_windows(
     charge_slots: List[Dict[str, Any]] = []
     discharge_slots: List[Dict[str, Any]] = []
 
+    # Include all of today's periods (past shown as completed) but exclude yesterday
+    today_start = now_aware.replace(hour=0, minute=0, second=0, microsecond=0)
+
     for entry in import_curve:
         start_str = entry.get("start")
         end_str = entry.get("end")
@@ -501,8 +504,8 @@ def find_upcoming_windows(
         except Exception:
             continue
 
-        # Skip fully elapsed periods
-        if end_dt <= now_aware:
+        # Skip periods that ended before today
+        if end_dt <= today_start:
             continue
 
         import_price = float(price)
@@ -614,6 +617,7 @@ def build_combined_schedule_display(
     charge_power: int,
     discharge_power: int,
     now: datetime,
+    no_discharge_reason: Optional[str] = None,
 ) -> str:
     """Build combined schedule table with all charge/discharge windows.
 
@@ -646,7 +650,11 @@ def build_combined_schedule_display(
     rows.sort(key=lambda r: r["start"])
 
     if not rows:
-        return "No schedule"
+        parts = []
+        if no_discharge_reason:
+            parts.append(no_discharge_reason)
+        parts.append("No scheduled windows today")
+        return "\n".join(parts)
 
     lines = ["|Time|Type|Power|Price|", "|---|---|---|---|"]
     for row in rows:
