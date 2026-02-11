@@ -44,10 +44,14 @@ from .status_reporter import (
     ENTITY_REASONING,
     ENTITY_SCHEDULE,
     ENTITY_STATUS,
+    build_charge_forecast,
     build_next_event_summary,
+    build_price_ranges_display,
     build_schedule_display,
     build_schedule_markdown,
     build_status_message,
+    build_today_story,
+    build_tomorrow_story,
     get_temperature_icon,
     publish_all_entities,
     update_entity,
@@ -63,7 +67,7 @@ DEFAULT_CONFIG = {
         "price_curve_entity": "sensor.energy_prices_electricity_import_price",
         "export_price_curve_entity": "sensor.energy_prices_electricity_export_price",
         "soc_entity": "sensor.battery_api_battery_soc",
-        "grid_power_entity": "sensor.battery_api_grid_power",
+        "grid_power_entity": "sensor.power_usage",
         "solar_power_entity": "sensor.battery_api_pv_power",
         "house_load_entity": "sensor.battery_api_load_power",
         "battery_power_entity": "sensor.battery_api_battery_power",
@@ -501,25 +505,19 @@ def generate_schedule(
             "max": adaptive_range.max_price if adaptive_range else None,
         },
     }
-    update_entity(mqtt_client, ENTITY_PRICE_RANGES, price_range, range_state, dry_run=is_dry_run)
-
-    reasoning = (
-        f"Now: {price_range} | import €{import_price:.3f}/kWh, export €{export_price:.3f}/kWh. "
+    price_ranges_text = build_price_ranges_display(
+        load_range, discharge_range, adaptive_range, charging_price_threshold,
     )
-    if load_range:
-        reasoning += f"Load €{load_range.min_price:.3f}-{load_range.max_price:.3f}"
-    else:
-        reasoning += "Load n/a"
-    if discharge_range:
-        reasoning += (
-            f" | Discharge €{discharge_range.min_price:.3f}-{discharge_range.max_price:.3f}"
-        )
-    if adaptive_range:
-        reasoning += (
-            f" | Adaptive €{adaptive_range.min_price:.3f}-{adaptive_range.max_price:.3f}"
-        )
+    update_entity(mqtt_client, ENTITY_PRICE_RANGES, price_ranges_text, range_state, dry_run=is_dry_run)
 
-    update_entity(mqtt_client, ENTITY_REASONING, price_range, {"text": reasoning}, dry_run=is_dry_run)
+    reasoning_text = build_today_story(
+        price_range, import_price, export_price,
+        load_range, discharge_range, adaptive_range,
+        charging_price_threshold, now,
+    )
+    update_entity(mqtt_client, ENTITY_REASONING, reasoning_text,
+                  {"price_range": price_range, "import_price": import_price, "export_price": export_price},
+                  dry_run=is_dry_run)
 
     if tomorrow_import:
         tomorrow_export = tomorrow_import
@@ -532,17 +530,13 @@ def generate_schedule(
             top_x_discharge_count,
             min_profit,
         )
-        forecast = "Tomorrow: "
-        if tomorrow_load:
-            forecast += f"Load €{tomorrow_load.min_price:.3f}-{tomorrow_load.max_price:.3f}"
-        if tomorrow_adaptive:
-            forecast += f" | Adaptive €{tomorrow_adaptive.min_price:.3f}-{tomorrow_adaptive.max_price:.3f}"
-        if tomorrow_discharge:
-            forecast += f" | Discharge €{tomorrow_discharge.min_price:.3f}-{tomorrow_discharge.max_price:.3f}"
+        forecast_text = build_tomorrow_story(
+            tomorrow_load, tomorrow_discharge, tomorrow_adaptive, tomorrow_import,
+        )
     else:
-        forecast = "Tomorrow: price curve not available yet"
+        forecast_text = build_tomorrow_story(None, None, None)
 
-    update_entity(mqtt_client, ENTITY_FORECAST, price_range, {"text": forecast}, dry_run=is_dry_run)
+    update_entity(mqtt_client, ENTITY_FORECAST, forecast_text, dry_run=is_dry_run)
 
     charge_rank = get_current_period_rank(import_curve, top_x_charge_count, now, reverse=False)
     discharge_rank = get_current_period_rank(export_curve, top_x_discharge_count, now, reverse=True)
@@ -623,11 +617,20 @@ def generate_schedule(
         len(schedule["discharge"]),
     )
 
+    action_labels = {
+        "load": f"Charging {charge_power}W",
+        "discharge": f"Discharging {discharge_power}W",
+        "adaptive": f"Adaptive (discharge to 0W export)",
+        "passive": "Passive (battery idle)",
+    }
+    action_state = action_labels.get(price_range, price_range)
+
     update_entity(
         mqtt_client,
         ENTITY_CURRENT_ACTION,
-        price_range,
+        action_state,
         {
+            "price_range": price_range,
             "import_price": import_price,
             "export_price": export_price,
             "charge_power": charge_power if price_range == "load" else None,
@@ -641,7 +644,7 @@ def generate_schedule(
     update_entity(
         mqtt_client,
         ENTITY_CHARGE_SCHEDULE,
-        build_schedule_display(schedule, "charge", now),
+        build_charge_forecast(schedule, import_curve, load_range, now, charge_power),
         dry_run=is_dry_run,
     )
     update_entity(
@@ -770,10 +773,14 @@ def monitor_and_adjust_active_period(
     )
 
     if state.last_price_range != price_range:
+        price_ranges_text = build_price_ranges_display(
+            load_range, discharge_range, adaptive_range,
+            config["heuristics"].get("charging_price_threshold"),
+        )
         update_entity(
             mqtt_client,
             ENTITY_PRICE_RANGES,
-            price_range,
+            price_ranges_text,
             {
                 "load": {
                     "min": load_range.min_price if load_range else None,
@@ -864,22 +871,49 @@ def monitor_and_adjust_active_period(
 
             override = {"charge": state.schedule.get("charge", []), "discharge": reduced}
             _publish_schedule(mqtt_client, override, is_dry_run)
+            status_msg = build_status_message(
+                price_range, False, True, None, None, temperature,
+                reduced=True, pause_reason=", ".join(reduce_reasons),
+            )
             update_entity(
-                mqtt_client, ENTITY_STATUS, "reduced", {"reason": "conservative"}, dry_run=is_dry_run,
+                mqtt_client, ENTITY_STATUS, status_msg, {"reason": "conservative"}, dry_run=is_dry_run,
             )
             return
 
         override = {"charge": state.schedule.get("charge", []), "discharge": []}
         _publish_schedule(mqtt_client, override, is_dry_run)
+        status_msg = build_status_message(
+            price_range, False, False, None, None, temperature,
+            paused=True, pause_reason=", ".join(pause_reasons),
+        )
         update_entity(
-            mqtt_client, ENTITY_STATUS, "paused", {"reason": "override"}, dry_run=is_dry_run,
+            mqtt_client, ENTITY_STATUS, status_msg, {"reason": "override"}, dry_run=is_dry_run,
         )
     elif active_charge:
-        update_entity(mqtt_client, ENTITY_STATUS, "charging", dry_run=is_dry_run)
+        charge_power_val = None
+        for p in state.schedule.get("charge", []):
+            if _is_period_active(p, now):
+                charge_power_val = p.get("power")
+                break
+        status_msg = build_status_message(
+            price_range, True, False, charge_power_val, None, temperature,
+        )
+        update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
     elif active_discharge:
-        update_entity(mqtt_client, ENTITY_STATUS, "discharging", dry_run=is_dry_run)
+        discharge_power_val = None
+        for p in state.schedule.get("discharge", []):
+            if _is_period_active(p, now):
+                discharge_power_val = p.get("power")
+                break
+        status_msg = build_status_message(
+            price_range, False, True, None, discharge_power_val, temperature,
+        )
+        update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
     else:
-        update_entity(mqtt_client, ENTITY_STATUS, "idle", dry_run=is_dry_run)
+        status_msg = build_status_message(
+            price_range, False, False, None, None, temperature,
+        )
+        update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
 
     if active_discharge and not should_pause:
         discharge_periods = state.schedule.get("discharge", [])
@@ -948,7 +982,7 @@ def monitor_and_adjust_active_period(
                 update_entity(
                     mqtt_client,
                     ENTITY_CURRENT_ACTION,
-                    effective_range,
+                    f"Adaptive {target_power}W",
                     {
                         "target_power": target_power,
                         "current_power": current_power,
@@ -969,7 +1003,7 @@ def monitor_and_adjust_active_period(
             update_entity(
                 mqtt_client,
                 ENTITY_CURRENT_ACTION,
-                "opportunistic_solar",
+                f"Opportunistic Solar ({abs(grid_power):.0f}W excess)",
                 {"excess_solar": abs(grid_power), "soc": soc},
                 dry_run=is_dry_run,
             )
@@ -988,7 +1022,7 @@ def monitor_and_adjust_active_period(
         update_entity(
             mqtt_client,
             ENTITY_CURRENT_ACTION,
-            "passive_solar",
+            "Passive Solar (0W charge gap)",
             {"status": "active", "gap_schedule": True},
             dry_run=is_dry_run,
         )
