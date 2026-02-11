@@ -44,14 +44,15 @@ from .status_reporter import (
     ENTITY_REASONING,
     ENTITY_SCHEDULE,
     ENTITY_STATUS,
-    build_charge_forecast,
+    _serialize_windows,
+    build_combined_schedule_display,
     build_next_event_summary,
     build_price_ranges_display,
-    build_schedule_display,
-    build_schedule_markdown,
     build_status_message,
     build_today_story,
     build_tomorrow_story,
+    build_windows_display,
+    find_upcoming_windows,
     get_temperature_icon,
     publish_all_entities,
     update_entity,
@@ -640,23 +641,30 @@ def generate_schedule(
         dry_run=is_dry_run,
     )
 
-    # Update schedule entities
+    # Build full-day schedule from price curve windows
+    upcoming_windows = find_upcoming_windows(
+        import_curve, export_curve, load_range, discharge_range,
+        charging_price_threshold, now,
+    )
+
     update_entity(
         mqtt_client,
         ENTITY_CHARGE_SCHEDULE,
-        build_charge_forecast(schedule, import_curve, load_range, now, charge_power),
+        build_windows_display(upcoming_windows["charge"], "charge", charge_power, now),
+        {"windows": _serialize_windows(upcoming_windows["charge"])},
         dry_run=is_dry_run,
     )
     update_entity(
         mqtt_client,
         ENTITY_DISCHARGE_SCHEDULE,
-        build_schedule_display(schedule, "discharge", now),
+        build_windows_display(upcoming_windows["discharge"], "discharge", discharge_power, now),
+        {"windows": _serialize_windows(upcoming_windows["discharge"])},
         dry_run=is_dry_run,
     )
     update_entity(
         mqtt_client,
         ENTITY_SCHEDULE,
-        build_schedule_markdown(schedule, now),
+        build_combined_schedule_display(upcoming_windows, charge_power, discharge_power, now),
         dry_run=is_dry_run,
     )
 

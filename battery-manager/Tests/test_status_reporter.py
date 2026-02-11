@@ -15,7 +15,11 @@ from app.status_reporter import (
     build_today_story,
     build_tomorrow_story,
     build_price_ranges_display,
-    build_charge_forecast,
+    build_windows_display,
+    build_combined_schedule_display,
+    find_upcoming_windows,
+    _serialize_windows,
+    _group_consecutive_slots,
     get_temperature_icon,
     update_entity,
 )
@@ -248,25 +252,238 @@ class TestBuildPriceRangesDisplay:
         assert "Passive:" in result
 
 
-class TestBuildChargeForecast:
-    def test_active_charge(self):
-        now = datetime.now(timezone.utc)
-        schedule = {"charge": [{"start": (now - timedelta(minutes=5)).isoformat(), "duration": 60, "power": 8000}]}
-        result = build_charge_forecast(schedule, None, None, now, 8000)
-        assert "Active" in result
+class TestFindUpcomingWindows:
+    """Tests for find_upcoming_windows() - scans price curve to find charge/discharge windows."""
 
-    def test_upcoming_from_price_curve(self):
-        now = datetime.now(timezone.utc)
-        schedule = {"charge": []}
-        curve = [
-            {"start": (now + timedelta(hours=3)).isoformat(), "price": 0.232},
+    def _make_curve(self, prices, start_hour=0):
+        """Build a 24h price curve with hourly entries starting at given UTC hour."""
+        base = datetime(2026, 2, 11, start_hour, 0, tzinfo=timezone.utc)
+        return [
+            {
+                "start": (base + timedelta(hours=i)).isoformat(),
+                "end": (base + timedelta(hours=i + 1)).isoformat(),
+                "price": p,
+            }
+            for i, p in enumerate(prices)
         ]
-        result = build_charge_forecast(schedule, curve, PriceRange(0.231, 0.234), now, 8000)
-        assert "Planned" in result
-        assert "8000W" in result
-        assert "€0.232" in result
 
-    def test_no_charge_available(self):
-        now = datetime.now(timezone.utc)
-        result = build_charge_forecast({"charge": []}, None, None, now, 8000)
-        assert result == "No charge planned"
+    def test_finds_charge_windows(self):
+        # Hours 0-2 are cheap (in load range), rest are middle
+        prices = [0.20, 0.21, 0.22] + [0.30] * 21
+        curve = self._make_curve(prices)
+        now = datetime(2026, 2, 10, 23, 0, tzinfo=timezone.utc)  # Before the curve
+
+        result = find_upcoming_windows(
+            curve, curve, PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None, now,
+        )
+        assert len(result["charge"]) == 1  # Grouped into 1 window
+        assert result["charge"][0]["start"].hour == 0
+        assert result["charge"][0]["end"].hour == 3
+
+    def test_finds_discharge_windows(self):
+        import_prices = [0.30] * 24
+        export_prices = [0.25] * 7 + [0.38, 0.39, 0.40] + [0.25] * 14
+        import_curve = self._make_curve(import_prices)
+        export_curve = self._make_curve(export_prices)
+        now = datetime(2026, 2, 10, 23, 0, tzinfo=timezone.utc)
+
+        result = find_upcoming_windows(
+            import_curve, export_curve, PriceRange(0.20, 0.22),
+            PriceRange(0.35, 0.40), None, now,
+        )
+        assert len(result["discharge"]) == 1
+        assert result["discharge"][0]["start"].hour == 7
+        assert result["discharge"][0]["end"].hour == 10
+
+    def test_skips_past_periods(self):
+        prices = [0.20, 0.21, 0.22] + [0.30] * 21
+        curve = self._make_curve(prices)
+        # now is past the cheap hours
+        now = datetime(2026, 2, 11, 5, 0, tzinfo=timezone.utc)
+
+        result = find_upcoming_windows(
+            curve, curve, PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None, now,
+        )
+        assert len(result["charge"]) == 0
+
+    def test_empty_curve(self):
+        result = find_upcoming_windows([], None, None, None, None, datetime.now(timezone.utc))
+        assert result == {"charge": [], "discharge": []}
+
+    def test_non_consecutive_windows_grouped_separately(self):
+        # Cheap at hours 0-1 and 22-23 (gap in between)
+        prices = [0.20, 0.21] + [0.30] * 20 + [0.20, 0.21]
+        curve = self._make_curve(prices)
+        now = datetime(2026, 2, 10, 23, 0, tzinfo=timezone.utc)
+
+        result = find_upcoming_windows(
+            curve, curve, PriceRange(0.20, 0.22), None, None, now,
+        )
+        assert len(result["charge"]) == 2  # Two separate windows
+
+    def test_charge_and_discharge_in_same_curve(self):
+        # Hours 0-2 cheap, hours 17-19 expensive
+        prices = [0.20, 0.21, 0.22] + [0.28] * 14 + [0.36, 0.37, 0.38] + [0.28] * 4
+        curve = self._make_curve(prices)
+        now = datetime(2026, 2, 10, 23, 0, tzinfo=timezone.utc)
+
+        result = find_upcoming_windows(
+            curve, curve, PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None, now,
+        )
+        assert len(result["charge"]) == 1
+        assert len(result["discharge"]) == 1
+        assert result["charge"][0]["start"].hour == 0
+        assert result["discharge"][0]["start"].hour == 17
+
+
+class TestBuildWindowsDisplay:
+    def test_no_windows(self):
+        result = build_windows_display([], "charge", 8000, datetime.now(timezone.utc))
+        assert result == "No charge windows today"
+
+    def test_upcoming_windows(self):
+        now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
+        windows = [
+            {"start": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 3, 0, tzinfo=timezone.utc),
+             "avg_price": 0.231},
+            {"start": datetime(2026, 2, 11, 22, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 23, 0, tzinfo=timezone.utc),
+             "avg_price": 0.234},
+        ]
+        result = build_windows_display(windows, "charge", 8000, now)
+        assert "00:00" in result
+        assert "03:00" in result
+        assert "22:00" in result
+        assert "8000W" in result
+        assert "€0.231" in result
+        # First window is past, second is upcoming
+        assert "✅" in result  # past
+        assert "⚡" in result  # upcoming
+
+    def test_active_window(self):
+        now = datetime(2026, 2, 11, 1, 30, tzinfo=timezone.utc)
+        windows = [
+            {"start": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 3, 0, tzinfo=timezone.utc),
+             "avg_price": 0.231},
+        ]
+        result = build_windows_display(windows, "charge", 8000, now)
+        assert "🔴" in result  # active
+
+    def test_discharge_type(self):
+        now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
+        windows = [
+            {"start": datetime(2026, 2, 11, 17, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 19, 0, tzinfo=timezone.utc),
+             "avg_price": 0.380},
+        ]
+        result = build_windows_display(windows, "discharge", 6000, now)
+        assert "No discharge" not in result
+        assert "💰" in result
+        assert "6000W" in result
+
+
+class TestBuildCombinedScheduleDisplay:
+    def test_empty(self):
+        result = build_combined_schedule_display(
+            {"charge": [], "discharge": []}, 8000, 6000, datetime.now(timezone.utc),
+        )
+        assert result == "No schedule"
+
+    def test_combined_table(self):
+        now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
+        windows = {
+            "charge": [
+                {"start": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+                 "end": datetime(2026, 2, 11, 3, 0, tzinfo=timezone.utc),
+                 "avg_price": 0.231},
+            ],
+            "discharge": [
+                {"start": datetime(2026, 2, 11, 17, 0, tzinfo=timezone.utc),
+                 "end": datetime(2026, 2, 11, 19, 0, tzinfo=timezone.utc),
+                 "avg_price": 0.380},
+            ],
+        }
+        result = build_combined_schedule_display(windows, 8000, 6000, now)
+        assert "|Time|Type|Power|Price|" in result
+        assert "⚡ Charge" in result
+        assert "💰 Discharge" in result
+        assert "8000W" in result
+        assert "6000W" in result
+        assert "€0.231" in result
+        assert "€0.380" in result
+
+    def test_ordered_by_time(self):
+        now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
+        windows = {
+            "charge": [
+                {"start": datetime(2026, 2, 11, 22, 0, tzinfo=timezone.utc),
+                 "end": datetime(2026, 2, 11, 23, 0, tzinfo=timezone.utc),
+                 "avg_price": 0.231},
+            ],
+            "discharge": [
+                {"start": datetime(2026, 2, 11, 17, 0, tzinfo=timezone.utc),
+                 "end": datetime(2026, 2, 11, 19, 0, tzinfo=timezone.utc),
+                 "avg_price": 0.380},
+            ],
+        }
+        result = build_combined_schedule_display(windows, 8000, 6000, now)
+        lines = result.split("\n")
+        data_lines = [l for l in lines if l.startswith("|") and "---" not in l and "Time" not in l]
+        # Discharge at 17:00 should come before charge at 22:00
+        assert "17:00" in data_lines[0]
+        assert "22:00" in data_lines[1]
+
+
+class TestGroupConsecutiveSlots:
+    def test_single_slot(self):
+        slots = [{"start_dt": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+                  "end_dt": datetime(2026, 2, 11, 1, 0, tzinfo=timezone.utc),
+                  "price": 0.20}]
+        result = _group_consecutive_slots(slots)
+        assert len(result) == 1
+        assert result[0]["avg_price"] == 0.20
+
+    def test_consecutive_slots_grouped(self):
+        slots = [
+            {"start_dt": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+             "end_dt": datetime(2026, 2, 11, 1, 0, tzinfo=timezone.utc),
+             "price": 0.20},
+            {"start_dt": datetime(2026, 2, 11, 1, 0, tzinfo=timezone.utc),
+             "end_dt": datetime(2026, 2, 11, 2, 0, tzinfo=timezone.utc),
+             "price": 0.22},
+        ]
+        result = _group_consecutive_slots(slots)
+        assert len(result) == 1
+        assert result[0]["start"].hour == 0
+        assert result[0]["end"].hour == 2
+        assert result[0]["avg_price"] == pytest.approx(0.21)
+
+    def test_gap_splits_groups(self):
+        slots = [
+            {"start_dt": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+             "end_dt": datetime(2026, 2, 11, 1, 0, tzinfo=timezone.utc),
+             "price": 0.20},
+            {"start_dt": datetime(2026, 2, 11, 5, 0, tzinfo=timezone.utc),
+             "end_dt": datetime(2026, 2, 11, 6, 0, tzinfo=timezone.utc),
+             "price": 0.21},
+        ]
+        result = _group_consecutive_slots(slots)
+        assert len(result) == 2
+
+    def test_empty(self):
+        assert _group_consecutive_slots([]) == []
+
+
+class TestSerializeWindows:
+    def test_round_trip(self):
+        windows = [
+            {"start": datetime(2026, 2, 11, 0, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 3, 0, tzinfo=timezone.utc),
+             "avg_price": 0.23145},
+        ]
+        result = _serialize_windows(windows)
+        assert result[0]["start"] == "2026-02-11T00:00:00+00:00"
+        assert result[0]["end"] == "2026-02-11T03:00:00+00:00"
+        assert result[0]["avg_price"] == 0.2314  # rounded to 4 decimals
