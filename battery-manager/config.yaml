@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.4.0"
+version: "0.5.0"
 slug: battery_manager
 init: false
 homeassistant_api: true

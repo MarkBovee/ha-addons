@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+- **Schedule entities populated**: Scan full price curve to find all upcoming charge/discharge windows
+  - **Charge Schedule**: shows all upcoming load-range windows with times, power, avg price (e.g. `⚡ 00:00–05:00 8000W (€0.232)`)
+  - **Discharge Schedule**: shows all upcoming profit-range windows (e.g. `💰 17:00–19:00 6000W (€0.380)`)
+  - **Schedule**: combined markdown table with both, sorted by time, marked active (🔴), done (✅), or upcoming (⏰)
+- **Window grouping**: consecutive hourly slots grouped into windows with averaged prices
+- **Tests**: 83 tests (up from 68), covering window-finding, grouping, and display logic
+
 ## 0.4.0
 - **Entity naming fix**: use `bm_` prefixed object IDs → HA entities are now `sensor.battery_manager_bm_*` (no more doubled `battery_manager_battery_manager` prefix)
 - **Rich entity content** (matching legacy NetDaemon quality):
