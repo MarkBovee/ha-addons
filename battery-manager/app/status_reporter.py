@@ -385,11 +385,12 @@ def build_today_story(
     if charging_price_threshold is not None and not adaptive_range:
         lines.append(f"💤 Passive below €{charging_price_threshold:.3f}")
     if discharge_range:
-        lines.append(f"💰 Profit: €{discharge_range.min_price:.3f} – €{discharge_range.max_price:.3f}")
+        lines.append(f"💰 Selling: €{discharge_range.min_price:.3f} – €{discharge_range.max_price:.3f}")
 
     if load_range and discharge_range:
-        spread = discharge_range.min_price - load_range.max_price
-        lines.append(f"📈 Spread: €{spread:.3f} — {_trading_quality(spread)}")
+        min_profit_kwh = discharge_range.min_price - load_range.max_price
+        max_profit_kwh = discharge_range.max_price - load_range.min_price
+        lines.append(f"💵 Profit: €{min_profit_kwh:.3f}–€{max_profit_kwh:.3f}/kWh — {_trading_quality(min_profit_kwh)}")
 
     range_label = _RANGE_ICONS.get(price_range, price_range.capitalize())
     lines.append(f"📍 Now ({now.strftime('%H:%M')}): €{import_price:.3f}/kWh — {range_label}")
@@ -414,11 +415,12 @@ def build_tomorrow_story(
     if tomorrow_adaptive:
         lines.append(f"⚖️ Balancing: €{tomorrow_adaptive.min_price:.3f} – €{tomorrow_adaptive.max_price:.3f}")
     if tomorrow_discharge:
-        lines.append(f"💰 Profit: €{tomorrow_discharge.min_price:.3f} – €{tomorrow_discharge.max_price:.3f}")
+        lines.append(f"💰 Selling: €{tomorrow_discharge.min_price:.3f} – €{tomorrow_discharge.max_price:.3f}")
 
     if tomorrow_load and tomorrow_discharge:
-        spread = tomorrow_discharge.min_price - tomorrow_load.max_price
-        lines.append(f"📈 Spread: €{spread:.3f} — {_trading_quality(spread)}")
+        min_profit_kwh = tomorrow_discharge.min_price - tomorrow_load.max_price
+        max_profit_kwh = tomorrow_discharge.max_price - tomorrow_load.min_price
+        lines.append(f"💵 Profit: €{min_profit_kwh:.3f}–€{max_profit_kwh:.3f}/kWh — {_trading_quality(min_profit_kwh)}")
 
     # First charge window from curve
     if tomorrow_curve and tomorrow_load:

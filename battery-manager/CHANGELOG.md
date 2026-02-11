@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+- **Profit summary**: Today and tomorrow forecasts show "💵 Profit: €X–€Y/kWh" with min–max arbitrage range when discharge is profitable
+- Renamed discharge price line from "Profit" to "Selling" for clarity
+
 ## 0.7.0
 - **Per-day schedule ranges**: Tomorrow's charge/discharge windows use tomorrow's calculated ranges, not today's
   - Fixes: today's cheaper prices no longer squeeze out tomorrow's charge hours

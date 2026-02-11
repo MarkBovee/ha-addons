@@ -174,13 +174,14 @@ class TestBuildTodayStory:
         assert "€0.231" in result
         assert "€0.341" in result
 
-    def test_contains_spread(self):
+    def test_contains_profit_summary(self):
         result = build_today_story(
             "adaptive", 0.276, 0.291,
             PriceRange(0.231, 0.234), PriceRange(0.331, 0.341),
             PriceRange(0.234, 0.331),
         )
-        assert "Spread" in result
+        assert "💵 Profit" in result
+        assert "/kWh" in result
 
     def test_contains_current_zone(self):
         now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
@@ -212,12 +213,13 @@ class TestBuildTomorrowStory:
         assert "€0.200" in result
         assert "€0.400" in result
 
-    def test_with_spread(self):
+    def test_with_profit_summary(self):
         result = build_tomorrow_story(
             PriceRange(0.20, 0.22), PriceRange(0.35, 0.40),
             PriceRange(0.22, 0.35),
         )
-        assert "Spread" in result
+        assert "💵 Profit" in result
+        assert "/kWh" in result
 
     def test_first_charge_window(self):
         curve = [
