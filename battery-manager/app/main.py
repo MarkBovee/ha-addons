@@ -142,6 +142,10 @@ class RuntimeState:
     last_schedule_publish: Optional[datetime] = None
     last_power_adjustment: Optional[datetime] = None
     last_price_range: Optional[str] = None
+    last_published_payload: Optional[str] = None
+    last_monitor_status: Optional[str] = None
+    last_pause_state: Optional[bool] = None
+    last_reduce_state: Optional[bool] = None
 
 
 def _load_config() -> Dict[str, Any]:
@@ -251,16 +255,32 @@ MAX_CHARGE_PERIODS = 3
 MAX_DISCHARGE_PERIODS = 6
 
 
-def _publish_schedule(mqtt_client: Optional[MqttDiscovery], schedule: Dict[str, Any], dry_run: bool) -> bool:
+def _publish_schedule(
+    mqtt_client: Optional[MqttDiscovery],
+    schedule: Dict[str, Any],
+    dry_run: bool,
+    state: Optional["RuntimeState"] = None,
+    force: bool = False,
+) -> bool:
     """Publish schedule to battery-api via MQTT with retry on disconnect.
 
-    Returns True if published successfully, False otherwise.
+    Skips publishing if the payload is identical to the last published one,
+    unless *force* is True (used for fresh schedule generation).
+    Returns True if published (or skipped as duplicate), False on error.
     """
     api_schedule = _format_schedule_for_api(schedule)
-    
+    payload_json = json.dumps(api_schedule, sort_keys=True, ensure_ascii=False)
+
+    # Dedup: skip if payload unchanged since last publish
+    if not force and state and state.last_published_payload == payload_json:
+        logger.debug("📡 Schedule unchanged, skipping publish")
+        return True
+
     if dry_run:
         logger.info("📝 [Dry-Run] Schedule generated (not published)")
-        logger.info("   Content: %s", json.dumps(api_schedule, ensure_ascii=False))
+        logger.info("   Content: %s", payload_json)
+        if state:
+            state.last_published_payload = payload_json
         return True
 
     if mqtt_client is None:
@@ -276,6 +296,8 @@ def _publish_schedule(mqtt_client: Optional[MqttDiscovery], schedule: Dict[str, 
                 charge_count = len(api_schedule.get("charge", []))
                 discharge_count = len(api_schedule.get("discharge", []))
                 logger.info("📡 Schedule published: %d charge + %d discharge periods", charge_count, discharge_count)
+                if state:
+                    state.last_published_payload = payload_json
                 return True
             logger.warning("⚠️ MQTT publish failed (attempt %d/%d)", attempt, max_attempts)
         else:
@@ -692,7 +714,7 @@ def generate_schedule(
             logger.info("💤 No upcoming charge or discharge windows")
 
     schedule = {"charge": charge_schedule, "discharge": discharge_schedule}
-    published = _publish_schedule(mqtt_client, schedule, is_dry_run)
+    published = _publish_schedule(mqtt_client, schedule, is_dry_run, state=state, force=True)
     if not published and not is_dry_run:
         logger.warning("⚠️ Schedule was NOT delivered to battery-api — will retry next cycle")
     logger.info(
@@ -835,7 +857,7 @@ def monitor_and_adjust_active_period(
             logger.warning("⚠️ EV charger sensor unavailable, skipping EV integration")
             state.warned_missing_ev = True
 
-    logger.info(
+    logger.debug(
         "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW | Bat: %sW | EV: %sW",
         soc if soc is not None else "?",
         grid_power if grid_power is not None else "?",
@@ -1012,21 +1034,57 @@ def monitor_and_adjust_active_period(
         icon = get_temperature_icon(temperature)
         status_parts.append(f"{icon} {temperature}°C")
 
+    # Build a status key to detect state changes and suppress repeat log lines
     if active_discharge and should_pause:
-        logger.info("%s | 🛑 Paused | Reasons: %s", " | ".join(status_parts), ", ".join(pause_reasons))
+        monitor_status = f"paused:{','.join(pause_reasons)}"
     elif active_discharge and reduce_discharge:
-        logger.info("%s | 🟡 Reduced | Reasons: %s", " | ".join(status_parts), ", ".join(reduce_reasons))
-    elif active_charge or active_discharge:
-        logger.info("%s | Active | Mode: %s", " | ".join(status_parts), price_range)
+        monitor_status = f"reduced:{','.join(reduce_reasons)}"
+    elif active_charge:
+        monitor_status = f"charging:{price_range}"
+    elif active_discharge:
+        monitor_status = f"discharging:{price_range}"
     else:
-        logger.info("%s", " | ".join(status_parts))
+        monitor_status = f"idle:{price_range}"
+
+    status_changed = monitor_status != state.last_monitor_status
+    if status_changed:
+        state.last_monitor_status = monitor_status
+        # Log sensor values on state transitions at INFO for context
+        logger.info(
+            "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW | Bat: %sW | EV: %sW",
+            soc if soc is not None else "?",
+            grid_power if grid_power is not None else "?",
+            solar_power if solar_power is not None else "?",
+            house_load if house_load is not None else "?",
+            batt_power if batt_power is not None else "?",
+            ev_power if ev_power is not None else "?",
+        )
+
+    if active_discharge and should_pause:
+        if status_changed:
+            logger.info("%s | 🛑 Paused | Reasons: %s", " | ".join(status_parts), ", ".join(pause_reasons))
+    elif active_discharge and reduce_discharge:
+        if status_changed:
+            logger.info("%s | 🟡 Reduced | Reasons: %s", " | ".join(status_parts), ", ".join(reduce_reasons))
+    elif active_charge or active_discharge:
+        if status_changed:
+            logger.info("%s | Active | Mode: %s", " | ".join(status_parts), price_range)
+    else:
+        if status_changed:
+            logger.info("%s", " | ".join(status_parts))
 
     if active_discharge and (should_pause or reduce_discharge):
         if should_pause:
-            logger.info("🛑 Pausing discharge due to EV charging or SOC protection")
+            if state.last_pause_state is not True:
+                logger.info("🛑 Pausing discharge due to EV charging or SOC protection")
+            state.last_pause_state = True
+            state.last_reduce_state = False
 
         if reduce_discharge and not should_pause:
-            logger.info("🟡 Reducing discharge due to grid export or conservative SOC")
+            if state.last_reduce_state is not True:
+                logger.info("🟡 Reducing discharge due to grid export or conservative SOC")
+            state.last_reduce_state = True
+            state.last_pause_state = False
             reduced = []
             for period in state.schedule.get("discharge", []):
                 reduced_power = max(
@@ -1036,7 +1094,7 @@ def monitor_and_adjust_active_period(
                 reduced.append({**period, "power": reduced_power})
 
             override = {"charge": state.schedule.get("charge", []), "discharge": reduced}
-            _publish_schedule(mqtt_client, override, is_dry_run)
+            _publish_schedule(mqtt_client, override, is_dry_run, state=state)
             status_msg = build_status_message(
                 price_range, False, True, None, None, temperature,
                 reduced=True, pause_reason=", ".join(reduce_reasons),
@@ -1047,7 +1105,7 @@ def monitor_and_adjust_active_period(
             return
 
         override = {"charge": state.schedule.get("charge", []), "discharge": []}
-        _publish_schedule(mqtt_client, override, is_dry_run)
+        _publish_schedule(mqtt_client, override, is_dry_run, state=state)
         status_msg = build_status_message(
             price_range, False, False, None, None, temperature,
             paused=True, pause_reason=", ".join(pause_reasons),
@@ -1055,70 +1113,75 @@ def monitor_and_adjust_active_period(
         update_entity(
             mqtt_client, ENTITY_STATUS, status_msg, {"reason": "override"}, dry_run=is_dry_run,
         )
-    elif active_charge:
-        charge_power_val = None
-        for p in state.schedule.get("charge", []):
-            if _is_period_active(p, now):
-                charge_power_val = p.get("power")
-                break
-        status_msg = build_status_message(
-            price_range, True, False, charge_power_val, None, temperature,
-        )
-        update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
-        update_entity(
-            mqtt_client,
-            ENTITY_CURRENT_ACTION,
-            f"Charging {charge_power_val}W" if charge_power_val else "Charging",
-            {
-                "price_range": price_range,
-                "charge_power": charge_power_val,
-                "soc": soc,
-            },
-            dry_run=is_dry_run,
-        )
-    elif active_discharge:
-        discharge_power_val = None
-        for p in state.schedule.get("discharge", []):
-            if _is_period_active(p, now):
-                discharge_power_val = p.get("power")
-                break
-        status_msg = build_status_message(
-            price_range, False, True, None, discharge_power_val, temperature,
-        )
-        update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
-        action_label = f"Discharging {discharge_power_val}W" if discharge_power_val else "Discharging"
-        if price_range == "adaptive":
-            action_label = f"Adaptive {discharge_power_val}W" if discharge_power_val else "Adaptive (matching grid)"
-        update_entity(
-            mqtt_client,
-            ENTITY_CURRENT_ACTION,
-            action_label,
-            {
-                "price_range": price_range,
-                "discharge_power": discharge_power_val,
-                "soc": soc,
-            },
-            dry_run=is_dry_run,
-        )
     else:
-        status_msg = build_status_message(
-            price_range, False, False, None, None, temperature,
-        )
-        update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
-        # Update current action based on price range when idle
-        idle_labels = {
-            "passive": "Passive (battery idle)",
-            "adaptive": "Adaptive (no active window)",
-            "load": "Waiting (charge window pending)",
-        }
-        idle_action = idle_labels.get(price_range, f"Idle ({price_range})")
-        update_entity(
-            mqtt_client,
-            ENTITY_CURRENT_ACTION,
-            idle_action,
-            {"price_range": price_range, "soc": soc},
-            dry_run=is_dry_run,
-        )
+        # Clear pause/reduce tracking when not in override state
+        state.last_pause_state = False
+        state.last_reduce_state = False
+
+        if active_charge:
+            charge_power_val = None
+            for p in state.schedule.get("charge", []):
+                if _is_period_active(p, now):
+                    charge_power_val = p.get("power")
+                    break
+            status_msg = build_status_message(
+                price_range, True, False, charge_power_val, None, temperature,
+            )
+            update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+            update_entity(
+                mqtt_client,
+                ENTITY_CURRENT_ACTION,
+                f"Charging {charge_power_val}W" if charge_power_val else "Charging",
+                {
+                    "price_range": price_range,
+                    "charge_power": charge_power_val,
+                    "soc": soc,
+                },
+                dry_run=is_dry_run,
+            )
+        elif active_discharge:
+            discharge_power_val = None
+            for p in state.schedule.get("discharge", []):
+                if _is_period_active(p, now):
+                    discharge_power_val = p.get("power")
+                    break
+            status_msg = build_status_message(
+                price_range, False, True, None, discharge_power_val, temperature,
+            )
+            update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+            action_label = f"Discharging {discharge_power_val}W" if discharge_power_val else "Discharging"
+            if price_range == "adaptive":
+                action_label = f"Adaptive {discharge_power_val}W" if discharge_power_val else "Adaptive (matching grid)"
+            update_entity(
+                mqtt_client,
+                ENTITY_CURRENT_ACTION,
+                action_label,
+                {
+                    "price_range": price_range,
+                    "discharge_power": discharge_power_val,
+                    "soc": soc,
+                },
+                dry_run=is_dry_run,
+            )
+        else:
+            status_msg = build_status_message(
+                price_range, False, False, None, None, temperature,
+            )
+            update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+            # Update current action based on price range when idle
+            idle_labels = {
+                "passive": "Passive (battery idle)",
+                "adaptive": "Adaptive (no active window)",
+                "load": "Waiting (charge window pending)",
+            }
+            idle_action = idle_labels.get(price_range, f"Idle ({price_range})")
+            update_entity(
+                mqtt_client,
+                ENTITY_CURRENT_ACTION,
+                idle_action,
+                {"price_range": price_range, "soc": soc},
+                dry_run=is_dry_run,
+            )
 
     if active_discharge and not should_pause:
         discharge_periods = state.schedule.get("discharge", [])
@@ -1184,7 +1247,7 @@ def monitor_and_adjust_active_period(
                     else:
                         updated.append(period)
                 override = {"charge": state.schedule.get("charge", []), "discharge": updated}
-                _publish_schedule(mqtt_client, override, is_dry_run)
+                _publish_schedule(mqtt_client, override, is_dry_run, state=state)
                 state.last_power_adjustment = now
                 update_entity(
                     mqtt_client,
@@ -1224,7 +1287,7 @@ def monitor_and_adjust_active_period(
         gap_schedule = gap_scheduler.generate_passive_gap_schedule()
         
         # We publish a focused schedule: 0W charge now, then discharge fallback
-        _publish_schedule(mqtt_client, gap_schedule, is_dry_run)
+        _publish_schedule(mqtt_client, gap_schedule, is_dry_run, state=state)
         
         update_entity(
             mqtt_client,
