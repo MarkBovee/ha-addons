@@ -144,8 +144,6 @@ class RuntimeState:
     last_price_range: Optional[str] = None
     last_published_payload: Optional[str] = None
     last_monitor_status: Optional[str] = None
-    last_pause_state: Optional[bool] = None
-    last_reduce_state: Optional[bool] = None
 
 
 def _load_config() -> Dict[str, Any]:
@@ -1074,17 +1072,7 @@ def monitor_and_adjust_active_period(
             logger.info("%s", " | ".join(status_parts))
 
     if active_discharge and (should_pause or reduce_discharge):
-        if should_pause:
-            if state.last_pause_state is not True:
-                logger.info("🛑 Pausing discharge due to EV charging or SOC protection")
-            state.last_pause_state = True
-            state.last_reduce_state = False
-
         if reduce_discharge and not should_pause:
-            if state.last_reduce_state is not True:
-                logger.info("🟡 Reducing discharge due to grid export or conservative SOC")
-            state.last_reduce_state = True
-            state.last_pause_state = False
             reduced = []
             for period in state.schedule.get("discharge", []):
                 reduced_power = max(
@@ -1114,10 +1102,6 @@ def monitor_and_adjust_active_period(
             mqtt_client, ENTITY_STATUS, status_msg, {"reason": "override"}, dry_run=is_dry_run,
         )
     else:
-        # Clear pause/reduce tracking when not in override state
-        state.last_pause_state = False
-        state.last_reduce_state = False
-
         if active_charge:
             charge_power_val = None
             for p in state.schedule.get("charge", []):
