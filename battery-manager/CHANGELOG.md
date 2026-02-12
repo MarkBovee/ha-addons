@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.5
+- **Feature: Split schedule entity** — Added `sensor.bm_schedule_2` to handle markdown table overflow. When the combined schedule table exceeds 255 characters, it is split across `sensor.bm_schedule` (first 255 chars) and `sensor.bm_schedule_2` (remaining text). The full table remains available in the `markdown` attribute of `sensor.bm_schedule`.
+- **Fix: Import error** — Resolved `NameError` for `ENTITY_SCHEDULE_2` in the main loop.
+
 ## 0.8.4
 - **Fix: Timezone handling** — Status messages now display local time instead of UTC in "Now" and schedule windows
 - **Fix: Entity state limits** — Detect long schedule tables (>255 chars) and summarize state (e.g., "3 charge windows") while keeping full markdown table in attributes. Prevents "unknown" entity states.
