@@ -407,7 +407,7 @@ class MqttDiscovery:
         # Build discovery payload
         discovery_payload = {
             "name": config.name,
-            # "object_id": f"{self.addon_id}_{config.object_id}",
+            "object_id": config.object_id,
             "unique_id": unique_id,
             "state_topic": state_topic,
             "device": self.device_info,
