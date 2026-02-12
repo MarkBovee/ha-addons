@@ -421,6 +421,21 @@ def _is_period_active(period: Dict[str, Any], now: datetime) -> bool:
         return False
 
 
+def _remaining_minutes(period: Dict[str, Any], now: datetime) -> int:
+    """Return minutes remaining in a period from 'now' until the period ends."""
+    start_str = period.get("start")
+    duration = period.get("duration", 0)
+    if not start_str or not duration:
+        return int(duration) if duration else 0
+    try:
+        start_dt = isoparse(start_str)
+        end_dt = start_dt + timedelta(minutes=int(duration))
+        remaining = int((end_dt - now).total_seconds() / 60)
+        return max(remaining, 1)
+    except Exception:
+        return max(int(duration), 1)
+
+
 def generate_schedule(
     config: Dict[str, Any],
     ha_api: HomeAssistantApi,
@@ -948,11 +963,19 @@ def monitor_and_adjust_active_period(
             logger.info("🟡 Reducing discharge due to grid export or conservative SOC")
             reduced = []
             for period in state.schedule.get("discharge", []):
-                reduced_power = max(
-                    int(period.get("power", 0) * 0.5),
-                    config["power"]["min_discharge_power"],
-                )
-                reduced.append({**period, "power": reduced_power})
+                if _is_period_active(period, now):
+                    reduced_power = max(
+                        int(period.get("power", 0) * 0.5),
+                        config["power"]["min_discharge_power"],
+                    )
+                    remaining = _remaining_minutes(period, now)
+                    reduced.append({
+                        "start": now.isoformat(),
+                        "power": reduced_power,
+                        "duration": remaining,
+                    })
+                else:
+                    reduced.append(period)
 
             override = {"charge": state.schedule.get("charge", []), "discharge": reduced}
             _publish_schedule(mqtt_client, override, is_dry_run)
@@ -984,6 +1007,17 @@ def monitor_and_adjust_active_period(
             price_range, True, False, charge_power_val, None, temperature,
         )
         update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+        update_entity(
+            mqtt_client,
+            ENTITY_CURRENT_ACTION,
+            f"Charging {charge_power_val}W" if charge_power_val else "Charging",
+            {
+                "price_range": price_range,
+                "charge_power": charge_power_val,
+                "soc": soc,
+            },
+            dry_run=is_dry_run,
+        )
     elif active_discharge:
         discharge_power_val = None
         for p in state.schedule.get("discharge", []):
@@ -994,11 +1028,39 @@ def monitor_and_adjust_active_period(
             price_range, False, True, None, discharge_power_val, temperature,
         )
         update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+        action_label = f"Discharging {discharge_power_val}W" if discharge_power_val else "Discharging"
+        if price_range == "adaptive":
+            action_label = f"Adaptive {discharge_power_val}W" if discharge_power_val else "Adaptive (matching grid)"
+        update_entity(
+            mqtt_client,
+            ENTITY_CURRENT_ACTION,
+            action_label,
+            {
+                "price_range": price_range,
+                "discharge_power": discharge_power_val,
+                "soc": soc,
+            },
+            dry_run=is_dry_run,
+        )
     else:
         status_msg = build_status_message(
             price_range, False, False, None, None, temperature,
         )
         update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+        # Update current action based on price range when idle
+        idle_labels = {
+            "passive": "Passive (battery idle)",
+            "adaptive": "Adaptive (no active window)",
+            "load": "Waiting (charge window pending)",
+        }
+        idle_action = idle_labels.get(price_range, f"Idle ({price_range})")
+        update_entity(
+            mqtt_client,
+            ENTITY_CURRENT_ACTION,
+            idle_action,
+            {"price_range": price_range, "soc": soc},
+            dry_run=is_dry_run,
+        )
 
     if active_discharge and not should_pause:
         discharge_periods = state.schedule.get("discharge", [])
@@ -1055,10 +1117,16 @@ def monitor_and_adjust_active_period(
                     target_power,
                     delta_str,
                 )
+                # Clip active period start to NOW so battery-api gets fresh timestamps
                 updated = []
                 for period in discharge_periods:
                     if period is active_period:
-                        updated.append({**period, "power": target_power})
+                        remaining = _remaining_minutes(period, now)
+                        updated.append({
+                            "start": now.isoformat(),
+                            "power": target_power,
+                            "duration": remaining,
+                        })
                     else:
                         updated.append(period)
                 override = {"charge": state.schedule.get("charge", []), "discharge": updated}

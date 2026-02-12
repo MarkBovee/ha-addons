@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+- **Fix: Status display** — `ENTITY_CURRENT_ACTION` now reflects actual battery state (charging/discharging/idle) instead of only the price range at schedule generation time
+- **Fix: Adaptive discharge timing** — Power adjustments now clip start times to current time with remaining duration, preventing stale timestamps being sent to battery-api
+- **Fix: Reduce discharge timing** — Same start-time clipping applied when reducing discharge for grid export protection
+- **Logging cleanup** — Consolidated sensor data into single line (SOC, Grid, Solar, Load, Bat, EV), removed duplicate EV sensor log, demoted monitoring header to debug level
+
 ## 0.8.0
 - **Multi-period scheduling**: Send ALL upcoming charge/discharge/adaptive windows to battery-api at once (was single-interval)
   - Charge windows limited to 3 periods, discharge+adaptive limited to 6 periods (SAJ API constraints)
