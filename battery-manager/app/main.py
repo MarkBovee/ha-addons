@@ -57,6 +57,9 @@ from .status_reporter import (
     update_entity,
 )
 
+if "ENTITY_SCHEDULE_2" not in globals():
+    ENTITY_SCHEDULE_2 = "schedule_part_2"
+
 logger = setup_logging(name=__name__)
 
 

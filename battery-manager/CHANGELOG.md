@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.7
+- **Fix: Schedule part 2 guard** — Ensure `schedule_part_2` is always defined so schedule publishing does not crash after entity name changes.
+
 ## 0.8.6
 - **Fix: Entity naming** — Corrected entity object_ids to match actual Home Assistant entities. Changed from `bm_*` prefix to direct names (`schedule_part_2` instead of `bm_schedule_2`) to fix issue where `sensor.battery_manager_schedule_part_2` wasn't being populated correctly.
 
