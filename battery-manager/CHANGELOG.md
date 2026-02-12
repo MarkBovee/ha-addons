@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.9
+- **Fix: Entity Naming** — Force explicit `object_id` in MQTT discovery payload to prevent duplicate prefixes (e.g. `battery_manager_battery_manager_...`).
+
 ## 0.8.8
 - **Fix: Mode entity** — Correctly update `sensor.battery_manager_mode` with active price range ("load", "discharge", "adaptive", "passive").
 - **Fix: Entity cleanup** — Cleaned up legacy MQTT discovery topics to prevent duplicate Entities.
