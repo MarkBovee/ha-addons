@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.8.9
+## 0.8.12
+- **Fix: Entity Naming** — Restore `battery_manager_` prefix to entity IDs to fix "No Prefix" issue (e.g. `sensor.status` -> `sensor.battery_manager_status`). Includes safety check to prevent double-prefixing.
+
+## 0.8.11
 - **Fix: Entity Naming** — Force explicit `object_id` in MQTT discovery payload to prevent duplicate prefixes (e.g. `battery_manager_battery_manager_...`).
 
 ## 0.8.8
