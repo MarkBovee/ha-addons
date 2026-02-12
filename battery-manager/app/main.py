@@ -947,6 +947,12 @@ def monitor_and_adjust_active_period(
             },
             dry_run=is_dry_run,
         )
+        update_entity(
+            mqtt_client,
+            ENTITY_MODE,
+            price_range,
+            dry_run=is_dry_run,
+        )
         state.last_price_range = price_range
 
     # Update "Today's Energy Market" every cycle so the "📍 Now" line stays current

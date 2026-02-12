@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.8
+- **Fix: Mode entity** — Correctly update `sensor.battery_manager_mode` with active price range ("load", "discharge", "adaptive", "passive").
+- **Fix: Entity cleanup** — Cleaned up legacy MQTT discovery topics to prevent duplicate Entities.
+
 ## 0.8.7
 - **Fix: Schedule part 2 guard** — Ensure `schedule_part_2` is always defined so schedule publishing does not crash after entity name changes.
 
