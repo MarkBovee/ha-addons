@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.6
+- **Fix: Entity naming** — Corrected entity object_ids to match actual Home Assistant entities. Changed from `bm_*` prefix to direct names (`schedule_part_2` instead of `bm_schedule_2`) to fix issue where `sensor.battery_manager_schedule_part_2` wasn't being populated correctly.
+
 ## 0.8.5
 - **Feature: Split schedule entity** — Added `sensor.bm_schedule_2` to handle markdown table overflow. When the combined schedule table exceeds 255 characters, it is split across `sensor.bm_schedule` (first 255 chars) and `sensor.bm_schedule_2` (remaining text). The full table remains available in the `markdown` attribute of `sensor.bm_schedule`.
 - **Fix: Import error** — Resolved `NameError` for `ENTITY_SCHEDULE_2` in the main loop.

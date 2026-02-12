@@ -3,7 +3,7 @@
 Uses the shared MqttDiscovery class to create and update entities in Home Assistant
 with proper unique_id, device grouping, and JSON attributes support.
 
-Entity prefix: bm_ (battery manager)
+Entity naming: sensor.battery_manager_{object_id}
 """
 
 from __future__ import annotations
@@ -20,17 +20,17 @@ from .price_analyzer import PriceRange
 logger = logging.getLogger(__name__)
 
 # --- Entity object_id constants (used as keys into MqttDiscovery) ---
-# Using bm_ prefix to produce clean HA entity IDs (sensor.battery_manager_*)
-ENTITY_STATUS = "bm_status"
-ENTITY_REASONING = "bm_reasoning"
-ENTITY_FORECAST = "bm_forecast"
-ENTITY_PRICE_RANGES = "bm_price_ranges"
-ENTITY_CURRENT_ACTION = "bm_current_action"
-ENTITY_CHARGE_SCHEDULE = "bm_charge_schedule"
-ENTITY_DISCHARGE_SCHEDULE = "bm_discharge_schedule"
-ENTITY_SCHEDULE = "bm_schedule"
-ENTITY_SCHEDULE_2 = "bm_schedule_2"
-ENTITY_MODE = "bm_mode"
+# Entity IDs without prefix to match existing HA entities (sensor.battery_manager_*)
+ENTITY_STATUS = "status"
+ENTITY_REASONING = "reasoning"
+ENTITY_FORECAST = "forecast"
+ENTITY_PRICE_RANGES = "price_ranges"
+ENTITY_CURRENT_ACTION = "current_action"
+ENTITY_CHARGE_SCHEDULE = "charge_schedule"
+ENTITY_DISCHARGE_SCHEDULE = "discharge_schedule"
+ENTITY_SCHEDULE = "schedule"
+ENTITY_SCHEDULE_2 = "schedule_part_2"
+ENTITY_MODE = "mode"
 
 ALL_ENTITIES = [
     ENTITY_STATUS,
