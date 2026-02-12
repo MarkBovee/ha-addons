@@ -41,6 +41,7 @@ from .status_reporter import (
     ENTITY_PRICE_RANGES,
     ENTITY_REASONING,
     ENTITY_SCHEDULE,
+    ENTITY_SCHEDULE_2,
     ENTITY_STATUS,
     _serialize_windows,
     build_combined_schedule_display,
