@@ -756,7 +756,7 @@ def monitor_and_adjust_active_period(
     solar_monitor: SolarMonitor,
     gap_scheduler: GapScheduler,
 ) -> None:
-    logger.info("🔍 Monitoring active period...")
+    logger.debug("🔍 Monitoring active period...")
     soc_entity = config["entities"]["soc_entity"]
     grid_entity = config["entities"]["grid_power_entity"]
     solar_entity = config["entities"]["solar_power_entity"]
@@ -772,13 +772,21 @@ def monitor_and_adjust_active_period(
     house_load = _get_sensor_float(ha_api, load_entity)
     batt_power = _get_sensor_float(ha_api, batt_entity) if batt_entity else None
 
+    ev_power = None
+    if config["ev_charger"]["enabled"]:
+        ev_power = _get_sensor_float(ha_api, config["ev_charger"]["entity_id"])
+        if ev_power is None and not state.warned_missing_ev:
+            logger.warning("⚠️ EV charger sensor unavailable, skipping EV integration")
+            state.warned_missing_ev = True
+
     logger.info(
-        "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW | Bat: %sW",
+        "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW | Bat: %sW | EV: %sW",
         soc if soc is not None else "?",
         grid_power if grid_power is not None else "?",
         solar_power if solar_power is not None else "?",
         house_load if house_load is not None else "?",
         batt_power if batt_power is not None else "?",
+        ev_power if ev_power is not None else "?",
     )
 
     if grid_power is None and not state.warned_missing_grid:
@@ -788,14 +796,6 @@ def monitor_and_adjust_active_period(
     if (solar_power is None or house_load is None) and not state.warned_missing_solar:
         logger.warning("⚠️ Solar sensors unavailable, skipping opportunistic charging")
         state.warned_missing_solar = True
-
-    ev_power = None
-    if config["ev_charger"]["enabled"]:
-        ev_power = _get_sensor_float(ha_api, config["ev_charger"]["entity_id"])
-        logger.info("  EV sensor %s=%s", config["ev_charger"]["entity_id"], ev_power)
-        if ev_power is None and not state.warned_missing_ev:
-            logger.warning("⚠️ EV charger sensor unavailable, skipping EV integration")
-            state.warned_missing_ev = True
 
     now = datetime.now(timezone.utc)
 
