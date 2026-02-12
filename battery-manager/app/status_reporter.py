@@ -380,9 +380,16 @@ def build_today_story(
 
     if load_range:
         lines.append(f"🔋 Charging: €{load_range.min_price:.3f} – €{load_range.max_price:.3f}")
-    if adaptive_range:
+    if adaptive_range and charging_price_threshold is not None:
+        # Split adaptive range into passive (below threshold) and balancing (at/above)
+        if charging_price_threshold > adaptive_range.min_price:
+            lines.append(f"💤 Passive: €{adaptive_range.min_price:.3f} – €{charging_price_threshold:.3f}")
+        if charging_price_threshold < adaptive_range.max_price:
+            balancing_min = max(adaptive_range.min_price, charging_price_threshold)
+            lines.append(f"⚖️ Balancing: €{balancing_min:.3f} – €{adaptive_range.max_price:.3f}")
+    elif adaptive_range:
         lines.append(f"⚖️ Balancing: €{adaptive_range.min_price:.3f} – €{adaptive_range.max_price:.3f}")
-    if charging_price_threshold is not None and not adaptive_range:
+    elif charging_price_threshold is not None:
         lines.append(f"💤 Passive below €{charging_price_threshold:.3f}")
     if discharge_range:
         lines.append(f"💰 Selling: €{discharge_range.min_price:.3f} – €{discharge_range.max_price:.3f}")
@@ -403,6 +410,7 @@ def build_tomorrow_story(
     tomorrow_discharge: Optional[PriceRange],
     tomorrow_adaptive: Optional[PriceRange],
     tomorrow_curve: Optional[List[Dict[str, Any]]] = None,
+    charging_price_threshold: Optional[float] = None,
 ) -> str:
     """Build rich 'Tomorrow's Forecast' text for the forecast entity."""
     if not tomorrow_load and not tomorrow_discharge:
@@ -412,7 +420,13 @@ def build_tomorrow_story(
 
     if tomorrow_load:
         lines.append(f"🔋 Charging: €{tomorrow_load.min_price:.3f} – €{tomorrow_load.max_price:.3f}")
-    if tomorrow_adaptive:
+    if tomorrow_adaptive and charging_price_threshold is not None:
+        if charging_price_threshold > tomorrow_adaptive.min_price:
+            lines.append(f"💤 Passive: €{tomorrow_adaptive.min_price:.3f} – €{charging_price_threshold:.3f}")
+        if charging_price_threshold < tomorrow_adaptive.max_price:
+            balancing_min = max(tomorrow_adaptive.min_price, charging_price_threshold)
+            lines.append(f"⚖️ Balancing: €{balancing_min:.3f} – €{tomorrow_adaptive.max_price:.3f}")
+    elif tomorrow_adaptive:
         lines.append(f"⚖️ Balancing: €{tomorrow_adaptive.min_price:.3f} – €{tomorrow_adaptive.max_price:.3f}")
     if tomorrow_discharge:
         lines.append(f"💰 Selling: €{tomorrow_discharge.min_price:.3f} – €{tomorrow_discharge.max_price:.3f}")
@@ -449,9 +463,15 @@ def build_price_ranges_display(
     parts = []
     if load_range:
         parts.append(f"Load: €{load_range.min_price:.3f}–{load_range.max_price:.3f}")
-    if adaptive_range:
+    if adaptive_range and charging_price_threshold is not None:
+        if charging_price_threshold > adaptive_range.min_price:
+            parts.append(f"Passive: €{adaptive_range.min_price:.3f}–{charging_price_threshold:.3f}")
+        if charging_price_threshold < adaptive_range.max_price:
+            balancing_min = max(adaptive_range.min_price, charging_price_threshold)
+            parts.append(f"Adaptive: €{balancing_min:.3f}–{adaptive_range.max_price:.3f}")
+    elif adaptive_range:
         parts.append(f"Adaptive: €{adaptive_range.min_price:.3f}–{adaptive_range.max_price:.3f}")
-    if charging_price_threshold is not None and not adaptive_range:
+    elif charging_price_threshold is not None:
         parts.append(f"Passive: <€{charging_price_threshold:.3f}")
     if discharge_range:
         parts.append(f"Discharge: €{discharge_range.min_price:.3f}–{discharge_range.max_price:.3f}")
@@ -468,13 +488,17 @@ def find_upcoming_windows(
     tomorrow_load_range: Optional[PriceRange] = None,
     tomorrow_discharge_range: Optional[PriceRange] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Scan full price curves and find all upcoming charge/discharge windows.
+    """Scan full price curves and find all upcoming charge/discharge/adaptive windows.
 
     Uses per-day ranges when tomorrow ranges are provided: today's slots are
     classified with today's ranges, tomorrow's slots with tomorrow's ranges.
 
-    Returns dict with 'charge' and 'discharge' lists of grouped windows:
+    Returns dict with 'charge', 'discharge', and 'adaptive' lists of grouped windows:
     [{"start": datetime, "end": datetime, "avg_price": float}, ...]
+
+    Adaptive windows are slots where the price is above the charging_price_threshold
+    but not in the load or discharge range — the battery should discharge adaptively
+    (targeting 0W grid export) during these periods.
     """
     now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
     tomorrow_start = (now_aware + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -489,6 +513,7 @@ def find_upcoming_windows(
 
     charge_slots: List[Dict[str, Any]] = []
     discharge_slots: List[Dict[str, Any]] = []
+    adaptive_slots: List[Dict[str, Any]] = []
 
     # Include all of today's periods (past shown as completed) but exclude yesterday
     today_start = now_aware.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -528,10 +553,14 @@ def find_upcoming_windows(
             charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
         elif effective_discharge and effective_discharge.min_price <= export_price <= effective_discharge.max_price:
             discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
+        elif charging_price_threshold is not None and import_price >= charging_price_threshold:
+            # Above passive threshold but not in load/discharge — adaptive discharge
+            adaptive_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
 
     return {
         "charge": _group_consecutive_slots(charge_slots),
         "discharge": _group_consecutive_slots(discharge_slots),
+        "adaptive": _group_consecutive_slots(adaptive_slots),
     }
 
 
@@ -666,6 +695,14 @@ def build_combined_schedule_display(
             "power": discharge_power,
             "price": w["avg_price"],
         })
+    for w in windows.get("adaptive", []):
+        rows.append({
+            "start": w["start"],
+            "end": w["end"],
+            "type": "adaptive",
+            "power": discharge_power,
+            "price": w["avg_price"],
+        })
 
     rows.sort(key=lambda r: r["start"])
 
@@ -698,8 +735,10 @@ def build_combined_schedule_display(
 
         if row["type"] == "charge":
             icon, label = "⚡", "Charge"
-        else:
+        elif row["type"] == "discharge":
             icon, label = "💰", "Discharge"
+        else:
+            icon, label = "⚖️", "Adaptive"
 
         lines.append(
             f"|{status} {start.strftime('%H:%M')}–{end.strftime('%H:%M')}|{icon} {label}|{row['power']}W|€{row['price']:.3f}|"

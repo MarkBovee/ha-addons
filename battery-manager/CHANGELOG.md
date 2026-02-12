@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0
+- **Multi-period scheduling**: Send ALL upcoming charge/discharge/adaptive windows to battery-api at once (was single-interval)
+  - Charge windows limited to 3 periods, discharge+adaptive limited to 6 periods (SAJ API constraints)
+  - Eliminates dependency on hourly MQTT reconnection for schedule continuity
+- **MQTT retry**: `_publish_schedule()` retries 3 times with 5s wait between attempts, checks `is_connected()` before each
+- **Adaptive discharge**: Gaps between charge and discharge windows now scheduled as adaptive discharge (min power)
+  - Monitoring loop adjusts power dynamically to target 0W grid export
+  - Classified as prices above `charging_price_threshold` but below discharge range
+- **Passive/Balancing split**: Status display splits adaptive range into two lines when threshold is configured
+  - 💤 Passive: prices below `charging_price_threshold` (battery idle)
+  - ⚖️ Balancing: prices at/above threshold (adaptive discharge active)
+- **Log retention**: Rotating file handler writes to `/data/logs/` (2MB × 3 backups = 8MB total)
+- **Tests**: 101 tests (up from 93), covering adaptive windows, Passive/Balancing split, and price range display
+
 ## 0.7.1
 - **Profit summary**: Today and tomorrow forecasts show "💵 Profit: €X–€Y/kWh" with min–max arbitrage range when discharge is profitable
 - Renamed discharge price line from "Profit" to "Selling" for clarity

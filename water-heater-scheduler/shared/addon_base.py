@@ -16,27 +16,53 @@ Usage:
 """
 
 import logging
+import os
 import signal
 import time
 import threading
 from typing import Callable, Optional
 
 
-def setup_logging(level: int = logging.INFO, name: Optional[str] = None) -> logging.Logger:
+def setup_logging(level: int = logging.INFO, name: Optional[str] = None, log_dir: str = "/data/logs") -> logging.Logger:
     """Configure standard logging format for add-ons.
     
+    Logs to both console (for Docker/Supervisor) and a rotating file in
+    the persistent data directory for extended log retention.
+
     Args:
         level: Logging level (default: INFO)
         name: Logger name (default: None for root logger)
+        log_dir: Directory for log files (default: /data/logs)
         
     Returns:
         Configured logger instance
     """
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(
         level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format=log_format,
     )
-    return logging.getLogger(name)
+
+    logger = logging.getLogger(name)
+
+    # Add rotating file handler for persistent log retention
+    try:
+        from logging.handlers import RotatingFileHandler
+        os.makedirs(log_dir, exist_ok=True)
+        log_name = (name or "addon").replace(".", "_")
+        file_handler = RotatingFileHandler(
+            os.path.join(log_dir, f"{log_name}.log"),
+            maxBytes=2 * 1024 * 1024,  # 2 MB per file
+            backupCount=3,             # Keep 3 rotated files (8 MB total)
+        )
+        file_handler.setFormatter(logging.Formatter(log_format))
+        file_handler.setLevel(level)
+        logger.addHandler(file_handler)
+    except Exception:
+        # Don't fail add-on startup if file logging can't be set up
+        logger.debug("Could not set up file logging in %s", log_dir)
+
+    return logger
 
 
 def setup_signal_handlers(logger: Optional[logging.Logger] = None) -> threading.Event:

@@ -334,7 +334,7 @@ class TestFindUpcomingWindows:
 
     def test_empty_curve(self):
         result = find_upcoming_windows([], None, None, None, None, datetime.now(timezone.utc))
-        assert result == {"charge": [], "discharge": []}
+        assert result == {"charge": [], "discharge": [], "adaptive": []}
 
     def test_non_consecutive_windows_grouped_separately(self):
         # Cheap at hours 0-1 and 22-23 (gap in between)
@@ -613,3 +613,139 @@ class TestSerializeWindows:
         assert result[0]["start"] == "2026-02-11T00:00:00+00:00"
         assert result[0]["end"] == "2026-02-11T03:00:00+00:00"
         assert result[0]["avg_price"] == 0.2314  # rounded to 4 decimals
+
+
+class TestFindUpcomingWindowsAdaptive:
+    """Tests for adaptive window detection in find_upcoming_windows."""
+
+    def _make_curve(self, prices, start_hour=0):
+        base = datetime(2026, 2, 11, start_hour, 0, tzinfo=timezone.utc)
+        return [
+            {
+                "start": (base + timedelta(hours=i)).isoformat(),
+                "end": (base + timedelta(hours=i + 1)).isoformat(),
+                "price": p,
+            }
+            for i, p in enumerate(prices)
+        ]
+
+    def test_adaptive_windows_detected(self):
+        """Slots above threshold but not in load/discharge should be adaptive."""
+        # 0-2: load (cheap), 3-5: adaptive (above threshold), 6: passive (below threshold), 17-19: discharge
+        prices = [0.20, 0.21, 0.22, 0.28, 0.29, 0.30, 0.24] + [0.28] * 10 + [0.36, 0.37, 0.38] + [0.28] * 4
+        curve = self._make_curve(prices)
+        now = datetime(2026, 2, 10, 23, 0, tzinfo=timezone.utc)
+
+        result = find_upcoming_windows(
+            curve, curve,
+            PriceRange(0.20, 0.22),   # load
+            PriceRange(0.35, 0.40),   # discharge
+            0.27,                      # threshold — below this is passive
+            now,
+        )
+        assert len(result["charge"]) >= 1
+        assert len(result["discharge"]) >= 1
+        assert len(result["adaptive"]) >= 1
+        # Hours 3-5 (0.28, 0.29, 0.30) are above threshold 0.27 → adaptive
+        adaptive_starts = [w["start"].hour for w in result["adaptive"]]
+        assert 3 in adaptive_starts or any(w["start"].hour <= 3 and w["end"].hour >= 4 for w in result["adaptive"])
+
+    def test_no_adaptive_without_threshold(self):
+        """Without threshold, no adaptive windows should be created."""
+        prices = [0.20, 0.21, 0.22] + [0.28] * 14 + [0.36, 0.37, 0.38] + [0.28] * 4
+        curve = self._make_curve(prices)
+        now = datetime(2026, 2, 10, 23, 0, tzinfo=timezone.utc)
+
+        result = find_upcoming_windows(
+            curve, curve,
+            PriceRange(0.20, 0.22),
+            PriceRange(0.35, 0.40),
+            None,  # no threshold
+            now,
+        )
+        assert result["adaptive"] == []
+
+    def test_passive_below_threshold_not_adaptive(self):
+        """Slots below the threshold should NOT be adaptive."""
+        # Hours 0-2: load (0.20-0.22), hours 3-4: passive (0.25, 0.26 — below 0.27 threshold)
+        # Hours 5-23: all 0.26 — also below threshold, so passive too
+        prices = [0.20, 0.21, 0.22, 0.25, 0.26] + [0.26] * 19
+        curve = self._make_curve(prices)
+        now = datetime(2026, 2, 10, 23, 0, tzinfo=timezone.utc)
+
+        result = find_upcoming_windows(
+            curve, curve,
+            PriceRange(0.20, 0.22),
+            PriceRange(0.35, 0.40),
+            0.27,  # All non-load prices are below threshold → no adaptive
+            now,
+        )
+        assert result["adaptive"] == []
+
+
+class TestBuildTodayStoryPassiveBalancingSplit:
+    """Tests for passive/balancing split in build_today_story."""
+
+    def test_split_when_threshold_in_adaptive_range(self):
+        """When threshold splits adaptive range, both passive and balancing shown."""
+        result = build_today_story(
+            "adaptive", 0.276, 0.291,
+            PriceRange(0.231, 0.234),   # load
+            PriceRange(0.331, 0.341),   # discharge
+            PriceRange(0.234, 0.331),   # adaptive range
+            charging_price_threshold=0.27,
+        )
+        assert "💤 Passive" in result
+        assert "⚖️ Balancing" in result
+        assert "€0.234" in result  # passive start
+        assert "€0.270" in result  # passive end / balancing start
+        assert "€0.331" in result  # balancing end
+
+    def test_no_split_without_threshold(self):
+        """Without threshold, show full adaptive as balancing."""
+        result = build_today_story(
+            "adaptive", 0.276, 0.291,
+            PriceRange(0.231, 0.234),
+            PriceRange(0.331, 0.341),
+            PriceRange(0.234, 0.331),
+            charging_price_threshold=None,
+        )
+        assert "⚖️ Balancing" in result
+        assert "💤 Passive" not in result
+
+    def test_threshold_at_bottom_of_range(self):
+        """When threshold is at or below adaptive min, no passive section."""
+        result = build_today_story(
+            "adaptive", 0.276, 0.291,
+            PriceRange(0.231, 0.234),
+            PriceRange(0.331, 0.341),
+            PriceRange(0.234, 0.331),
+            charging_price_threshold=0.234,  # At adaptive min
+        )
+        assert "⚖️ Balancing" in result
+        assert "💤 Passive" not in result
+
+
+class TestBuildPriceRangesDisplayPassiveBalancingSplit:
+    """Tests for passive/balancing split in build_price_ranges_display."""
+
+    def test_split_with_threshold(self):
+        result = build_price_ranges_display(
+            PriceRange(0.20, 0.22),
+            PriceRange(0.35, 0.40),
+            PriceRange(0.22, 0.35),
+            charging_price_threshold=0.27,
+        )
+        assert "Passive:" in result
+        assert "Adaptive:" in result
+        assert "€0.220–0.270" in result  # passive portion
+        assert "€0.270–0.350" in result  # adaptive portion
+
+    def test_no_split_without_threshold(self):
+        result = build_price_ranges_display(
+            PriceRange(0.20, 0.22),
+            PriceRange(0.35, 0.40),
+            PriceRange(0.22, 0.35),
+        )
+        assert "Adaptive:" in result
+        assert "Passive:" not in result

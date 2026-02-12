@@ -28,8 +28,6 @@ from .price_analyzer import (
     get_current_period_rank,
     get_current_price_entry,
 )
-from .schedule_builder import build_charge_schedule, build_discharge_schedule, merge_schedules
-from .schedule_publisher import publish_to_mqtt
 from .solar_monitor import SolarMonitor
 from .gap_scheduler import GapScheduler
 from .soc_guardian import can_charge, can_discharge
@@ -241,19 +239,45 @@ def _format_schedule_for_api(schedule: Dict[str, Any]) -> Dict[str, Any]:
     return output
 
 
-def _publish_schedule(mqtt_client: Optional[MqttDiscovery], schedule: Dict[str, Any], dry_run: bool) -> None:
+# SAJ API period limits
+MAX_CHARGE_PERIODS = 3
+MAX_DISCHARGE_PERIODS = 6
+
+
+def _publish_schedule(mqtt_client: Optional[MqttDiscovery], schedule: Dict[str, Any], dry_run: bool) -> bool:
+    """Publish schedule to battery-api via MQTT with retry on disconnect.
+
+    Returns True if published successfully, False otherwise.
+    """
     api_schedule = _format_schedule_for_api(schedule)
     
     if dry_run:
         logger.info("📝 [Dry-Run] Schedule generated (not published)")
         logger.info("   Content: %s", json.dumps(api_schedule, ensure_ascii=False))
-        return
+        return True
 
     if mqtt_client is None:
         logger.warning("⚠️ MQTT unavailable, schedule not published")
-        return
+        return False
 
-    mqtt_client.publish_raw("battery_api/text/schedule/set", api_schedule, retain=False)
+    import time
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        if mqtt_client.is_connected():
+            success = mqtt_client.publish_raw("battery_api/text/schedule/set", api_schedule, retain=False)
+            if success:
+                charge_count = len(api_schedule.get("charge", []))
+                discharge_count = len(api_schedule.get("discharge", []))
+                logger.info("📡 Schedule published: %d charge + %d discharge periods", charge_count, discharge_count)
+                return True
+            logger.warning("⚠️ MQTT publish failed (attempt %d/%d)", attempt, max_attempts)
+        else:
+            logger.warning("⚠️ MQTT disconnected, waiting for reconnect (attempt %d/%d)", attempt, max_attempts)
+        if attempt < max_attempts:
+            time.sleep(5)
+    
+    logger.error("❌ Failed to publish schedule after %d attempts", max_attempts)
+    return False
 
 
 def _split_curve_by_date(curve: List[Dict[str, Any]]) -> tuple[list[dict], list[dict]]:
@@ -545,6 +569,7 @@ def generate_schedule(
         )
         forecast_text = build_tomorrow_story(
             tomorrow_load, tomorrow_discharge, tomorrow_adaptive, tomorrow_import,
+            charging_price_threshold=charging_price_threshold,
         )
     else:
         forecast_text = build_tomorrow_story(None, None, None)
@@ -577,58 +602,90 @@ def generate_schedule(
 
     soc = _get_sensor_float(ha_api, config["entities"]["soc_entity"])
     max_soc = config["soc"].get("max_soc", 100)
-    if soc is not None and not can_charge(soc, max_soc) and price_range == "load":
-        logger.info("🛑 SOC %.1f%% >= %s%%, skipping charge window", soc, max_soc)
-        price_range = "adaptive"
+    skip_charge = soc is not None and not can_charge(soc, max_soc)
+    if skip_charge and price_range == "load":
+        logger.info("🛑 SOC %.1f%% >= %s%%, skipping charge windows", soc, max_soc)
 
-    discharge_start = interval_end if price_range == "load" else interval_start
-    discharge_duration = _minutes_until_end_of_day(discharge_start)
-
-    charge_periods: List[Dict[str, Any]] = []
-    discharge_periods: List[Dict[str, Any]] = []
-
-    if price_range == "load":
-        charge_periods.append({
-            "start": interval_start.isoformat(),
-            "duration": interval_minutes,
-        })
-        if discharge_duration > 0:
-            discharge_periods.append({
-                "start": discharge_start.isoformat(),
-                "duration": discharge_duration,
-            })
-    elif price_range == "passive":
-        # Below threshold — neither charge nor discharge, let house run on grid
-        logger.info("💤 Passive range — price below threshold, battery idle")
-    else:
-        if discharge_duration > 0:
-            discharge_periods.append({
-                "start": discharge_start.isoformat(),
-                "duration": discharge_duration,
-            })
-
-    charge_schedule = build_charge_schedule(
-        charge_periods,
-        power=charge_power,
-        duration_minutes=interval_minutes,
+    # Build multi-period schedule from all upcoming price windows
+    # This ensures all charge/discharge windows are sent to the inverter at once,
+    # instead of only scheduling the current interval
+    upcoming_windows = find_upcoming_windows(
+        import_curve, export_curve, load_range, discharge_range,
+        charging_price_threshold, now,
+        tomorrow_load_range=tomorrow_load,
+        tomorrow_discharge_range=tomorrow_discharge,
     )
 
-    discharge_schedule = []
-    if discharge_periods:
-        discharge_schedule = build_discharge_schedule(
-            discharge_periods,
-            power_ranks=[discharge_power for _ in discharge_periods],
-            duration_minutes=interval_minutes,
-        )
+    charge_schedule: List[Dict[str, Any]] = []
+    discharge_schedule: List[Dict[str, Any]] = []
 
-    schedule = merge_schedules(charge_schedule, discharge_schedule)
-    _publish_schedule(mqtt_client, schedule, is_dry_run)
+    if not skip_charge:
+        for window in upcoming_windows["charge"][:MAX_CHARGE_PERIODS]:
+            start_dt = window["start"]
+            end_dt = window["end"]
+            # Skip windows that have already ended
+            if end_dt <= now:
+                continue
+            # Clip start to now if window is partially elapsed
+            effective_start = max(start_dt, interval_start)
+            duration = int((end_dt - effective_start).total_seconds() / 60)
+            if duration <= 0:
+                continue
+            charge_schedule.append({
+                "start": effective_start.isoformat(),
+                "power": charge_power,
+                "duration": duration,
+            })
+
+    # Combine discharge + adaptive windows into discharge periods
+    # Adaptive windows use min discharge power; the monitoring loop will
+    # adjust power dynamically to target 0W grid export
+    min_discharge_power = config["power"]["min_discharge_power"]
+    all_discharge_windows = []
+    for window in upcoming_windows.get("discharge", []):
+        all_discharge_windows.append(("discharge", window))
+    for window in upcoming_windows.get("adaptive", []):
+        all_discharge_windows.append(("adaptive", window))
+    # Sort by start time so we pick the earliest windows first
+    all_discharge_windows.sort(key=lambda x: x[1]["start"])
+
+    for window_type, window in all_discharge_windows[:MAX_DISCHARGE_PERIODS]:
+        start_dt = window["start"]
+        end_dt = window["end"]
+        if end_dt <= now:
+            continue
+        effective_start = max(start_dt, interval_start)
+        duration = int((end_dt - effective_start).total_seconds() / 60)
+        if duration <= 0:
+            continue
+        # Adaptive windows start at minimum power — monitoring loop scales up
+        power = discharge_power if window_type == "discharge" else min_discharge_power
+        discharge_schedule.append({
+            "start": effective_start.isoformat(),
+            "power": power,
+            "duration": duration,
+        })
+
+    if not charge_schedule and not discharge_schedule:
+        if price_range == "passive":
+            logger.info("💤 Passive range — price below threshold, battery idle")
+        else:
+            logger.info("💤 No upcoming charge or discharge windows")
+
+    schedule = {"charge": charge_schedule, "discharge": discharge_schedule}
+    published = _publish_schedule(mqtt_client, schedule, is_dry_run)
+    if not published and not is_dry_run:
+        logger.warning("⚠️ Schedule was NOT delivered to battery-api — will retry next cycle")
     logger.info(
-        "✅ Range-based schedule: %s range, charge=%d discharge=%d",
+        "✅ Multi-period schedule: %s range, charge=%d discharge=%d",
         price_range,
         len(schedule["charge"]),
         len(schedule["discharge"]),
     )
+    for i, p in enumerate(schedule["charge"]):
+        logger.info("   charge[%d]: %s %dW %dm", i, p["start"], p["power"], p["duration"])
+    for i, p in enumerate(schedule["discharge"]):
+        logger.info("   discharge[%d]: %s %dW %dm", i, p["start"], p["power"], p["duration"])
 
     action_labels = {
         "load": f"Charging {charge_power}W",
