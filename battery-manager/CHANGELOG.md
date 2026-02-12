@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.14
+- **Fix: Entity Naming (final)** — Add explicit `object_id` with addon prefix to all MQTT discovery payloads. Without this field, HA generates generic entity IDs like `sensor.status` instead of `sensor.battery_manager_status`. Applied to all entity types (sensor, number, select, button, text) in the shared module. Existing entities for other addons are unaffected (HA preserves entity IDs by unique_id).
+
 ## 0.8.13
 - **Fix: Entity Naming (root cause)** — Reverted incorrect `object_id` override in shared MQTT discovery module. Entity IDs are now derived by Home Assistant from device name + entity name, producing correct IDs like `sensor.battery_manager_status`. Previous fix attempts (0.8.8–0.8.12) added an explicit `object_id` field to the MQTT discovery payload which could cause naming conflicts across addons. All existing broken entities must be cleaned before this update.
 

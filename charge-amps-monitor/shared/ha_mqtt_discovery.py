@@ -242,6 +242,19 @@ class MqttDiscovery:
         """Get JSON attributes topic for an entity."""
         return f"{self.addon_id}/{component}/{object_id}/attributes"
     
+    def _object_id_with_prefix(self, object_id: str) -> str:
+        """Ensure object_id includes the addon prefix for proper HA entity naming.
+
+        Without an explicit object_id in the MQTT discovery payload, HA may
+        generate generic entity IDs like sensor.status instead of
+        sensor.battery_manager_status.  This method prepends the addon_id
+        prefix when it is not already present.
+        """
+        prefix = f"{self.addon_id}_"
+        if object_id.startswith(prefix):
+            return object_id
+        return f"{prefix}{object_id}"
+
     def _discovery_topic(self, component: str, object_id: str) -> str:
         """Get discovery config topic for an entity."""
         return f"{self.DISCOVERY_PREFIX}/{component}/{self.addon_id}/{object_id}/config"
@@ -407,6 +420,7 @@ class MqttDiscovery:
         # Build discovery payload
         discovery_payload = {
             "name": config.name,
+            "object_id": self._object_id_with_prefix(config.object_id),
             "unique_id": unique_id,
             "state_topic": state_topic,
             "device": self.device_info,
@@ -472,6 +486,7 @@ class MqttDiscovery:
         # Build discovery payload
         discovery_payload = {
             "name": config.name,
+            "object_id": self._object_id_with_prefix(config.object_id),
             "unique_id": unique_id,
             "state_topic": state_topic,
             "command_topic": command_topic,
@@ -526,6 +541,7 @@ class MqttDiscovery:
         # Build discovery payload
         discovery_payload = {
             "name": config.name,
+            "object_id": self._object_id_with_prefix(config.object_id),
             "unique_id": unique_id,
             "state_topic": state_topic,
             "command_topic": command_topic,
@@ -572,6 +588,7 @@ class MqttDiscovery:
         # Build discovery payload - buttons don't have state_topic
         discovery_payload = {
             "name": config.name,
+            "object_id": self._object_id_with_prefix(config.object_id),
             "unique_id": unique_id,
             "command_topic": command_topic,
             "device": self.device_info,
@@ -615,6 +632,7 @@ class MqttDiscovery:
         # Build discovery payload
         discovery_payload = {
             "name": config.name,
+            "object_id": self._object_id_with_prefix(config.object_id),
             "unique_id": unique_id,
             "state_topic": state_topic,
             "command_topic": command_topic,
