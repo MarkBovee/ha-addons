@@ -740,24 +740,55 @@ def generate_schedule(
         spread = max(p.get("price", 0) for p in export_curve) - min(p.get("price", 999) for p in import_curve)
         discharge_no_range_msg = f"📉 No profitable discharge today (spread €{spread:.3f} < €{min_profit:.2f} minimum)"
 
+    # Update ENTITY_CHARGE_SCHEDULE with HA state length protection
+    charge_text = build_windows_display(upcoming_windows["charge"], "charge", charge_power, now)
+    charge_state = charge_text
+    if len(charge_state) > 255:
+        count = len(upcoming_windows["charge"])
+        charge_state = f"{count} charge windows planned"
+
     update_entity(
         mqtt_client,
         ENTITY_CHARGE_SCHEDULE,
-        build_windows_display(upcoming_windows["charge"], "charge", charge_power, now),
-        {"windows": _serialize_windows(upcoming_windows["charge"])},
+        charge_state,
+        {
+            "windows": _serialize_windows(upcoming_windows["charge"]),
+            "markdown": charge_text,
+        },
         dry_run=is_dry_run,
     )
+
+    # Update ENTITY_DISCHARGE_SCHEDULE with HA state length protection
+    discharge_text = build_windows_display(upcoming_windows["discharge"], "discharge", discharge_power, now, discharge_no_range_msg)
+    discharge_state = discharge_text
+    if len(discharge_state) > 255:
+        count = len(upcoming_windows["discharge"])
+        discharge_state = f"{count} discharge windows planned"
+
     update_entity(
         mqtt_client,
         ENTITY_DISCHARGE_SCHEDULE,
-        build_windows_display(upcoming_windows["discharge"], "discharge", discharge_power, now, discharge_no_range_msg),
-        {"windows": _serialize_windows(upcoming_windows["discharge"])},
+        discharge_state,
+        {
+            "windows": _serialize_windows(upcoming_windows["discharge"]),
+            "markdown": discharge_text,
+        },
         dry_run=is_dry_run,
     )
+
+    # Update ENTITY_SCHEDULE with HA state length protection
+    combined_text = build_combined_schedule_display(upcoming_windows, charge_power, discharge_power, now, discharge_no_range_msg)
+    combined_state = combined_text
+    if len(combined_state) > 255:
+         c_count = len(upcoming_windows.get("charge", []))
+         d_count = len(upcoming_windows.get("discharge", []))
+         combined_state = f"{c_count} Charges, {d_count} Discharges"
+
     update_entity(
         mqtt_client,
         ENTITY_SCHEDULE,
-        build_combined_schedule_display(upcoming_windows, charge_power, discharge_power, now, discharge_no_range_msg),
+        combined_state,
+        {"markdown": combined_text},
         dry_run=is_dry_run,
     )
 

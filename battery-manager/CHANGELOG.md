@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.4
+- **Fix: Timezone handling** — Status messages now display local time instead of UTC in "Now" and schedule windows
+- **Fix: Entity state limits** — Detect long schedule tables (>255 chars) and summarize state (e.g., "3 charge windows") while keeping full markdown table in attributes. Prevents "unknown" entity states.
+
 ## 0.8.3
 - **Feature: Optional Adaptive Power** — Added `adaptive` config section to enable/disable adaptive power logic. When disabled, battery remains passive (idle) between charge/discharge windows instead of adaptively discharging.
 

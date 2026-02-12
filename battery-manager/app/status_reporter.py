@@ -400,7 +400,9 @@ def build_today_story(
         lines.append(f"💵 Profit: €{min_profit_kwh:.3f}–€{max_profit_kwh:.3f}/kWh — {_trading_quality(min_profit_kwh)}")
 
     range_label = _RANGE_ICONS.get(price_range, price_range.capitalize())
-    lines.append(f"📍 Now ({now.strftime('%H:%M')}): €{import_price:.3f}/kWh — {range_label}")
+    # Display time in local timezone
+    now_local = now.astimezone()
+    lines.append(f"📍 Now ({now_local.strftime('%H:%M')}): €{import_price:.3f}/kWh — {range_label}")
 
     return "\n".join(lines)
 
@@ -445,7 +447,7 @@ def build_tomorrow_story(
             if tomorrow_load.min_price <= float(price) <= tomorrow_load.max_price:
                 try:
                     start_dt = isoparse(entry["start"])
-                    lines.append(f"⏰ First charge window: {start_dt.strftime('%H:%M')}")
+                    lines.append(f"⏰ First charge window: {start_dt.astimezone().strftime('%H:%M')}")
                 except Exception:
                     pass
                 break
@@ -660,7 +662,7 @@ def build_windows_display(
             status = icon
 
         parts.append(
-            f"{status} {start.strftime('%H:%M')}–{end.strftime('%H:%M')} {power}W (€{avg_price:.3f})"
+            f"{status} {start.astimezone().strftime('%H:%M')}–{end.astimezone().strftime('%H:%M')} {power}W (€{avg_price:.3f})"
         )
 
     return "\n".join(parts)
@@ -746,6 +748,6 @@ def build_combined_schedule_display(
             icon, label = "⚖️", "Adaptive"
 
         lines.append(
-            f"|{status} {start.strftime('%H:%M')}–{end.strftime('%H:%M')}|{icon} {label}|{row['power']}W|€{row['price']:.3f}|"
+            f"|{status} {start.astimezone().strftime('%H:%M')}–{end.astimezone().strftime('%H:%M')}|{icon} {label}|{row['power']}W|€{row['price']:.3f}|"
         )
     return "\n".join(lines)
