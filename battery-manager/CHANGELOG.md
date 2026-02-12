@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.15
+- **Fix: Monitor log clutter** — Reduce `battery-manager` log noise by suppressing identical status messages. "Monitor Status" is now only logged when the state or reason changes.
+- **Fix: Redundant schedule updates** — Prevent sending duplicate schedule payloads to `battery-api` if the schedule has not changed, reducing MQTT traffic.
+
+
 ## 0.8.14
 - **Fix: Entity Naming (final)** — Add explicit `object_id` with addon prefix to all MQTT discovery payloads. Without this field, HA generates generic entity IDs like `sensor.status` instead of `sensor.battery_manager_status`. Applied to all entity types (sensor, number, select, button, text) in the shared module. Existing entities for other addons are unaffected (HA preserves entity IDs by unique_id).
 
