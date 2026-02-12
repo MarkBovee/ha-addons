@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.13
+- **Fix: Entity Naming (root cause)** — Reverted incorrect `object_id` override in shared MQTT discovery module. Entity IDs are now derived by Home Assistant from device name + entity name, producing correct IDs like `sensor.battery_manager_status`. Previous fix attempts (0.8.8–0.8.12) added an explicit `object_id` field to the MQTT discovery payload which could cause naming conflicts across addons. All existing broken entities must be cleaned before this update.
+
 ## 0.8.12
 - **Fix: Entity Naming** — Restore `battery_manager_` prefix to entity IDs to fix "No Prefix" issue (e.g. `sensor.status` -> `sensor.battery_manager_status`). Includes safety check to prevent double-prefixing.
 

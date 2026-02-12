@@ -404,17 +404,9 @@ class MqttDiscovery:
         unique_id = self._unique_id(config.object_id)
         state_topic = self._state_topic(component, config.object_id)
         
-        # Ensure object_id has addon prefix to prevent generic IDs like 'sensor.status'
-        # Check if prefix is already present to avoid double-prefixing
-        payload_object_id = config.object_id
-        prefix = f"{self.addon_id}_"
-        if not payload_object_id.startswith(prefix):
-            payload_object_id = f"{prefix}{config.object_id}"
-        
         # Build discovery payload
         discovery_payload = {
             "name": config.name,
-            "object_id": payload_object_id,
             "unique_id": unique_id,
             "state_topic": state_topic,
             "device": self.device_info,
