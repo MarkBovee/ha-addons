@@ -86,6 +86,9 @@ DEFAULT_CONFIG = {
         "min_discharge_power": 0,
         "min_scaled_power": 2500,
     },
+    "adaptive": {
+        "enabled": True,
+    },
     "passive_solar": {
         "enabled": True,
         "entry_threshold": 1000,
@@ -308,6 +311,7 @@ def _determine_price_range(
     load_range: Optional[PriceRange],
     discharge_range: Optional[PriceRange],
     charging_price_threshold: Optional[float] = None,
+    adaptive_enabled: bool = True,
 ) -> str:
     """Classify the current price into load/discharge/adaptive/passive.
 
@@ -322,6 +326,8 @@ def _determine_price_range(
     if discharge_range and discharge_range.min_price <= export_price <= discharge_range.max_price:
         return "discharge"
     if charging_price_threshold is not None and import_price < charging_price_threshold:
+        return "passive"
+    if not adaptive_enabled:
         return "passive"
     return "adaptive"
 
@@ -491,6 +497,11 @@ def generate_schedule(
         top_x_discharge_count,
         min_profit,
     )
+    # If adaptive mode is disabled via config, force adaptive_range to None
+    # so we don't display it or schedule adaptive windows
+    adaptive_enabled = config.get("adaptive", {}).get("enabled", True)
+    if not adaptive_enabled:
+        adaptive_range = None
 
     current_import_entry = get_current_price_entry(import_curve, now, interval_minutes)
     current_export_entry = get_current_price_entry(export_curve, now, interval_minutes)
@@ -508,6 +519,7 @@ def generate_schedule(
     charging_price_threshold = config["heuristics"].get("charging_price_threshold")
     price_range = _determine_price_range(
         import_price, export_price, load_range, discharge_range, charging_price_threshold,
+        adaptive_enabled=adaptive_enabled,
     )
 
     today_import, tomorrow_import = _split_curve_by_date(import_curve)
@@ -616,6 +628,7 @@ def generate_schedule(
         charging_price_threshold, now,
         tomorrow_load_range=tomorrow_load,
         tomorrow_discharge_range=tomorrow_discharge,
+        adaptive_enabled=adaptive_enabled,
     )
 
     charge_schedule: List[Dict[str, Any]] = []
@@ -718,6 +731,7 @@ def generate_schedule(
         charging_price_threshold, now,
         tomorrow_load_range=tomorrow_load,
         tomorrow_discharge_range=tomorrow_discharge,
+        adaptive_enabled=adaptive_enabled,
     )
 
     # Determine informative messages when ranges don't exist
@@ -840,6 +854,8 @@ def monitor_and_adjust_active_period(
         top_x_discharge_count,
         min_profit,
     )
+    if not config.get("adaptive", {}).get("enabled", True):
+        adaptive_range = None
 
     current_import_entry = (
         get_current_price_entry(import_curve or [], now, interval_minutes) if import_curve else None
@@ -848,21 +864,28 @@ def monitor_and_adjust_active_period(
         get_current_price_entry(export_curve or [], now, interval_minutes) if export_curve else None
     )
 
-    import_price = float(current_import_entry.get("price", 0.0)) if current_import_entry else 0.0
+    if current_import_entry:
+        import_price = float(current_import_entry.get("price", 0.0))
+    else:
+        import_price = 0.0
+
     export_price = (
         float(current_export_entry.get("price", import_price))
         if current_export_entry
         else import_price
     )
+    charging_price_threshold = config["heuristics"].get("charging_price_threshold")
+    adaptive_enabled = config.get("adaptive", {}).get("enabled", True)
     price_range = _determine_price_range(
         import_price, export_price, load_range, discharge_range,
-        config["heuristics"].get("charging_price_threshold"),
+        charging_price_threshold,
+        adaptive_enabled=adaptive_enabled,
     )
 
     if state.last_price_range != price_range:
         price_ranges_text = build_price_ranges_display(
             load_range, discharge_range, adaptive_range,
-            config["heuristics"].get("charging_price_threshold"),
+            charging_price_threshold,
         )
         update_entity(
             mqtt_client,

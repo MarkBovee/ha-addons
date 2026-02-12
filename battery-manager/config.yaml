@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.2"
+version: "0.8.3"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -48,6 +48,9 @@ options:
     conservative_soc: 40
     target_eod_soc: 20
     max_soc: 100
+
+  adaptive:
+    enabled: true
 
   heuristics:
     charging_price_threshold: 0.27
@@ -117,6 +120,9 @@ schema:
     conservative_soc: int(0,100)
     target_eod_soc: int(0,100)
     max_soc: int(0,100)
+
+  adaptive:
+    enabled: bool?
 
   heuristics:
     charging_price_threshold: float(0,5)?

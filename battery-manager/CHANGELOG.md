@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.3
+- **Feature: Optional Adaptive Power** — Added `adaptive` config section to enable/disable adaptive power logic. When disabled, battery remains passive (idle) between charge/discharge windows instead of adaptively discharging.
+
 ## 0.8.2
 - **Fix: Adaptive timing stability** — Keep original schedule times when adjusting power, only change the power value. Prevents inverter toggling caused by re-clipping start times every monitor cycle
 - **Fix: Reduce discharge stability** — Same approach: keep original times, only halve power

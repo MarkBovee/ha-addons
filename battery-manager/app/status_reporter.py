@@ -487,6 +487,7 @@ def find_upcoming_windows(
     now: datetime,
     tomorrow_load_range: Optional[PriceRange] = None,
     tomorrow_discharge_range: Optional[PriceRange] = None,
+    adaptive_enabled: bool = True,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Scan full price curves and find all upcoming charge/discharge/adaptive windows.
 
@@ -553,7 +554,11 @@ def find_upcoming_windows(
             charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
         elif effective_discharge and effective_discharge.min_price <= export_price <= effective_discharge.max_price:
             discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
-        elif charging_price_threshold is not None and import_price >= charging_price_threshold:
+        elif (
+            adaptive_enabled
+            and charging_price_threshold is not None
+            and import_price >= charging_price_threshold
+        ):
             # Above passive threshold but not in load/discharge — adaptive discharge
             adaptive_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
 

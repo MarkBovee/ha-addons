@@ -3,5 +3,8 @@
     "monitor_interval": 5,
     "adaptive_power_grace_seconds": 2
   },
+  "adaptive": {
+    "enabled": true
+  },
   "dry_run": true
 }
