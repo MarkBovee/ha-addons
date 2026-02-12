@@ -776,19 +776,24 @@ def generate_schedule(
         dry_run=is_dry_run,
     )
 
-    # Update ENTITY_SCHEDULE with HA state length protection
+    # Update ENTITY_SCHEDULE with HA state length protection (split to _2)
     combined_text = build_combined_schedule_display(upcoming_windows, charge_power, discharge_power, now, discharge_no_range_msg)
-    combined_state = combined_text
-    if len(combined_state) > 255:
-         c_count = len(upcoming_windows.get("charge", []))
-         d_count = len(upcoming_windows.get("discharge", []))
-         combined_state = f"{c_count} Charges, {d_count} Discharges"
+    
+    schedule_1 = combined_text[:255]
+    schedule_2 = combined_text[255:] if len(combined_text) > 255 else " "
 
     update_entity(
         mqtt_client,
         ENTITY_SCHEDULE,
-        combined_state,
+        schedule_1,
         {"markdown": combined_text},
+        dry_run=is_dry_run,
+    )
+    
+    update_entity(
+        mqtt_client,
+        ENTITY_SCHEDULE_2,
+        schedule_2,
         dry_run=is_dry_run,
     )
 

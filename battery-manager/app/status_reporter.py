@@ -29,6 +29,7 @@ ENTITY_CURRENT_ACTION = "bm_current_action"
 ENTITY_CHARGE_SCHEDULE = "bm_charge_schedule"
 ENTITY_DISCHARGE_SCHEDULE = "bm_discharge_schedule"
 ENTITY_SCHEDULE = "bm_schedule"
+ENTITY_SCHEDULE_2 = "bm_schedule_2"
 ENTITY_MODE = "bm_mode"
 
 ALL_ENTITIES = [
@@ -40,6 +41,7 @@ ALL_ENTITIES = [
     ENTITY_CHARGE_SCHEDULE,
     ENTITY_DISCHARGE_SCHEDULE,
     ENTITY_SCHEDULE,
+    ENTITY_SCHEDULE_2,
     ENTITY_MODE,
 ]
 
@@ -97,6 +99,12 @@ def publish_all_entities(mqtt: MqttDiscovery) -> None:
             object_id=ENTITY_SCHEDULE,
             name="Schedule",
             state="No schedule",
+            icon="mdi:calendar-clock",
+        ),
+        EntityConfig(
+            object_id=ENTITY_SCHEDULE_2,
+            name="Schedule (Part 2)",
+            state=" ",
             icon="mdi:calendar-clock",
         ),
         EntityConfig(
