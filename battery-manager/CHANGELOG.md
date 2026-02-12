@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2
+- **Fix: Adaptive timing stability** — Keep original schedule times when adjusting power, only change the power value. Prevents inverter toggling caused by re-clipping start times every monitor cycle
+- **Fix: Reduce discharge stability** — Same approach: keep original times, only halve power
+- **Cleanup** — Removed `_round_up_five_minutes()` and `_remaining_minutes()` helpers (no longer needed)
+
 ## 0.8.1
 - **Fix: Status display** — `ENTITY_CURRENT_ACTION` now reflects actual battery state (charging/discharging/idle) instead of only the price range at schedule generation time
 - **Fix: Adaptive discharge timing** — Power adjustments now clip start times to current time with remaining duration, preventing stale timestamps being sent to battery-api

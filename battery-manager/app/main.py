@@ -421,19 +421,6 @@ def _is_period_active(period: Dict[str, Any], now: datetime) -> bool:
         return False
 
 
-def _remaining_minutes(period: Dict[str, Any], now: datetime) -> int:
-    """Return minutes remaining in a period from 'now' until the period ends."""
-    start_str = period.get("start")
-    duration = period.get("duration", 0)
-    if not start_str or not duration:
-        return int(duration) if duration else 0
-    try:
-        start_dt = isoparse(start_str)
-        end_dt = start_dt + timedelta(minutes=int(duration))
-        remaining = int((end_dt - now).total_seconds() / 60)
-        return max(remaining, 1)
-    except Exception:
-        return max(int(duration), 1)
 
 
 def generate_schedule(
@@ -899,6 +886,16 @@ def monitor_and_adjust_active_period(
         )
         state.last_price_range = price_range
 
+    # Update "Today's Energy Market" every cycle so the "📍 Now" line stays current
+    reasoning_text = build_today_story(
+        price_range, import_price, export_price,
+        load_range, discharge_range, adaptive_range,
+        config["heuristics"].get("charging_price_threshold"), now,
+    )
+    update_entity(mqtt_client, ENTITY_REASONING, reasoning_text,
+                  {"price_range": price_range, "import_price": import_price, "export_price": export_price},
+                  dry_run=is_dry_run)
+
     regen_cooldown = config["timing"].get("schedule_regen_cooldown_seconds", 60)
     if price_range == "load" and not active_charge and import_curve:
         if (
@@ -963,19 +960,11 @@ def monitor_and_adjust_active_period(
             logger.info("🟡 Reducing discharge due to grid export or conservative SOC")
             reduced = []
             for period in state.schedule.get("discharge", []):
-                if _is_period_active(period, now):
-                    reduced_power = max(
-                        int(period.get("power", 0) * 0.5),
-                        config["power"]["min_discharge_power"],
-                    )
-                    remaining = _remaining_minutes(period, now)
-                    reduced.append({
-                        "start": now.isoformat(),
-                        "power": reduced_power,
-                        "duration": remaining,
-                    })
-                else:
-                    reduced.append(period)
+                reduced_power = max(
+                    int(period.get("power", 0) * 0.5),
+                    config["power"]["min_discharge_power"],
+                )
+                reduced.append({**period, "power": reduced_power})
 
             override = {"charge": state.schedule.get("charge", []), "discharge": reduced}
             _publish_schedule(mqtt_client, override, is_dry_run)
@@ -1117,16 +1106,12 @@ def monitor_and_adjust_active_period(
                     target_power,
                     delta_str,
                 )
-                # Clip active period start to NOW so battery-api gets fresh timestamps
+                # Keep original schedule times — only change power to avoid
+                # timing mismatches that cause the inverter to toggle on/off
                 updated = []
                 for period in discharge_periods:
                     if period is active_period:
-                        remaining = _remaining_minutes(period, now)
-                        updated.append({
-                            "start": now.isoformat(),
-                            "power": target_power,
-                            "duration": remaining,
-                        })
+                        updated.append({**period, "power": target_power})
                     else:
                         updated.append(period)
                 override = {"charge": state.schedule.get("charge", []), "discharge": updated}
