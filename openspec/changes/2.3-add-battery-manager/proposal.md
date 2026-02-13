@@ -243,6 +243,7 @@ ev_charger:
 - [ ] Prevents grid export when grid power < -500W
 - [ ] Publishes schedule to battery_api/text/schedule/set via MQTT
 - [ ] Creates MQTT Discovery entities with unique_id
+- [ ] Exposes last commanded power as a dashboard sensor
 
 ✅ **Quality Requirements:**
 - [ ] All pure functions have unit tests (≥85% coverage)

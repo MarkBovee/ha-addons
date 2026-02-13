@@ -188,6 +188,20 @@ The system **SHALL** monitor grid power and reduce battery discharge when grid e
 
 ---
 
+### Requirement: Commanded Power Sensor Exposure
+The system **SHALL** expose the last commanded discharge power as a Home Assistant sensor for dashboard visibility.
+
+#### Scenario: Adaptive power adjustment applied
+- **WHEN** the monitoring loop applies a new adaptive discharge power target
+- **THEN** the system updates a `sensor.battery_manager_last_commanded_power` entity
+- **AND** the sensor state equals the last commanded power in watts
+
+#### Scenario: Commanded power cleared
+- **WHEN** the system clears the commanded power due to a discharge reduction or reset
+- **THEN** the sensor state is set to "unknown"
+
+---
+
 ### Requirement: Schedule Generation and Publishing
 The system **SHALL** generate battery charge/discharge schedules and publish them to battery-api via MQTT.
 

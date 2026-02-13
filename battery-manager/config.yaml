@@ -18,7 +18,7 @@ options:
     price_curve_entity: "sensor.energy_prices_electricity_import_price"
     export_price_curve_entity: "sensor.energy_prices_electricity_export_price"
     soc_entity: "sensor.battery_api_battery_soc"
-    grid_power_entity: "sensor.power_usage"
+    grid_power_entity: "sensor.average_power_usage"
     solar_power_entity: "sensor.battery_api_pv_power"
     house_load_entity: "sensor.battery_api_load_power"
     battery_power_entity: "sensor.battery_api_battery_power"
