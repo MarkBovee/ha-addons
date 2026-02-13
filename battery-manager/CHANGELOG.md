@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.17
+- **Feature: Last commanded power sensor** — Expose the last commanded adaptive discharge power as a MQTT Discovery sensor for dashboard visibility.
+
 ## 0.8.16
 - **Fix: Adaptive power oscillation** — Fixed adaptive power calculation that was using lagging battery sensor value instead of the last commanded power, causing overshoot and oscillation between high grid export/import. Now tracks commanded power in state and uses it as baseline for subsequent adjustments.
 

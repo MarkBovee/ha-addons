@@ -305,6 +305,7 @@
 - [x] 7.2 Verify dry-run with production-like data (verify_prod.py) - **DONE [2026-02-02]**
 - [x] 7.3 Fix bug in power_calculator when power is 0 - **DONE [2026-02-02]**
 - [x] 7.4 Fix bug in schedule_builder skipping 0 power periods - **DONE [2026-02-02]**
+- [x] 7.5 Expose last commanded power sensor in MQTT Discovery - **DONE [2026-02-13]**
 
 ---
 

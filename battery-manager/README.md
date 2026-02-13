@@ -74,6 +74,7 @@ The add-on publishes status entities via MQTT Discovery under the **Battery Mana
 | `sensor.bm_discharge_schedule` | Next discharge period display (e.g. "💰 08:00–10:00") |
 | `sensor.bm_schedule` | Full schedule as markdown table (charge + discharge periods) |
 | `sensor.bm_mode` | Active operating mode (Normal, Passive Solar) |
+| `sensor.bm_last_commanded_power` | Last commanded discharge power for adaptive mode (W) |
 
 All entities use `unique_id` for UI management and carry rich attributes (schedule details, price data, timestamps).
 

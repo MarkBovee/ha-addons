@@ -31,6 +31,7 @@ ENTITY_DISCHARGE_SCHEDULE = "discharge_schedule"
 ENTITY_SCHEDULE = "schedule"
 ENTITY_SCHEDULE_2 = "schedule_part_2"
 ENTITY_MODE = "mode"
+ENTITY_LAST_COMMANDED_POWER = "last_commanded_power"
 
 ALL_ENTITIES = [
     ENTITY_STATUS,
@@ -43,6 +44,7 @@ ALL_ENTITIES = [
     ENTITY_SCHEDULE,
     ENTITY_SCHEDULE_2,
     ENTITY_MODE,
+    ENTITY_LAST_COMMANDED_POWER,
 ]
 
 
@@ -112,6 +114,15 @@ def publish_all_entities(mqtt: MqttDiscovery) -> None:
             name="Mode",
             state="unknown",
             icon="mdi:cog",
+        ),
+        EntityConfig(
+            object_id=ENTITY_LAST_COMMANDED_POWER,
+            name="Last Commanded Power",
+            state="unknown",
+            unit_of_measurement="W",
+            device_class="power",
+            state_class="measurement",
+            icon="mdi:flash",
         ),
     ]
     for cfg in configs:
