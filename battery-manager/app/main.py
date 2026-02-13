@@ -38,6 +38,7 @@ from .status_reporter import (
     ENTITY_DISCHARGE_SCHEDULE,
     ENTITY_FORECAST,
     ENTITY_MODE,
+    ENTITY_LAST_COMMANDED_POWER,
     ENTITY_PRICE_RANGES,
     ENTITY_REASONING,
     ENTITY_SCHEDULE,
@@ -1087,6 +1088,12 @@ def monitor_and_adjust_active_period(
             # Reset commanded power so adaptive recalculates from sensor
             # after the reduction clears
             state.last_commanded_power = None
+            update_entity(
+                mqtt_client,
+                ENTITY_LAST_COMMANDED_POWER,
+                "unknown",
+                dry_run=is_dry_run,
+            )
             status_msg = build_status_message(
                 price_range, False, True, None, None, temperature,
                 reduced=True, pause_reason=", ".join(reduce_reasons),
@@ -1249,6 +1256,12 @@ def monitor_and_adjust_active_period(
                 _publish_schedule(mqtt_client, override, is_dry_run, state=state)
                 state.last_power_adjustment = now
                 state.last_commanded_power = target_power
+                update_entity(
+                    mqtt_client,
+                    ENTITY_LAST_COMMANDED_POWER,
+                    f"{target_power}",
+                    dry_run=is_dry_run,
+                )
                 update_entity(
                     mqtt_client,
                     ENTITY_CURRENT_ACTION,
