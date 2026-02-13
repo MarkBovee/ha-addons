@@ -141,6 +141,7 @@ class RuntimeState:
     warned_missing_solar: bool = False
     last_schedule_publish: Optional[datetime] = None
     last_power_adjustment: Optional[datetime] = None
+    last_commanded_power: Optional[int] = None
     last_price_range: Optional[str] = None
     last_published_payload: Optional[str] = None
     last_monitor_status: Optional[str] = None
@@ -1083,6 +1084,9 @@ def monitor_and_adjust_active_period(
 
             override = {"charge": state.schedule.get("charge", []), "discharge": reduced}
             _publish_schedule(mqtt_client, override, is_dry_run, state=state)
+            # Reset commanded power so adaptive recalculates from sensor
+            # after the reduction clears
+            state.last_commanded_power = None
             status_msg = build_status_message(
                 price_range, False, True, None, None, temperature,
                 reduced=True, pause_reason=", ".join(reduce_reasons),
@@ -1172,7 +1176,19 @@ def monitor_and_adjust_active_period(
         active_period = next((p for p in discharge_periods if _is_period_active(p, now)), None)
         
         scheduled_power = int(active_period.get("power", 0)) if active_period else 0
-        current_power = int(batt_power) if batt_power is not None else scheduled_power
+        adaptive_grace = config["timing"].get("adaptive_power_grace_seconds", 60)
+
+        # Use the last commanded power if a recent adjustment was made,
+        # because the battery sensor lags behind the commanded value
+        # and causes overshoot oscillation.
+        if (
+            state.last_commanded_power is not None
+            and state.last_power_adjustment is not None
+            and (now - state.last_power_adjustment).total_seconds() < adaptive_grace * 2
+        ):
+            current_power = state.last_commanded_power
+        else:
+            current_power = int(batt_power) if batt_power is not None else scheduled_power
 
         effective_range = price_range
         if (
@@ -1186,7 +1202,6 @@ def monitor_and_adjust_active_period(
         min_scaled_power = config["power"].get(
             "min_scaled_power", config["power"]["min_discharge_power"]
         )
-        adaptive_grace = config["timing"].get("adaptive_power_grace_seconds", 60)
 
         target_power: Optional[int] = None
         if effective_range == "discharge" and export_curve:
@@ -1233,6 +1248,7 @@ def monitor_and_adjust_active_period(
                 override = {"charge": state.schedule.get("charge", []), "discharge": updated}
                 _publish_schedule(mqtt_client, override, is_dry_run, state=state)
                 state.last_power_adjustment = now
+                state.last_commanded_power = target_power
                 update_entity(
                     mqtt_client,
                     ENTITY_CURRENT_ACTION,
