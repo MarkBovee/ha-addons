@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.18
+- **Fix: Adaptive export hang** — Allow adaptive discharge to manage grid export instead of forcing reduced discharge in adaptive mode.
+
 ## 0.8.17
 - **Feature: Last commanded power sensor** — Expose the last commanded adaptive discharge power as a MQTT Discovery sensor for dashboard visibility.
 

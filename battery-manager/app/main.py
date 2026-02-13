@@ -1010,7 +1010,7 @@ def monitor_and_adjust_active_period(
             should_pause = True
             pause_reasons.append(f"EV Charging >{ev_threshold}W")
 
-    if should_reduce_discharge(grid_power, threshold=500):
+    if price_range != "adaptive" and should_reduce_discharge(grid_power, threshold=500):
         reduce_discharge = True
         reduce_reasons.append("High Grid Export")
 
