@@ -2,6 +2,13 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.16] - 2026-02-13
+
+### Fixed
+- Suppressed MQTT disconnect error spam when broker temporarily disconnects
+  - Now logs single warning instead of multiple ERROR lines during auto-reconnect
+  - MQTT client automatically reconnects within ~1 second
+
 ## [0.2.15] - 2025-11-29
 
 ### Changed
