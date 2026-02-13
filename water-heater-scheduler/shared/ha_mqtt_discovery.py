@@ -219,6 +219,7 @@ class MqttDiscovery:
         self._client: Optional[mqtt.Client] = None
         self._connected = False
         self._published_entities: List[str] = []
+        self._disconnect_warned = False
     
     @property
     def device_info(self) -> Dict[str, Any]:
@@ -271,6 +272,7 @@ class MqttDiscovery:
         if reason_code == 0 or (hasattr(reason_code, 'is_failure') and not reason_code.is_failure):
             logger.info("Connected to MQTT broker at %s:%d", self.mqtt_host, self.mqtt_port)
             self._connected = True
+            self._disconnect_warned = False
             
             # Re-subscribe to all command topics on reconnection
             # This is needed because subscriptions don't persist across disconnects
@@ -360,7 +362,10 @@ class MqttDiscovery:
             True if published successfully
         """
         if not self.is_connected():
-            logger.error("Cannot publish: not connected to MQTT broker")
+            # Only warn once per disconnect to avoid spam during reconnection
+            if not self._disconnect_warned:
+                logger.warning("Cannot publish: not connected to MQTT broker (auto-reconnecting)")
+                self._disconnect_warned = True
             return False
         
         try:
