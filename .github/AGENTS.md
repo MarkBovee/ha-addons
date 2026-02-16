@@ -20,6 +20,15 @@ This workspace uses a multi-agent setup for Home Assistant add-on development an
 - `GPT-5.3-Codex`: Orchestrator, Python Developer, HA Debugger
 - `GPT-5 mini`: Planner, Tester, Reviewer, Docs Writer, Add-on Packager, OpenSpec Manager, Shared Module Manager
 
+## Execution Mode (Latency-Aware)
+
+- **Default mode: direct-first.** For most bug fixes and HA diagnostics, use local tools directly
+  (workspace search, file reads, terminal, HA API calls) instead of delegating to subagents.
+- **Use subagents for complex or parallel work only** (multi-lane features, broad audits,
+  or explicit user request).
+- **Timeout fallback:** if a delegated lane is slow or times out, continue in direct-first mode
+  instead of repeating the same delegation pattern.
+
 ## Standard Development Flows
 
 ### New Feature Flow
@@ -68,7 +77,7 @@ Use this mode when you want behavior closest to Claude agent teams.
 
 ### 2. Delegate-First Execution
 - `Orchestrator` stays coordination-only until all lane outputs return
-- Independent lanes run in parallel via subagents
+- Independent lanes can run in parallel via subagents when latency is acceptable
 - Dependent work remains sequential with explicit handoff notes
 
 ### 3. Teammate Contract
@@ -269,8 +278,9 @@ User: Create vacation-mode add-on for security
 2. **Use appropriate flow**: Choose the right prompt for your task type
 3. **Provide context**: Mention if it's a new capability (needs OpenSpec) or bug fix (fast track)
 4. **Enable HA Debugger**: Set environment variables if you need live HA diagnosis
-5. **Trust the process**: Let `Orchestrator` coordinate, don't micromanage individual agents
-6. **Review quality gates**: Check that all mandatory gates pass before considering work complete
+5. **Choose speed when needed**: Ask for direct-first execution when troubleshooting live issues
+6. **Trust the process**: Let `Orchestrator` coordinate, don't micromanage individual agents
+7. **Review quality gates**: Check that all mandatory gates pass before considering work complete
 
 ## Troubleshooting
 
