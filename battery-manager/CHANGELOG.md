@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.19
+- **Fix: SAJ schedule overlap prevention** — When publishing to `battery-api`, only local-today windows are sent and duplicate/overlapping `HH:MM` periods are sanitized. This prevents collisions like `discharge[0]` vs `discharge[4]` at the same clock time when tomorrow windows exist.
+
 ## 0.8.18
 - **Fix: Adaptive export hang** — Allow adaptive discharge to manage grid export instead of forcing reduced discharge in adaptive mode.
 

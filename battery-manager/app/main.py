@@ -230,23 +230,102 @@ def _duration_minutes(period: Dict[str, Any], fallback: int) -> int:
 
 
 def _format_schedule_for_api(schedule: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert internal ISO schedule to API format (HH:MM)."""
-    output = {}
+    """Convert internal ISO schedule to API format (HH:MM).
+
+    SAJ schedule slots are time-of-day based (no date). To avoid collisions,
+    only periods for the local current date are published to battery-api.
+    """
+
+    def _parse_start_local(start_value: Any) -> tuple[str | None, datetime | None]:
+        if not isinstance(start_value, str) or not start_value:
+            return None, None
+
+        # Already in HH:MM format
+        if len(start_value) == 5 and start_value[2] == ":":
+            try:
+                int(start_value[:2])
+                int(start_value[3:])
+                return start_value, None
+            except (TypeError, ValueError):
+                return None, None
+
+        try:
+            parsed = isoparse(start_value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            local_dt = parsed.astimezone()
+            return local_dt.strftime("%H:%M"), local_dt
+        except Exception:
+            return None, None
+
+    def _minutes_of_day(hhmm: str) -> int:
+        return int(hhmm[:2]) * 60 + int(hhmm[3:])
+
+    def _sanitize_periods(periods: List[Dict[str, Any]], period_type: str) -> List[Dict[str, Any]]:
+        dedup: Dict[str, Dict[str, Any]] = {}
+
+        # Keep latest entry per start time, then remove overlaps.
+        for period in periods:
+            dedup[period["start"]] = period
+
+        sorted_periods = sorted(dedup.values(), key=lambda item: _minutes_of_day(item["start"]))
+
+        sanitized: List[Dict[str, Any]] = []
+        last_end = -1
+        for period in sorted_periods:
+            start_min = _minutes_of_day(period["start"])
+            end_min = min(start_min + int(period["duration"]), 24 * 60)
+            if end_min <= start_min:
+                continue
+
+            if start_min < last_end:
+                logger.warning(
+                    "Skipping overlapping %s period for battery-api payload: %s +%sm",
+                    period_type,
+                    period["start"],
+                    period["duration"],
+                )
+                continue
+
+            sanitized.append(period)
+            last_end = end_min
+
+        return sanitized
+
+    output: Dict[str, List[Dict[str, Any]]] = {"charge": [], "discharge": []}
+    local_today = datetime.now().astimezone().date()
+
     for key in ["charge", "discharge"]:
-        if key in schedule:
-            periods = []
-            for p in schedule[key]:
-                entry = dict(p)
-                start_val = entry.get("start")
-                if start_val:
-                    try:
-                        # Parse and format to HH:MM
-                        dt = isoparse(start_val)
-                        entry["start"] = dt.strftime("%H:%M")
-                    except Exception:
-                        pass  # Keep original if parse fails
-                periods.append(entry)
-            output[key] = periods
+        raw_periods = schedule.get(key, [])
+        prepared: List[Dict[str, Any]] = []
+
+        for raw in raw_periods:
+            entry = dict(raw)
+            start_hhmm, local_dt = _parse_start_local(entry.get("start"))
+            if not start_hhmm:
+                continue
+
+            # For ISO schedules, keep only local-today windows.
+            if local_dt is not None and local_dt.date() != local_today:
+                continue
+
+            try:
+                duration = int(entry.get("duration", 0))
+                power = int(entry.get("power", 0))
+            except (TypeError, ValueError):
+                continue
+
+            if duration <= 0:
+                continue
+
+            prepared.append({
+                "start": start_hhmm,
+                "power": power,
+                "duration": duration,
+            })
+
+        output[key] = _sanitize_periods(prepared, key)
+
     return output
 
 
