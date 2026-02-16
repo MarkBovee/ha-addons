@@ -46,6 +46,21 @@ Skip formal planning for single-file bug fixes, typos, or simple config changes.
 
 ---
 
+## Subagent Performance Policy
+
+Use subagents selectively to avoid latency and timeout issues.
+
+- Prefer **direct local execution first** (workspace search, file reads, terminal/API calls)
+	for bug fixes, log analysis, and targeted refactors.
+- Use subagents only when work is truly parallel or the user explicitly asks for a
+	specialized agent flow.
+- If a subagent call is slow or times out once, fall back to direct execution instead
+	of retrying the same delegation pattern.
+- For Home Assistant diagnostics, query the HA API and local repo directly before
+	escalating to multi-agent orchestration.
+
+---
+
 ## Step 3: Implement
 
 - Follow coding standards in `coding.instructions.md`
