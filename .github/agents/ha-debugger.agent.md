@@ -11,6 +11,9 @@ Debug flow: connect -> collect data -> analyze -> identify root cause -> suggest
 
 ## Connection Methods
 
+All credentials and connection details are stored in environment variables or configuration files. 
+These are stored in the `.env` file in the root directory. You can make use of the scripts in the `scripts/` directory to help with debugging.
+
 ### 1. Home Assistant REST API
 Use `shared/ha_api.py` module or direct `curl`/`requests`:
 ```bash
