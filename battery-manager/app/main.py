@@ -856,6 +856,8 @@ def generate_schedule(
 
     charge_schedule: List[Dict[str, Any]] = []
     discharge_schedule: List[Dict[str, Any]] = []
+    scheduled_discharge_windows = 0
+    scheduled_adaptive_windows = 0
 
     if precharge_until is not None:
         precharge_minutes = int((precharge_until - interval_start).total_seconds() / 60)
@@ -864,6 +866,7 @@ def generate_schedule(
                 "start": interval_start.isoformat(),
                 "power": config["power"]["max_charge_power"],
                 "duration": precharge_minutes,
+                "window_type": "precharge",
             })
 
     if not skip_charge:
@@ -883,6 +886,8 @@ def generate_schedule(
                 "start": effective_start.isoformat(),
                 "power": charge_power,
                 "duration": duration,
+                "window_type": "charge",
+                "price": round(float(window.get("avg_price", 0.0)), 4),
             })
 
     # Combine discharge + adaptive windows into discharge periods
@@ -916,7 +921,13 @@ def generate_schedule(
             "start": effective_start.isoformat(),
             "power": power,
             "duration": duration,
+            "window_type": window_type,
+            "price": round(float(window.get("avg_price", 0.0)), 4),
         })
+        if window_type == "discharge":
+            scheduled_discharge_windows += 1
+        else:
+            scheduled_adaptive_windows += 1
 
     if not charge_schedule and not discharge_schedule:
         if price_range == "passive":
@@ -928,16 +939,52 @@ def generate_schedule(
     published = _publish_schedule(mqtt_client, schedule, is_dry_run, state=state, force=True)
     if not published and not is_dry_run:
         logger.warning("⚠️ Schedule was NOT delivered to battery-api — will retry next cycle")
+    api_payload = _format_schedule_for_api(schedule)
+    api_charge_count = len(api_payload.get("charge", []))
+    api_discharge_count = len(api_payload.get("discharge", []))
     logger.info(
-        "✅ Multi-period schedule: %s range, charge=%d discharge=%d",
+        "✅ Multi-period schedule: %s range | internal charge=%d discharge=%d adaptive=%d | api(local-day) charge=%d discharge=%d",
         price_range,
         len(schedule["charge"]),
-        len(schedule["discharge"]),
+        scheduled_discharge_windows,
+        scheduled_adaptive_windows,
+        api_charge_count,
+        api_discharge_count,
     )
     for i, p in enumerate(schedule["charge"]):
-        logger.info("   charge[%d]: %s %dW %dm", i, p["start"], p["power"], p["duration"])
+        window_type = p.get("window_type", "charge")
+        price = p.get("price")
+        if price is None:
+            logger.info(
+                "   charge[%d] (%s): %s %dW %dm",
+                i,
+                window_type,
+                p["start"],
+                p["power"],
+                p["duration"],
+            )
+        else:
+            logger.info(
+                "   charge[%d] (%s): %s %dW %dm @€%.3f",
+                i,
+                window_type,
+                p["start"],
+                p["power"],
+                p["duration"],
+                float(price),
+            )
     for i, p in enumerate(schedule["discharge"]):
-        logger.info("   discharge[%d]: %s %dW %dm", i, p["start"], p["power"], p["duration"])
+        window_type = p.get("window_type", "discharge")
+        price = p.get("price")
+        logger.info(
+            "   %s[%d]: %s %dW %dm%s",
+            window_type,
+            i,
+            p["start"],
+            p["power"],
+            p["duration"],
+            f" @€{float(price):.3f}" if price is not None else "",
+        )
 
     action_labels = {
         "load": f"Charging {charge_power}W",

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.22
+- **Fix: Schedule logging clarity** — Schedule summaries now clearly separate internal windows from API local-day payload counts.
+- **Fix: Window type visibility** — Logged schedule lines now tag each period as `charge`, `discharge`, `adaptive`, or `precharge`, with source price shown when available.
+
 ## 0.8.21
 - **Feature: 10% sell-buffer rounding** — Dynamic sell-buffer SOC is now rounded to configurable 10% steps by default (`soc.sell_buffer_rounding_step_pct: 10`), matching practical targets like 50% for 1h and 80% for 2h.
 
