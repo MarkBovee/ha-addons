@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.21
+- **Feature: 10% sell-buffer rounding** — Dynamic sell-buffer SOC is now rounded to configurable 10% steps by default (`soc.sell_buffer_rounding_step_pct: 10`), matching practical targets like 50% for 1h and 80% for 2h.
+
+## 0.8.20
+- **Feature: Dynamic pre-sell SOC buffer** — Added sell-buffer SOC calculation based on planned discharge hours before the first main charge window.
+- **Feature: Automatic pre-charge for buffer** — When SOC is below required sell-buffer target, battery-manager schedules an early 8000W pre-charge window to rebuild reserve.
+- **Feature: Runtime SOC protection update** — Active discharge now respects dynamic sell-buffer SOC floor in addition to existing minimum SOC and conservative rules.
+- **Config: New SOC options** — Added `soc.battery_capacity_kwh`, `soc.sell_buffer_enabled`, and `soc.sell_buffer_min_soc`.
+
 ## 0.8.19
 - **Fix: SAJ schedule overlap prevention** — When publishing to `battery-api`, only local-today windows are sent and duplicate/overlapping `HH:MM` periods are sanitized. This prevents collisions like `discharge[0]` vs `discharge[4]` at the same clock time when tomorrow windows exist.
 

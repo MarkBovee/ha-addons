@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.19"
+version: "0.8.21"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -48,6 +48,10 @@ options:
     conservative_soc: 40
     target_eod_soc: 20
     max_soc: 100
+    battery_capacity_kwh: 25
+    sell_buffer_enabled: true
+    sell_buffer_min_soc: 20
+    sell_buffer_rounding_step_pct: 10
 
   adaptive:
     enabled: true
@@ -120,6 +124,10 @@ schema:
     conservative_soc: int(0,100)
     target_eod_soc: int(0,100)
     max_soc: int(0,100)
+    battery_capacity_kwh: int(1,200)
+    sell_buffer_enabled: bool?
+    sell_buffer_min_soc: int(0,100)
+    sell_buffer_rounding_step_pct: int(0,50)
 
   adaptive:
     enabled: bool?

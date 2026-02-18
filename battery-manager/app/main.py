@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -30,7 +31,7 @@ from .price_analyzer import (
 )
 from .solar_monitor import SolarMonitor
 from .gap_scheduler import GapScheduler
-from .soc_guardian import can_charge, can_discharge
+from .soc_guardian import calculate_sell_buffer_soc, can_charge, can_discharge
 from .temperature_advisor import get_discharge_hours
 from .status_reporter import (
     ENTITY_CHARGE_SCHEDULE,
@@ -99,7 +100,15 @@ DEFAULT_CONFIG = {
         "entry_threshold": 1000,
         "exit_threshold": 200,
     },
-    "soc": {"min_soc": 5, "conservative_soc": 40, "target_eod_soc": 20, "max_soc": 100},
+    "soc": {
+        "min_soc": 5,
+        "conservative_soc": 40,
+        "target_eod_soc": 20,
+        "max_soc": 100,
+        "battery_capacity_kwh": 25,
+        "sell_buffer_enabled": True,
+        "sell_buffer_min_soc": 20,
+    },
     "heuristics": {
         "charging_price_threshold": 0.26,
         "top_x_charge_hours": 3,
@@ -146,6 +155,8 @@ class RuntimeState:
     last_price_range: Optional[str] = None
     last_published_payload: Optional[str] = None
     last_monitor_status: Optional[str] = None
+    sell_buffer_required_soc: Optional[float] = None
+    sell_buffer_discharge_hours: float = 0.0
 
 
 def _load_config() -> Dict[str, Any]:
@@ -532,6 +543,72 @@ def _is_period_active(period: Dict[str, Any], now: datetime) -> bool:
         return False
 
 
+def _sum_discharge_hours_before_main_charge(
+    discharge_windows: List[Dict[str, Any]],
+    main_charge_start: datetime,
+    now: datetime,
+) -> float:
+    """Return total discharge hours between now and the main charge start."""
+
+    total_hours = 0.0
+    for window in discharge_windows:
+        start_dt = window.get("start")
+        end_dt = window.get("end")
+        if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime):
+            continue
+        if start_dt >= main_charge_start:
+            continue
+
+        effective_start = max(start_dt, now)
+        effective_end = min(end_dt, main_charge_start)
+        if effective_end <= effective_start:
+            continue
+
+        total_hours += (effective_end - effective_start).total_seconds() / 3600.0
+
+    return total_hours
+
+
+def _calculate_dynamic_sell_buffer_soc(
+    windows: Dict[str, List[Dict[str, Any]]],
+    now: datetime,
+    config: Dict[str, Any],
+) -> tuple[Optional[float], float, Optional[datetime]]:
+    """Calculate required SOC buffer for discharge windows before the first charge window."""
+
+    soc_cfg = config.get("soc", {})
+    if not soc_cfg.get("sell_buffer_enabled", True):
+        return None, 0.0, None
+
+    future_charge_windows = sorted(
+        [w for w in windows.get("charge", []) if w.get("end") and w["end"] > now],
+        key=lambda w: w["start"],
+    )
+    if not future_charge_windows:
+        return None, 0.0, None
+
+    main_charge_start = future_charge_windows[0]["start"]
+    discharge_hours = _sum_discharge_hours_before_main_charge(
+        windows.get("discharge", []),
+        main_charge_start,
+        now,
+    )
+
+    if discharge_hours <= 0:
+        return None, 0.0, main_charge_start
+
+    required_soc = calculate_sell_buffer_soc(
+        discharge_hours_before_main_charge=discharge_hours,
+        safety_min_soc=float(soc_cfg.get("sell_buffer_min_soc", 20)),
+        discharge_power_watts=float(config["power"].get("max_discharge_power", 8000)),
+        battery_capacity_kwh=float(soc_cfg.get("battery_capacity_kwh", 25)),
+        floor_soc=float(soc_cfg.get("min_soc", 5)),
+        rounding_step_pct=float(soc_cfg.get("sell_buffer_rounding_step_pct", 10)),
+    )
+
+    return required_soc, discharge_hours, main_charge_start
+
+
 
 
 def generate_schedule(
@@ -736,11 +813,62 @@ def generate_schedule(
         adaptive_enabled=adaptive_enabled,
     )
 
+    buffer_required_soc, buffer_discharge_hours, main_charge_start = _calculate_dynamic_sell_buffer_soc(
+        upcoming_windows,
+        now,
+        config,
+    )
+
+    if state:
+        state.sell_buffer_required_soc = buffer_required_soc
+        state.sell_buffer_discharge_hours = buffer_discharge_hours
+
+    precharge_until: Optional[datetime] = None
+    if (
+        soc is not None
+        and buffer_required_soc is not None
+        and soc < buffer_required_soc
+        and not skip_charge
+    ):
+        capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
+        charge_power_watts = float(config["power"].get("max_charge_power", 8000))
+        soc_per_hour_charge = max(0.0, (charge_power_watts / 1000.0) / max(capacity_kwh, 0.1) * 100.0)
+        if soc_per_hour_charge > 0:
+            deficit_soc = buffer_required_soc - soc
+            required_minutes = int(math.ceil((deficit_soc / soc_per_hour_charge) * 60.0))
+            if required_minutes > 0:
+                precharge_until = interval_start + timedelta(minutes=required_minutes)
+                logger.info(
+                    "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min until %s",
+                    soc,
+                    buffer_required_soc,
+                    required_minutes,
+                    precharge_until.astimezone().strftime("%H:%M"),
+                )
+
+    if buffer_required_soc is not None and main_charge_start is not None:
+        logger.info(
+            "🧮 Sell buffer target %.1f%% for %.2fh discharge before main charge at %s",
+            buffer_required_soc,
+            buffer_discharge_hours,
+            main_charge_start.astimezone().strftime("%H:%M"),
+        )
+
     charge_schedule: List[Dict[str, Any]] = []
     discharge_schedule: List[Dict[str, Any]] = []
 
+    if precharge_until is not None:
+        precharge_minutes = int((precharge_until - interval_start).total_seconds() / 60)
+        if precharge_minutes > 0:
+            charge_schedule.append({
+                "start": interval_start.isoformat(),
+                "power": config["power"]["max_charge_power"],
+                "duration": precharge_minutes,
+            })
+
     if not skip_charge:
-        for window in upcoming_windows["charge"][:MAX_CHARGE_PERIODS]:
+        remaining_charge_slots = max(0, MAX_CHARGE_PERIODS - len(charge_schedule))
+        for window in upcoming_windows["charge"][:remaining_charge_slots]:
             start_dt = window["start"]
             end_dt = window["end"]
             # Skip windows that have already ended
@@ -769,12 +897,16 @@ def generate_schedule(
     # Sort by start time so we pick the earliest windows first
     all_discharge_windows.sort(key=lambda x: x[1]["start"])
 
+    discharge_not_before = interval_start
+    if precharge_until is not None:
+        discharge_not_before = max(discharge_not_before, precharge_until)
+
     for window_type, window in all_discharge_windows[:MAX_DISCHARGE_PERIODS]:
         start_dt = window["start"]
         end_dt = window["end"]
         if end_dt <= now:
             continue
-        effective_start = max(start_dt, interval_start)
+        effective_start = max(start_dt, discharge_not_before)
         duration = int((end_dt - effective_start).total_seconds() / 60)
         if duration <= 0:
             continue
@@ -1095,11 +1227,18 @@ def monitor_and_adjust_active_period(
 
     if soc is not None:
         min_soc = config["soc"]["min_soc"]
+        dynamic_buffer_soc = state.sell_buffer_required_soc
+        effective_min_soc = max(min_soc, dynamic_buffer_soc) if dynamic_buffer_soc is not None else min_soc
         conservative_soc = config["soc"]["conservative_soc"]
         is_conservative = price_range != "discharge"
-        if not can_discharge(soc, min_soc, conservative_soc, is_conservative):
+        if not can_discharge(soc, effective_min_soc, conservative_soc, is_conservative):
             should_pause = True
-            pause_reasons.append(f"SOC protection ({soc}%)")
+            if dynamic_buffer_soc is not None and effective_min_soc > min_soc:
+                pause_reasons.append(
+                    f"SOC sell-buffer protection ({soc:.1f}% < {effective_min_soc:.1f}%)"
+                )
+            else:
+                pause_reasons.append(f"SOC protection ({soc:.1f}%)")
 
     status_parts = []
     if active_charge:

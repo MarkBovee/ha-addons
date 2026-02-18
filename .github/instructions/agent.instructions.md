@@ -2,125 +2,49 @@
 applyTo: '**'
 ---
 
-# Agent Workflow
+# Agent Workflow (Lean)
 
-Rules for AI assistants working in this repository. Follow these steps for every task.
+Use this workflow for all tasks in this repository.
 
----
+## 1) Branch Safety
 
-## Step 0: Branch First
+- Never work on `master`.
+- Use branch patterns:
+  - Feature: `feature/[name]`
+  - Bug fix: `fix/[name]`
+  - Refactor: `refactor/[name]`
+  - Docs: `docs/[name]`
 
-**Never work on `master` directly.** Before writing any code:
+## 2) Direct-First Execution
 
-| Change Type | Branch Pattern | Example |
-|-------------|---------------|---------|
-| New feature / breaking change | `feature/[name]` | `feature/add-solar-forecast` |
-| Bug fix | `fix/[name]` | `fix/grace-period-calculation` |
-| Refactor | `refactor/[name]` | `refactor/price-calc` |
-| Documentation | `docs/[name]` | `docs/update-readme` |
+- `Orchestrator` handles work directly by default.
+- Delegate only when specialized help is required or parallel lanes clearly save time.
+- If a delegated lane is slow, fall back to direct execution.
 
-If a related branch already exists, reuse it.
+## 3) Keep It Tight
 
-**New features and breaking changes** also require an OpenSpec change proposal - see `openspec.instructions.md`.
+- Read only files needed for the task.
+- Make minimal, focused edits.
+- Do not add progress/report files.
 
----
+## 4) Plan Only When Needed
 
-## Step 1: Understand Before Changing
+Create a formal plan for non-trivial, multi-step work. For simple fixes, execute directly.
 
-- Read the files you plan to modify
-- Check `openspec/specs/` for related specifications
-- Check `openspec/changes/` for in-flight proposals that might conflict
-- If requirements are ambiguous, ask the user before proceeding
+## 5) Verify
 
----
+- Run targeted validation first, then broader checks if needed.
+- Report what was run and the outcome.
 
-## Step 2: Plan (for non-trivial work)
+## 6) Document Impact
 
-For multi-step tasks:
-1. Define what done looks like (testable success criteria)
-2. Identify risks and dependencies
-3. Break work into concrete tasks
-4. For OpenSpec changes: create `proposal.md` and `tasks.md`
+When behavior/config/version changes:
 
-Skip formal planning for single-file bug fixes, typos, or simple config changes.
+- Update add-on `README.md` if user-facing behavior changed.
+- Update `config.yaml` if options changed.
+- Update add-on `CHANGELOG.md` where applicable.
 
----
+## 7) OpenSpec Rule
 
-## Subagent Performance Policy
-
-Use subagents selectively to avoid latency and timeout issues.
-
-- Prefer **direct local execution first** (workspace search, file reads, terminal/API calls)
-	for bug fixes, log analysis, and targeted refactors.
-- Use subagents only when work is truly parallel or the user explicitly asks for a
-	specialized agent flow.
-- If a subagent call is slow or times out once, fall back to direct execution instead
-	of retrying the same delegation pattern.
-- For Home Assistant diagnostics, query the HA API and local repo directly before
-	escalating to multi-agent orchestration.
-
----
-
-## Step 3: Implement
-
-- Follow coding standards in `coding.instructions.md`
-- Write complete, working code - no placeholders or TODOs
-- Build and test as you go
-- For OpenSpec changes: update `tasks.md` progress as you complete tasks
-
----
-
-## Step 4: Verify
-
-- [ ] Code compiles / runs without errors
-- [ ] All existing tests still pass
-- [ ] New functionality is tested
-- [ ] For OpenSpec changes: `openspec validate [change-id] --strict` passes
-
----
-
-## Step 5: Document
-
-Before committing, update documentation affected by your changes:
-
-- [ ] `README.md` (root or addon-level) if user-facing behavior changed
-- [ ] `config.yaml` if new options were added
-- [ ] `CHANGELOG.md` for the affected addon
-- [ ] For OpenSpec changes: update `proposal.md` status and `tasks.md` checkboxes
-- [ ] Verify no temporary report files exist (see `documentation.instructions.md`)
-
----
-
-## Step 6: Commit
-
-Use conventional commit messages:
-
-```
-feat(energy-prices): add solar bonus calculation
-fix(battery-manager): prevent rapid charge cycling
-docs(readme): update addon list with battery-api
-refactor(shared): extract MQTT retry logic
-```
-
-Include what changed and why. Reference issues or OpenSpec changes when relevant.
-
----
-
-## File Rules
-
-**Never create these files:**
-- `*_REPORT.md`, `*_SUMMARY.md`, `*_COMPLETE.md`, `PROGRESS_*.md`, `PHASE_*.md`
-- Progress goes in `tasks.md` checkboxes; status goes in `proposal.md`; history goes in git commits
-
-**OpenSpec change folders may only contain:**
-- `proposal.md` (required), `tasks.md` (required), `design.md` (optional), `specs/` (required)
-
----
-
-## Commit Checklist (Quick Reference)
-
-- [ ] On a non-master branch
-- [ ] Code works and tests pass
-- [ ] Documentation updated
-- [ ] No temporary/report files created
-- [ ] Commit message follows `type(scope): description` format
+OpenSpec proposal required for new capabilities and breaking changes.
+Skip OpenSpec for bug fixes, typos, formatting, and non-breaking maintenance.

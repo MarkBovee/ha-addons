@@ -45,6 +45,10 @@ Key options (defaults in config.yaml):
 - **soc.conservative_soc**: conservative SOC threshold (%)
 - **soc.target_eod_soc**: end-of-day target SOC (%)
 - **soc.max_soc**: max SOC allowed for charging
+- **soc.battery_capacity_kwh**: battery usable capacity used for buffer calculation (kWh)
+- **soc.sell_buffer_enabled**: keep dynamic SOC reserve for discharge windows before main charge window
+- **soc.sell_buffer_min_soc**: safety minimum SOC floor for sell-buffer logic (%)
+- **soc.sell_buffer_rounding_step_pct**: round calculated sell-buffer SOC to nearest step (default 10%)
 - **heuristics.top_x_charge_hours**: cheapest periods to charge
 - **heuristics.top_x_discharge_hours**: most expensive periods to discharge
 - **passive_solar.enabled**: enable 0W charge gap on excess solar
