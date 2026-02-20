@@ -49,6 +49,7 @@ Key options (defaults in config.yaml):
 - **soc.sell_buffer_enabled**: keep dynamic SOC reserve for discharge windows before main charge window
 - **soc.sell_buffer_min_soc**: safety minimum SOC floor for sell-buffer logic (%)
 - **soc.sell_buffer_rounding_step_pct**: round calculated sell-buffer SOC to nearest step (default 10%)
+- **soc.sell_buffer_activation_hours_before_sell**: only activate sell-buffer/precharge this many hours before first planned sell window (default 3)
 - **heuristics.top_x_charge_hours**: cheapest periods to charge
 - **heuristics.top_x_discharge_hours**: most expensive periods to discharge
 - **passive_solar.enabled**: enable 0W charge gap on excess solar

@@ -108,6 +108,7 @@ DEFAULT_CONFIG = {
         "battery_capacity_kwh": 25,
         "sell_buffer_enabled": True,
         "sell_buffer_min_soc": 20,
+        "sell_buffer_activation_hours_before_sell": 3,
     },
     "heuristics": {
         "charging_price_threshold": 0.26,
@@ -588,6 +589,33 @@ def _calculate_dynamic_sell_buffer_soc(
         return None, 0.0, None
 
     main_charge_start = future_charge_windows[0]["start"]
+
+    lead_hours_before_sell = max(
+        0.0,
+        float(soc_cfg.get("sell_buffer_activation_hours_before_sell", 3)),
+    )
+    relevant_discharge_windows = sorted(
+        [
+            w for w in windows.get("discharge", [])
+            if w.get("end") and w["end"] > now and w.get("start") and w["start"] < main_charge_start
+        ],
+        key=lambda w: w["start"],
+    )
+    if relevant_discharge_windows:
+        first_discharge_start = relevant_discharge_windows[0]["start"]
+        hours_until_first_discharge = max(
+            0.0,
+            (first_discharge_start - now).total_seconds() / 3600.0,
+        )
+        if hours_until_first_discharge > lead_hours_before_sell:
+            logger.info(
+                "🕒 Sell-buffer deferred: first sell window at %s (in %.2fh), activation window %.2fh",
+                first_discharge_start.astimezone().strftime("%H:%M"),
+                hours_until_first_discharge,
+                lead_hours_before_sell,
+            )
+            return None, 0.0, main_charge_start
+
     discharge_hours = _sum_discharge_hours_before_main_charge(
         windows.get("discharge", []),
         main_charge_start,
@@ -824,27 +852,39 @@ def generate_schedule(
         state.sell_buffer_discharge_hours = buffer_discharge_hours
 
     precharge_until: Optional[datetime] = None
+    precharge_price_ceiling: Optional[float] = charging_price_threshold
+    if precharge_price_ceiling is None and load_range is not None:
+        precharge_price_ceiling = load_range.max_price
+
     if (
         soc is not None
         and buffer_required_soc is not None
         and soc < buffer_required_soc
         and not skip_charge
     ):
-        capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
-        charge_power_watts = float(config["power"].get("max_charge_power", 8000))
-        soc_per_hour_charge = max(0.0, (charge_power_watts / 1000.0) / max(capacity_kwh, 0.1) * 100.0)
-        if soc_per_hour_charge > 0:
-            deficit_soc = buffer_required_soc - soc
-            required_minutes = int(math.ceil((deficit_soc / soc_per_hour_charge) * 60.0))
-            if required_minutes > 0:
-                precharge_until = interval_start + timedelta(minutes=required_minutes)
-                logger.info(
-                    "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min until %s",
-                    soc,
-                    buffer_required_soc,
-                    required_minutes,
-                    precharge_until.astimezone().strftime("%H:%M"),
-                )
+        # Prevent emergency precharge from buying at expensive prices.
+        if precharge_price_ceiling is not None and import_price > precharge_price_ceiling:
+            logger.warning(
+                "🚫 Skipping pre-sell precharge: current price €%.3f above ceiling €%.3f",
+                import_price,
+                precharge_price_ceiling,
+            )
+        else:
+            capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
+            charge_power_watts = float(config["power"].get("max_charge_power", 8000))
+            soc_per_hour_charge = max(0.0, (charge_power_watts / 1000.0) / max(capacity_kwh, 0.1) * 100.0)
+            if soc_per_hour_charge > 0:
+                deficit_soc = buffer_required_soc - soc
+                required_minutes = int(math.ceil((deficit_soc / soc_per_hour_charge) * 60.0))
+                if required_minutes > 0:
+                    precharge_until = interval_start + timedelta(minutes=required_minutes)
+                    logger.info(
+                        "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min until %s",
+                        soc,
+                        buffer_required_soc,
+                        required_minutes,
+                        precharge_until.astimezone().strftime("%H:%M"),
+                    )
 
     if buffer_required_soc is not None and main_charge_start is not None:
         logger.info(

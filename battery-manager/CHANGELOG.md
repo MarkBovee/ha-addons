@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.24
+- **Fix: Sell-buffer timing gate** — Dynamic sell-buffer SOC/precharge now activates only within a configurable lead window before the first planned sell/discharge period (`soc.sell_buffer_activation_hours_before_sell`, default 3h), instead of reacting all day.
+
+## 0.8.23
+- **Fix: Precharge price safety** — Dynamic sell-buffer precharge is now blocked when current import price is above the configured charging threshold (fallback: load-range max), preventing high-price emergency charging windows.
+
 ## 0.8.22
 - **Fix: Schedule logging clarity** — Schedule summaries now clearly separate internal windows from API local-day payload counts.
 - **Fix: Window type visibility** — Logged schedule lines now tag each period as `charge`, `discharge`, `adaptive`, or `precharge`, with source price shown when available.
