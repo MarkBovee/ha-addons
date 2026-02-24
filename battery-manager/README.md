@@ -55,6 +55,7 @@ Key options (defaults in config.yaml):
 - **passive_solar.enabled**: enable 0W charge gap on excess solar
 - **passive_solar.entry_threshold**: grid export threshold to enter passive mode (W, default 1000)
 - **passive_solar.exit_threshold**: grid import threshold to exit passive mode (W, default 200)
+- **passive_solar.min_solar_entry_power**: minimum solar generation required to enter passive mode (W, default 200)
 - **heuristics.charging_price_threshold**: price below which battery stays idle (passive range, EUR/kWh)
 - **heuristics.min_profit_threshold**: minimum spread between load and discharge prices (EUR/kWh)
 - **heuristics.overnight_wait_threshold**: evening vs overnight price gap to wait for cheaper charging (EUR/kWh)

@@ -99,6 +99,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "entry_threshold": 1000,
         "exit_threshold": 200,
+        "min_solar_entry_power": 200,
     },
     "soc": {
         "min_soc": 5,
@@ -1241,8 +1242,12 @@ def monitor_and_adjust_active_period(
         charging_price_threshold,
         adaptive_enabled=adaptive_enabled,
     )
+    runtime_price_range = price_range
+    conservative_soc = config["soc"]["conservative_soc"]
+    if soc is not None and soc <= conservative_soc and runtime_price_range == "discharge":
+        runtime_price_range = "adaptive"
 
-    if state.last_price_range != price_range:
+    if state.last_price_range != runtime_price_range:
         price_ranges_text = build_price_ranges_display(
             load_range, discharge_range, adaptive_range,
             charging_price_threshold,
@@ -1270,23 +1275,23 @@ def monitor_and_adjust_active_period(
         update_entity(
             mqtt_client,
             ENTITY_MODE,
-            price_range,
+            runtime_price_range,
             dry_run=is_dry_run,
         )
-        state.last_price_range = price_range
+        state.last_price_range = runtime_price_range
 
     # Update "Today's Energy Market" every cycle so the "📍 Now" line stays current
     reasoning_text = build_today_story(
-        price_range, import_price, export_price,
+        runtime_price_range, import_price, export_price,
         load_range, discharge_range, adaptive_range,
         config["heuristics"].get("charging_price_threshold"), now,
     )
     update_entity(mqtt_client, ENTITY_REASONING, reasoning_text,
-                  {"price_range": price_range, "import_price": import_price, "export_price": export_price},
+                  {"price_range": runtime_price_range, "import_price": import_price, "export_price": export_price},
                   dry_run=is_dry_run)
 
     regen_cooldown = config["timing"].get("schedule_regen_cooldown_seconds", 60)
-    if price_range == "load" and not active_charge and import_curve:
+    if runtime_price_range == "load" and not active_charge and import_curve:
         if (
             not state.last_schedule_publish
             or (now - state.last_schedule_publish).total_seconds() >= regen_cooldown
@@ -1308,19 +1313,24 @@ def monitor_and_adjust_active_period(
             should_pause = True
             pause_reasons.append(f"EV Charging >{ev_threshold}W")
 
-    if price_range != "adaptive" and should_reduce_discharge(grid_power, threshold=500):
+    if runtime_price_range != "adaptive" and should_reduce_discharge(grid_power, threshold=500):
         reduce_discharge = True
         reduce_reasons.append("High Grid Export")
 
     if soc is not None:
         min_soc = config["soc"]["min_soc"]
         dynamic_buffer_soc = state.sell_buffer_required_soc
-        effective_min_soc = max(min_soc, dynamic_buffer_soc) if dynamic_buffer_soc is not None else min_soc
-        conservative_soc = config["soc"]["conservative_soc"]
-        is_conservative = price_range != "discharge"
+        # Sell-buffer floor protects planned precharge strategy in non-sell modes only.
+        use_sell_buffer_protection = runtime_price_range != "discharge"
+        effective_min_soc = (
+            max(min_soc, dynamic_buffer_soc)
+            if dynamic_buffer_soc is not None and use_sell_buffer_protection
+            else min_soc
+        )
+        is_conservative = runtime_price_range != "discharge"
         if not can_discharge(soc, effective_min_soc, conservative_soc, is_conservative):
             should_pause = True
-            if dynamic_buffer_soc is not None and effective_min_soc > min_soc:
+            if use_sell_buffer_protection and dynamic_buffer_soc is not None and effective_min_soc > min_soc:
                 pause_reasons.append(
                     f"SOC sell-buffer protection ({soc:.1f}% < {effective_min_soc:.1f}%)"
                 )
@@ -1345,11 +1355,11 @@ def monitor_and_adjust_active_period(
     elif active_discharge and reduce_discharge:
         monitor_status = f"reduced:{','.join(reduce_reasons)}"
     elif active_charge:
-        monitor_status = f"charging:{price_range}"
+        monitor_status = f"charging:{runtime_price_range}"
     elif active_discharge:
-        monitor_status = f"discharging:{price_range}"
+        monitor_status = f"discharging:{runtime_price_range}"
     else:
-        monitor_status = f"idle:{price_range}"
+        monitor_status = f"idle:{runtime_price_range}"
 
     status_changed = monitor_status != state.last_monitor_status
     if status_changed:
@@ -1373,7 +1383,7 @@ def monitor_and_adjust_active_period(
             logger.info("%s | 🟡 Reduced | Reasons: %s", " | ".join(status_parts), ", ".join(reduce_reasons))
     elif active_charge or active_discharge:
         if status_changed:
-            logger.info("%s | Active | Mode: %s", " | ".join(status_parts), price_range)
+            logger.info("%s | Active | Mode: %s", " | ".join(status_parts), runtime_price_range)
     else:
         if status_changed:
             logger.info("%s", " | ".join(status_parts))
@@ -1400,7 +1410,7 @@ def monitor_and_adjust_active_period(
                 dry_run=is_dry_run,
             )
             status_msg = build_status_message(
-                price_range, False, True, None, None, temperature,
+                runtime_price_range, False, True, None, None, temperature,
                 reduced=True, pause_reason=", ".join(reduce_reasons),
             )
             update_entity(
@@ -1411,7 +1421,7 @@ def monitor_and_adjust_active_period(
         override = {"charge": state.schedule.get("charge", []), "discharge": []}
         _publish_schedule(mqtt_client, override, is_dry_run, state=state)
         status_msg = build_status_message(
-            price_range, False, False, None, None, temperature,
+            runtime_price_range, False, False, None, None, temperature,
             paused=True, pause_reason=", ".join(pause_reasons),
         )
         update_entity(
@@ -1425,7 +1435,7 @@ def monitor_and_adjust_active_period(
                     charge_power_val = p.get("power")
                     break
             status_msg = build_status_message(
-                price_range, True, False, charge_power_val, None, temperature,
+                runtime_price_range, True, False, charge_power_val, None, temperature,
             )
             update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
             update_entity(
@@ -1433,7 +1443,8 @@ def monitor_and_adjust_active_period(
                 ENTITY_CURRENT_ACTION,
                 f"Charging {charge_power_val}W" if charge_power_val else "Charging",
                 {
-                    "price_range": price_range,
+                    "price_range": runtime_price_range,
+                    "effective_price_range": runtime_price_range,
                     "charge_power": charge_power_val,
                     "soc": soc,
                 },
@@ -1446,18 +1457,18 @@ def monitor_and_adjust_active_period(
                     discharge_power_val = p.get("power")
                     break
             status_msg = build_status_message(
-                price_range, False, True, None, discharge_power_val, temperature,
+                runtime_price_range, False, True, None, discharge_power_val, temperature,
             )
             update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
             action_label = f"Discharging {discharge_power_val}W" if discharge_power_val else "Discharging"
-            if price_range == "adaptive":
+            if runtime_price_range == "adaptive":
                 action_label = f"Adaptive {discharge_power_val}W" if discharge_power_val else "Adaptive (matching grid)"
             update_entity(
                 mqtt_client,
                 ENTITY_CURRENT_ACTION,
                 action_label,
                 {
-                    "price_range": price_range,
+                    "price_range": runtime_price_range,
                     "discharge_power": discharge_power_val,
                     "soc": soc,
                 },
@@ -1465,7 +1476,7 @@ def monitor_and_adjust_active_period(
             )
         else:
             status_msg = build_status_message(
-                price_range, False, False, None, None, temperature,
+                runtime_price_range, False, False, None, None, temperature,
             )
             update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
             # Update current action based on price range when idle
@@ -1474,12 +1485,12 @@ def monitor_and_adjust_active_period(
                 "adaptive": "Adaptive (no active window)",
                 "load": "Waiting (charge window pending)",
             }
-            idle_action = idle_labels.get(price_range, f"Idle ({price_range})")
+            idle_action = idle_labels.get(runtime_price_range, f"Idle ({runtime_price_range})")
             update_entity(
                 mqtt_client,
                 ENTITY_CURRENT_ACTION,
                 idle_action,
-                {"price_range": price_range, "soc": soc},
+                {"price_range": runtime_price_range, "soc": soc},
                 dry_run=is_dry_run,
             )
 
@@ -1502,13 +1513,7 @@ def monitor_and_adjust_active_period(
         else:
             current_power = int(batt_power) if batt_power is not None else scheduled_power
 
-        effective_range = price_range
-        if (
-            soc is not None
-            and soc <= config["soc"]["conservative_soc"]
-            and price_range == "discharge"
-        ):
-            effective_range = "adaptive"
+        effective_range = runtime_price_range
 
         max_power = config["power"]["max_discharge_power"]
         min_scaled_power = config["power"].get(

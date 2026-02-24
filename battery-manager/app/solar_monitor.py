@@ -16,6 +16,7 @@ class SolarMonitor:
         self.enabled = passive_config.get("enabled", True)
         self.entry_threshold = passive_config.get("entry_threshold", 1000)
         self.exit_threshold = passive_config.get("exit_threshold", 200)
+        self.min_solar_entry_power = passive_config.get("min_solar_entry_power", self.exit_threshold)
 
         self.is_passive_active = False
         self.active_since = None
@@ -28,6 +29,7 @@ class SolarMonitor:
             negative = exporting to grid
 
         Entry: Exporting > entry_threshold (grid_power < -entry_threshold)
+               AND solar generation >= min_solar_entry_power
         Exit:  Importing > exit_threshold (grid_power > exit_threshold) OR low solar
         """
         if not self.enabled:
@@ -48,13 +50,16 @@ class SolarMonitor:
                 return False
 
             if not self.is_passive_active:
-                # Exporting heavily: grid_power is negative and exceeds threshold
-                if net_w < -self.entry_threshold:
+                # Activate only on true solar production, not incidental net export.
+                if net_w < -self.entry_threshold and solar_w >= self.min_solar_entry_power:
                     self.is_passive_active = True
                     self.active_since = datetime.datetime.now(datetime.timezone.utc)
                     self.logger.info(
-                        "☀️ Passive Solar Mode ACTIVATED: Net Export %.0fW > %sW",
-                        abs(net_w), self.entry_threshold,
+                        "☀️ Passive Solar Mode ACTIVATED: Net Export %.0fW > %sW, Solar %.0fW >= %sW",
+                        abs(net_w),
+                        self.entry_threshold,
+                        solar_w,
+                        self.min_solar_entry_power,
                     )
                     return True
             else:

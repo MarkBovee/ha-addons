@@ -26,7 +26,7 @@ options:
   # Standalone mode settings
   automation_enabled: true
   price_sensor_entity: "sensor.energy_prices_electricity_import_price"
-  top_x_charge_count: 12
+  top_x_charge_count: 4
   price_threshold: 0.26
   max_current_per_phase: 12
   connector_ids: "1"

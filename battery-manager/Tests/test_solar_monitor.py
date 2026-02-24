@@ -29,6 +29,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "entry_threshold": 1000,
         "exit_threshold": 200,
+        "min_solar_entry_power": 200,
     },
 }
 
@@ -62,6 +63,14 @@ class TestSolarMonitor:
             "sensor.grid_power": {"state": "3000"},  # positive = importing
         })
         assert monitor.check_passive_state(ha) is False
+
+    def test_stays_inactive_on_high_export_with_low_solar(self, monitor):
+        ha = FakeHaApi({
+            "sensor.pv_power": {"state": "12"},
+            "sensor.grid_power": {"state": "-2317"},  # heavy export from other sources
+        })
+        assert monitor.check_passive_state(ha) is False
+        assert monitor.is_passive_active is False
 
     def test_deactivates_on_grid_import(self, monitor):
         # Activate first with heavy export
