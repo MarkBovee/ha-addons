@@ -42,10 +42,11 @@ options:
     enabled: true
     entry_threshold: 1000
     exit_threshold: 200
+    min_solar_entry_power: 200
 
   soc:
     min_soc: 5
-    conservative_soc: 40
+    conservative_soc: 30
     target_eod_soc: 20
     max_soc: 100
     battery_capacity_kwh: 25
@@ -119,6 +120,7 @@ schema:
     enabled: bool?
     entry_threshold: int(0,10000)
     exit_threshold: int(0,10000)
+    min_solar_entry_power: int(0,10000)
 
   soc:
     min_soc: int(0,100)
