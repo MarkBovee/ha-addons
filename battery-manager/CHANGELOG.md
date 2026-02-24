@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.25 — 2026-02-24
+- **Fix: Passive Solar false activation** — Require minimum solar generation to enter passive mode; passive mode now only activates when `grid_power < -entry_threshold` and `solar_power >= passive_solar.min_solar_entry_power`.
+- **Fix: Sell-buffer protection in sell windows** — During active sell windows, SOC below `conservative_soc` now downgrades runtime mode to `adaptive` instead of hard-pausing discharge; sell-buffer floor is enforced only outside sell-mode to preserve planned precharge behavior.
+- **Config: `passive_solar.min_solar_entry_power`** — New option to set minimum PV generation required to consider passive solar activation (default 200W).
+- **Tests:** Added targeted unit test to prevent passive-solar false positives.
+
 ## 0.8.24
 - **Fix: Sell-buffer timing gate** — Dynamic sell-buffer SOC/precharge now activates only within a configurable lead window before the first planned sell/discharge period (`soc.sell_buffer_activation_hours_before_sell`, default 3h), instead of reacting all day.
 
