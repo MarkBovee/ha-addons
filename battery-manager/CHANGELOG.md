@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.26 — 2026-02-24
+- **Fix: Discharge slot power stability** — Explicit `discharge` windows now keep their scheduled power during monitor ticks; runtime adaptive power recalculation is limited to `adaptive` windows only.
+- **Fix: Stable per-window discharge ranking** — Schedule generation now ranks each discharge window individually by price (with deterministic tie-break), so hourly schedule regeneration does not reshuffle same-day slot power when prices are unchanged.
+
 ## 0.8.25 — 2026-02-24
 - **Fix: Passive Solar false activation** — Require minimum solar generation to enter passive mode; passive mode now only activates when `grid_power < -entry_threshold` and `solar_power >= passive_solar.min_solar_entry_power`.
 - **Fix: Sell-buffer protection in sell windows** — During active sell windows, SOC below `conservative_soc` now downgrades runtime mode to `adaptive` instead of hard-pausing discharge; sell-buffer floor is enforced only outside sell-mode to preserve planned precharge behavior.

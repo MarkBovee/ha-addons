@@ -825,6 +825,21 @@ def generate_schedule(
             min_scaled_power,
         )
 
+    # Rank discharge windows once per schedule generation so window power stays
+    # stable during the day when the underlying price curve is unchanged.
+    ranked_discharge_windows = sorted(
+        upcoming_windows.get("discharge", []),
+        key=lambda w: (
+            -float(w.get("avg_price", 0.0)),
+            w.get("start").isoformat() if isinstance(w.get("start"), datetime) else "",
+        ),
+    )
+    discharge_window_rank_by_start: Dict[str, int] = {}
+    for idx, window in enumerate(ranked_discharge_windows, start=1):
+        start_dt = window.get("start")
+        if isinstance(start_dt, datetime):
+            discharge_window_rank_by_start[start_dt.isoformat()] = idx
+
     soc = _get_sensor_float(ha_api, config["entities"]["soc_entity"])
     max_soc = config["soc"].get("max_soc", 100)
     skip_charge = soc is not None and not can_charge(soc, max_soc)
@@ -956,8 +971,22 @@ def generate_schedule(
         duration = int((end_dt - effective_start).total_seconds() / 60)
         if duration <= 0:
             continue
-        # Adaptive windows start at minimum power — monitoring loop scales up
-        power = discharge_power if window_type == "discharge" else min_discharge_power
+        # Adaptive windows start at minimum power; explicit discharge windows
+        # use their own rank-based power and remain stable across monitor ticks.
+        if window_type == "discharge":
+            window_rank = discharge_window_rank_by_start.get(
+                start_dt.isoformat(),
+                top_x_discharge_count,
+            )
+            window_rank = max(1, min(window_rank, max(top_x_discharge_count, 1)))
+            power = calculate_rank_scaled_power(
+                window_rank,
+                max(top_x_discharge_count, 1),
+                config["power"]["max_discharge_power"],
+                min_scaled_power,
+            )
+        else:
+            power = min_discharge_power
         discharge_schedule.append({
             "start": effective_start.isoformat(),
             "power": power,
@@ -1497,8 +1526,9 @@ def monitor_and_adjust_active_period(
     if active_discharge and not should_pause:
         discharge_periods = state.schedule.get("discharge", [])
         active_period = next((p for p in discharge_periods if _is_period_active(p, now)), None)
-        
+
         scheduled_power = int(active_period.get("power", 0)) if active_period else 0
+        active_window_type = active_period.get("window_type", "discharge") if active_period else "discharge"
         adaptive_grace = config["timing"].get("adaptive_power_grace_seconds", 60)
 
         # Use the last commanded power if a recent adjustment was made,
@@ -1513,21 +1543,15 @@ def monitor_and_adjust_active_period(
         else:
             current_power = int(batt_power) if batt_power is not None else scheduled_power
 
-        effective_range = runtime_price_range
+        # Keep runtime adjustments aligned with the active window type, not just
+        # the broad price range. Explicit discharge windows must keep scheduled
+        # power, while adaptive windows can be adjusted.
+        effective_range = "adaptive" if active_window_type == "adaptive" else "discharge"
 
         max_power = config["power"]["max_discharge_power"]
-        min_scaled_power = config["power"].get(
-            "min_scaled_power", config["power"]["min_discharge_power"]
-        )
 
         target_power: Optional[int] = None
-        if effective_range == "discharge" and export_curve:
-            rank = get_current_period_rank(export_curve, top_x_discharge_count, now, reverse=True)
-            if rank:
-                target_power = calculate_rank_scaled_power(
-                    rank, top_x_discharge_count, max_power, min_scaled_power
-                )
-        elif effective_range == "adaptive":
+        if effective_range == "adaptive":
             target_power = _calculate_adaptive_power(
                 grid_power,
                 current_power,
