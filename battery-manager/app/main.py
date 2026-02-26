@@ -825,21 +825,6 @@ def generate_schedule(
             min_scaled_power,
         )
 
-    # Rank discharge windows once per schedule generation so window power stays
-    # stable during the day when the underlying price curve is unchanged.
-    ranked_discharge_windows = sorted(
-        upcoming_windows.get("discharge", []),
-        key=lambda w: (
-            -float(w.get("avg_price", 0.0)),
-            w.get("start").isoformat() if isinstance(w.get("start"), datetime) else "",
-        ),
-    )
-    discharge_window_rank_by_start: Dict[str, int] = {}
-    for idx, window in enumerate(ranked_discharge_windows, start=1):
-        start_dt = window.get("start")
-        if isinstance(start_dt, datetime):
-            discharge_window_rank_by_start[start_dt.isoformat()] = idx
-
     soc = _get_sensor_float(ha_api, config["entities"]["soc_entity"])
     max_soc = config["soc"].get("max_soc", 100)
     skip_charge = soc is not None and not can_charge(soc, max_soc)
@@ -856,6 +841,21 @@ def generate_schedule(
         tomorrow_discharge_range=tomorrow_discharge,
         adaptive_enabled=adaptive_enabled,
     )
+
+    # Rank discharge windows once per schedule generation so window power stays
+    # stable during the day when the underlying price curve is unchanged.
+    ranked_discharge_windows = sorted(
+        upcoming_windows.get("discharge", []),
+        key=lambda w: (
+            -float(w.get("avg_price", 0.0)),
+            w.get("start").isoformat() if isinstance(w.get("start"), datetime) else "",
+        ),
+    )
+    discharge_window_rank_by_start: Dict[str, int] = {}
+    for idx, window in enumerate(ranked_discharge_windows, start=1):
+        start_dt = window.get("start")
+        if isinstance(start_dt, datetime):
+            discharge_window_rank_by_start[start_dt.isoformat()] = idx
 
     buffer_required_soc, buffer_discharge_hours, main_charge_start = _calculate_dynamic_sell_buffer_soc(
         upcoming_windows,

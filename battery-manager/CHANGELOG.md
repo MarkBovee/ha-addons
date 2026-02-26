@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.27 — 2026-02-26
+- **Fix: Startup crash in schedule generation** — Resolved `UnboundLocalError` where `upcoming_windows` could be referenced before assignment during discharge window ranking. The ranking step now runs after upcoming windows are calculated.
+
 ## 0.8.26 — 2026-02-24
 - **Fix: Discharge slot power stability** — Explicit `discharge` windows now keep their scheduled power during monitor ticks; runtime adaptive power recalculation is limited to `adaptive` windows only.
 - **Fix: Stable per-window discharge ranking** — Schedule generation now ranks each discharge window individually by price (with deterministic tie-break), so hourly schedule regeneration does not reshuffle same-day slot power when prices are unchanged.
