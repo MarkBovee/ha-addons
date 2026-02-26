@@ -190,7 +190,7 @@ class TestBuildTodayStory:
             PriceRange(0.231, 0.234), PriceRange(0.331, 0.341),
             PriceRange(0.234, 0.331), now=now,
         )
-        assert "10:00" in result
+        assert now.astimezone().strftime("%H:%M") in result
         assert "€0.276" in result
 
     def test_no_ranges_still_works(self):
@@ -230,7 +230,8 @@ class TestBuildTomorrowStory:
             PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None,
             tomorrow_curve=curve,
         )
-        assert "02:00" in result
+        first_local = datetime.fromisoformat(curve[0]["start"]).astimezone().strftime("%H:%M")
+        assert first_local in result
 
 
 class TestBuildPriceRangesDisplay:
@@ -429,9 +430,9 @@ class TestBuildWindowsDisplay:
              "avg_price": 0.234},
         ]
         result = build_windows_display(windows, "charge", 8000, now)
-        assert "00:00" in result
-        assert "03:00" in result
-        assert "22:00" in result
+        assert windows[0]["start"].astimezone().strftime("%H:%M") in result
+        assert windows[0]["end"].astimezone().strftime("%H:%M") in result
+        assert windows[1]["start"].astimezone().strftime("%H:%M") in result
         assert "8000W" in result
         assert "€0.231" in result
         # First window is past, second is upcoming
@@ -542,8 +543,10 @@ class TestBuildCombinedScheduleDisplay:
         lines = result.split("\n")
         data_lines = [l for l in lines if l.startswith("|") and "---" not in l and "Time" not in l]
         # Discharge at 17:00 should come before charge at 22:00
-        assert "17:00" in data_lines[0]
-        assert "22:00" in data_lines[1]
+        discharge_local = windows["discharge"][0]["start"].astimezone().strftime("%H:%M")
+        charge_local = windows["charge"][0]["start"].astimezone().strftime("%H:%M")
+        assert discharge_local in data_lines[0]
+        assert charge_local in data_lines[1]
 
     def test_tomorrow_label_in_combined(self):
         now = datetime(2026, 2, 11, 14, 0, tzinfo=timezone.utc)
