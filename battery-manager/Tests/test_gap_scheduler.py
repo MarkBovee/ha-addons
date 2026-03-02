@@ -33,6 +33,11 @@ class TestGapScheduler:
         result = scheduler.generate_passive_gap_schedule()
         assert result["discharge"][0]["power"] > 0
 
+    def test_passive_fallback_is_one_minute(self, scheduler):
+        result = scheduler.generate_passive_gap_schedule()
+        assert result["charge"][0]["duration"] == 1
+        assert result["discharge"][0]["duration"] == 1
+
     def test_start_times_are_strings(self, scheduler):
         result = scheduler.generate_passive_gap_schedule()
         assert isinstance(result["charge"][0]["start"], str)
