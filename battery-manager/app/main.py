@@ -159,6 +159,7 @@ class RuntimeState:
     last_monitor_status: Optional[str] = None
     sell_buffer_required_soc: Optional[float] = None
     sell_buffer_discharge_hours: float = 0.0
+    passive_gap_active: bool = False
 
 
 def _load_config() -> Dict[str, Any]:
@@ -1205,6 +1206,28 @@ def monitor_and_adjust_active_period(
 
     now = datetime.now(timezone.utc)
 
+    passive_active = solar_monitor.check_passive_state(ha_api)
+    if passive_active:
+        if not state.passive_gap_active:
+            logger.info("☀️ Passive Solar Mode is ACTIVE (0W Charge Gap)")
+            gap_schedule = gap_scheduler.generate_passive_gap_schedule()
+            _publish_schedule(mqtt_client, gap_schedule, is_dry_run, state=state, force=True)
+            state.passive_gap_active = True
+        update_entity(
+            mqtt_client,
+            ENTITY_CURRENT_ACTION,
+            "Passive Solar (0W charge gap)",
+            {"status": "active", "gap_schedule": True},
+            dry_run=is_dry_run,
+        )
+        return
+
+    if state.passive_gap_active:
+        logger.info("☁️ Passive Solar Mode cleared - restoring generated schedule")
+        _publish_schedule(mqtt_client, state.schedule, is_dry_run, state=state, force=True)
+        state.passive_gap_active = False
+        state.last_monitor_status = None
+
     active_discharge = any(
         _is_period_active(period, now) for period in state.schedule.get("discharge", [])
     )
@@ -1624,26 +1647,6 @@ def monitor_and_adjust_active_period(
                 {"excess_solar": abs(grid_power), "soc": soc},
                 dry_run=is_dry_run,
             )
-
-    # ---------------------------
-    # Passive Solar / Gap Logic
-    # ---------------------------
-    # Using SolarMonitor to check if we should be in 0W charge mode
-    if solar_monitor.check_passive_state(ha_api):
-        logger.info("☀️ Passive Solar Mode is ACTIVE (0W Charge Gap)")
-        gap_schedule = gap_scheduler.generate_passive_gap_schedule()
-        
-        # We publish a focused schedule: 0W charge now, then discharge fallback
-        _publish_schedule(mqtt_client, gap_schedule, is_dry_run, state=state)
-        
-        update_entity(
-            mqtt_client,
-            ENTITY_CURRENT_ACTION,
-            "Passive Solar (0W charge gap)",
-            {"status": "active", "gap_schedule": True},
-            dry_run=is_dry_run,
-        )
-
 
 def main() -> int:
     logger.info("Battery Manager add-on starting...")

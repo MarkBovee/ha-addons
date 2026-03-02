@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.28 — 2026-03-02
+- **Fix: Passive Solar republish loop** — Passive Solar now publishes its gap schedule only when the mode transitions to active, instead of re-publishing a fresh timestamped payload every monitor cycle.
+- **Fix: Passive Solar exit recovery** — When passive mode clears, battery-manager force-publishes the normal generated schedule so control returns cleanly to planned windows.
+- **Fix: Short passive fallback window** — Passive-gap safety discharge fallback duration is now 1 minute to avoid long unintended discharge windows.
+
 ## 0.8.27 — 2026-02-26
 - **Fix: Startup crash in schedule generation** — Resolved `UnboundLocalError` where `upcoming_windows` could be referenced before assignment during discharge window ranking. The ranking step now runs after upcoming windows are calculated.
 
