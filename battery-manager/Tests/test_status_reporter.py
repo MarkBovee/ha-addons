@@ -68,7 +68,7 @@ class TestBuildStatusMessage:
         assert "EV Charging" in msg
 
     def test_reduced(self):
-        msg = build_status_message("adaptive", False, True, None, None, None, reduced=True, pause_reason="High Export")
+        msg = build_status_message("adaptive", False, True, None, None, None, reduced=True, pause_reason="SOC <= conservative")
         assert "Reduced" in msg
 
 

@@ -4,7 +4,7 @@ Optimize battery charging and discharging using dynamic electricity prices, sola
 
 ## Overview
 
-Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into four ranges — **load** (cheapest, charge battery), **discharge** (most expensive, sell), **adaptive** (mid-range, discharge to 0W grid), and **passive** (below threshold, battery idle) — adjusts discharge power in real time, and applies SOC protection, grid export prevention, solar surplus, and EV charging rules.
+Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into four ranges — **load** (cheapest, charge battery), **discharge** (most expensive, sell), **adaptive** (mid-range, discharge to 0W grid), and **passive** (below threshold, battery idle) — adjusts discharge power in real time, and applies SOC protection, conservative-SOC reduction, solar surplus, and EV charging rules.
 
 ## Prerequisites
 
@@ -71,7 +71,7 @@ The add-on publishes status entities via MQTT Discovery under the **Battery Mana
 
 | Entity | Purpose |
 |--------|---------|
-| `sensor.bm_status` | Current operational state (Charging, Discharging, Idle, Paused, Reduced) |
+| `sensor.bm_status` | Current operational state (Charging, Discharging, Idle, Paused, Reduced on low SOC) |
 | `sensor.bm_reasoning` | Human-readable explanation of the current schedule decision |
 | `sensor.bm_forecast` | Price forecast summary with temperature context |
 | `sensor.bm_price_ranges` | Active price range classification (load, discharge, adaptive, passive) |

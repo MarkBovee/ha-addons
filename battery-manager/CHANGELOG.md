@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.29 — 2026-03-02
+- **Change: Remove High Grid Export reduction** — Grid-export based discharge throttling has been removed from monitor logic.
+- **Change: Reduced mode only on low SOC** — `Reduced` now applies only when an active discharge window runs at or below `soc.conservative_soc`.
+- **Fix: Reduced override recovery** — When low-SOC reduction clears, the generated schedule is force-restored so discharge power returns to planned values.
+
 ## 0.8.28 — 2026-03-02
 - **Fix: Passive Solar republish loop** — Passive Solar now publishes its gap schedule only when the mode transitions to active, instead of re-publishing a fresh timestamped payload every monitor cycle.
 - **Fix: Passive Solar exit recovery** — When passive mode clears, battery-manager force-publishes the normal generated schedule so control returns cleanly to planned windows.

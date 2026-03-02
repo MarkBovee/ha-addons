@@ -19,7 +19,6 @@ from shared.mqtt_setup import setup_mqtt_client
 from shared.ha_mqtt_discovery import MqttDiscovery
 
 from .ev_charger_monitor import should_pause_discharge
-from .grid_monitor import should_reduce_discharge
 from .power_calculator import calculate_rank_scaled_power
 from .price_analyzer import (
     PriceRange,
@@ -160,6 +159,7 @@ class RuntimeState:
     sell_buffer_required_soc: Optional[float] = None
     sell_buffer_discharge_hours: float = 0.0
     passive_gap_active: bool = False
+    reduced_override_active: bool = False
 
 
 def _load_config() -> Dict[str, Any]:
@@ -1365,10 +1365,6 @@ def monitor_and_adjust_active_period(
             should_pause = True
             pause_reasons.append(f"EV Charging >{ev_threshold}W")
 
-    if runtime_price_range != "adaptive" and should_reduce_discharge(grid_power, threshold=500):
-        reduce_discharge = True
-        reduce_reasons.append("High Grid Export")
-
     if soc is not None:
         min_soc = config["soc"]["min_soc"]
         dynamic_buffer_soc = state.sell_buffer_required_soc
@@ -1388,6 +1384,10 @@ def monitor_and_adjust_active_period(
                 )
             else:
                 pause_reasons.append(f"SOC protection ({soc:.1f}%)")
+
+        if active_discharge and soc <= conservative_soc and not should_pause:
+            reduce_discharge = True
+            reduce_reasons.append(f"SOC <= conservative ({soc:.1f}% <= {conservative_soc:.1f}%)")
 
     status_parts = []
     if active_charge:
@@ -1440,6 +1440,11 @@ def monitor_and_adjust_active_period(
         if status_changed:
             logger.info("%s", " | ".join(status_parts))
 
+    if state.reduced_override_active and not reduce_discharge and not should_pause:
+        logger.info("🟢 Reduced mode cleared - restoring scheduled discharge power")
+        _publish_schedule(mqtt_client, state.schedule, is_dry_run, state=state, force=True)
+        state.reduced_override_active = False
+
     if active_discharge and (should_pause or reduce_discharge):
         if reduce_discharge and not should_pause:
             reduced = []
@@ -1452,6 +1457,7 @@ def monitor_and_adjust_active_period(
 
             override = {"charge": state.schedule.get("charge", []), "discharge": reduced}
             _publish_schedule(mqtt_client, override, is_dry_run, state=state)
+            state.reduced_override_active = True
             # Reset commanded power so adaptive recalculates from sensor
             # after the reduction clears
             state.last_commanded_power = None
@@ -1466,12 +1472,13 @@ def monitor_and_adjust_active_period(
                 reduced=True, pause_reason=", ".join(reduce_reasons),
             )
             update_entity(
-                mqtt_client, ENTITY_STATUS, status_msg, {"reason": "conservative"}, dry_run=is_dry_run,
+                mqtt_client, ENTITY_STATUS, status_msg, {"reason": "conservative_soc"}, dry_run=is_dry_run,
             )
             return
 
         override = {"charge": state.schedule.get("charge", []), "discharge": []}
         _publish_schedule(mqtt_client, override, is_dry_run, state=state)
+        state.reduced_override_active = False
         status_msg = build_status_message(
             runtime_price_range, False, False, None, None, temperature,
             paused=True, pause_reason=", ".join(pause_reasons),
