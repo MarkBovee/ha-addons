@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.32 — 2026-03-04
+- **Fix: Schedule table integrity** — Split long combined schedule state on line boundaries to avoid broken/truncated markdown rows in Home Assistant.
+- **Fix: Displayed power values in combined schedule** — Use explicit display powers so discharge windows no longer appear as `0W` when runtime adaptive power is low.
+
 ## 0.8.31 — 2026-03-04
 - **Rollback: UTC day-split logic** — Reverted the 0.8.30 local/UTC day-splitting runtime change after field validation showed scheduling side effects.
 - **Note:** Runtime behavior is restored to pre-0.8.30 scheduling logic so current production behavior can be re-verified.
