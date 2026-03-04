@@ -693,6 +693,7 @@ def build_combined_schedule_display(
     discharge_power: int,
     now: datetime,
     no_discharge_reason: Optional[str] = None,
+    adaptive_power: Optional[int] = None,
 ) -> str:
     """Build combined schedule table with all charge/discharge windows.
 
@@ -726,7 +727,7 @@ def build_combined_schedule_display(
             "start": w["start"],
             "end": w["end"],
             "type": "adaptive",
-            "power": discharge_power,
+            "power": discharge_power if adaptive_power is None else adaptive_power,
             "price": w["avg_price"],
         })
 
