@@ -402,8 +402,18 @@ def _publish_schedule(
     return False
 
 
-def _split_curve_by_date(curve: List[Dict[str, Any]]) -> tuple[list[dict], list[dict]]:
-    today = datetime.now(timezone.utc).date()
+def _split_curve_by_date(
+    curve: List[Dict[str, Any]],
+    now: Optional[datetime] = None,
+) -> tuple[list[dict], list[dict]]:
+    """Split a price curve into local-today and local-tomorrow entries.
+
+    The energy-prices entities expose UTC timestamps. Runtime decisions and UI,
+    however, are local-time based. Splitting by local date avoids range mixing
+    when tomorrow prices appear around 14:00.
+    """
+    reference_now = (now or datetime.now(timezone.utc)).astimezone()
+    today = reference_now.date()
     tomorrow = today + timedelta(days=1)
     today_curve: List[Dict[str, Any]] = []
     tomorrow_curve: List[Dict[str, Any]] = []
@@ -414,11 +424,14 @@ def _split_curve_by_date(curve: List[Dict[str, Any]]) -> tuple[list[dict], list[
             continue
         try:
             start_dt = isoparse(start)
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            local_date = start_dt.astimezone().date()
         except Exception:
             continue
-        if start_dt.date() == today:
+        if local_date == today:
             today_curve.append(entry)
-        elif start_dt.date() == tomorrow:
+        elif local_date == tomorrow:
             tomorrow_curve.append(entry)
 
     return today_curve, tomorrow_curve
@@ -483,9 +496,12 @@ def _should_wait_for_overnight(
             continue
         try:
             start_dt = isoparse(start)
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            local_hour = start_dt.astimezone().hour
         except Exception:
             continue
-        if start_dt.hour >= 20:
+        if local_hour >= 20:
             evening_prices.append(float(price))
 
     for entry in tomorrow_curve:
@@ -495,9 +511,12 @@ def _should_wait_for_overnight(
             continue
         try:
             start_dt = isoparse(start)
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            local_hour = start_dt.astimezone().hour
         except Exception:
             continue
-        if start_dt.hour < 6:
+        if local_hour < 6:
             overnight_prices.append(float(price))
 
     if not evening_prices or not overnight_prices:
@@ -702,9 +721,15 @@ def generate_schedule(
     top_x_charge_count = calculate_top_x_count(top_x_charge_hours, interval_minutes)
     top_x_discharge_count = calculate_top_x_count(top_x_discharge_hours, interval_minutes)
 
+    today_import, tomorrow_import = _split_curve_by_date(import_curve, now)
+    today_export, tomorrow_export = _split_curve_by_date(export_curve, now)
+
+    runtime_import_curve = today_import or import_curve
+    runtime_export_curve = today_export or export_curve
+
     load_range, discharge_range, adaptive_range = calculate_price_ranges(
-        import_curve,
-        export_curve,
+        runtime_import_curve,
+        runtime_export_curve,
         top_x_charge_count,
         top_x_discharge_count,
         min_profit,
@@ -734,7 +759,6 @@ def generate_schedule(
         adaptive_enabled=adaptive_enabled,
     )
 
-    today_import, tomorrow_import = _split_curve_by_date(import_curve)
     if price_range == "load" and now.hour >= 20:
         if _should_wait_for_overnight(today_import, tomorrow_import, overnight_threshold):
             logger.info("⏳ Evening prices higher than overnight; waiting to charge")
@@ -783,9 +807,8 @@ def generate_schedule(
     tomorrow_discharge: Optional[PriceRange] = None
 
     if tomorrow_import:
-        tomorrow_export = tomorrow_import
-        if export_curve:
-            _, tomorrow_export = _split_curve_by_date(export_curve)
+        if not tomorrow_export:
+            tomorrow_export = tomorrow_import
         tomorrow_load, tomorrow_discharge, tomorrow_adaptive = calculate_price_ranges(
             tomorrow_import,
             tomorrow_export,
@@ -1260,9 +1283,14 @@ def monitor_and_adjust_active_period(
     top_x_discharge_count = calculate_top_x_count(top_x_discharge_hours, interval_minutes)
 
     min_profit = config["heuristics"].get("min_profit_threshold", 0.1)
+    today_import, _ = _split_curve_by_date(import_curve or [], now)
+    today_export, _ = _split_curve_by_date(export_curve or [], now)
+    runtime_import_curve = today_import or (import_curve or [])
+    runtime_export_curve = today_export or (export_curve or [])
+
     load_range, discharge_range, adaptive_range = calculate_price_ranges(
-        import_curve or [],
-        export_curve or [],
+        runtime_import_curve,
+        runtime_export_curve,
         top_x_charge_count,
         top_x_discharge_count,
         min_profit,
