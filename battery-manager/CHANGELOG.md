@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.31 — 2026-03-04
+- **Rollback: UTC day-split logic** — Reverted the 0.8.30 local/UTC day-splitting runtime change after field validation showed scheduling side effects.
+- **Note:** Runtime behavior is restored to pre-0.8.30 scheduling logic so current production behavior can be re-verified.
+
 ## 0.8.29 — 2026-03-02
 - **Change: Remove High Grid Export reduction** — Grid-export based discharge throttling has been removed from monitor logic.
 - **Change: Reduced mode only on low SOC** — `Reduced` now applies only when an active discharge window runs at or below `soc.conservative_soc`.
