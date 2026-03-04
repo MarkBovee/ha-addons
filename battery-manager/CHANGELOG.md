@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.30 — 2026-03-04
+- **Fix: Today/tomorrow range isolation** — Runtime load/discharge/adaptive range calculation now uses local-day (today-only) curves, preventing tomorrow prices (published around 14:00) from shifting today's sell windows.
+- **Fix: Local day-boundary split** — Price-curve day split now uses local timezone boundaries for today vs tomorrow classification.
+- **Fix: Overnight wait hour alignment** — Evening/overnight wait heuristic now evaluates local hours instead of raw UTC hours.
+- **Tests:** Added targeted regression tests for local day splitting and overnight hour classification.
+
 ## 0.8.29 — 2026-03-02
 - **Change: Remove High Grid Export reduction** — Grid-export based discharge throttling has been removed from monitor logic.
 - **Change: Reduced mode only on low SOC** — `Reduced` now applies only when an active discharge window runs at or below `soc.conservative_soc`.
