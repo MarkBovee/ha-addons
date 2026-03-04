@@ -465,6 +465,22 @@ def _minutes_until_end_of_day(start_dt: datetime) -> int:
     return max(minutes, 1)
 
 
+def _split_state_for_ha(state_text: str, max_len: int = 255) -> tuple[str, str]:
+    """Split long state text without cutting through markdown rows when possible."""
+    if len(state_text) <= max_len:
+        return state_text, " "
+
+    cut_idx = state_text.rfind("\n", 0, max_len)
+    if cut_idx <= 0:
+        cut_idx = max_len
+
+    first = state_text[:cut_idx]
+    second = state_text[cut_idx + 1 :] if cut_idx < len(state_text) else " "
+    if not second:
+        second = " "
+    return first, second
+
+
 def _should_wait_for_overnight(
     today_curve: List[Dict[str, Any]],
     tomorrow_curve: List[Dict[str, Any]],
@@ -1132,10 +1148,16 @@ def generate_schedule(
     )
 
     # Update ENTITY_SCHEDULE with HA state length protection (split to _2)
-    combined_text = build_combined_schedule_display(upcoming_windows, charge_power, discharge_power, now, discharge_no_range_msg)
-    
-    schedule_1 = combined_text[:255]
-    schedule_2 = combined_text[255:] if len(combined_text) > 255 else " "
+    combined_text = build_combined_schedule_display(
+        upcoming_windows,
+        charge_power,
+        config["power"]["max_discharge_power"],
+        now,
+        discharge_no_range_msg,
+        adaptive_power=config["power"].get("min_discharge_power", 0),
+    )
+
+    schedule_1, schedule_2 = _split_state_for_ha(combined_text)
 
     update_entity(
         mqtt_client,
