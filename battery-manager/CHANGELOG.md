@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.33 — 2026-03-04
+- **Release bump:** Published current validated baseline with schedule display integrity fixes retained.
+- **Note:** No additional date/time classification changes in this release.
+
 ## 0.8.32 — 2026-03-04
 - **Fix: Schedule table integrity** — Split long combined schedule state on line boundaries to avoid broken/truncated markdown rows in Home Assistant.
 - **Fix: Displayed power values in combined schedule** — Use explicit display powers so discharge windows no longer appear as `0W` when runtime adaptive power is low.
