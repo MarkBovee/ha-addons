@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.34 — 2026-03-05
+- **Fix: Conservative SOC runtime downgrade** — During active discharge at or below `soc.conservative_soc`, the active window is now downgraded to adaptive/min-power behavior instead of continuing aggressive discharge.
+- **Fix: Today-only schedule range calculation** — Today's load/discharge/adaptive ranges and rank-based power now use only today's price points, preventing tomorrow prices from distorting today's sell windows in schedule text.
+- **Fix: Sell-buffer floor precharge trigger** — If SOC drops below `soc.sell_buffer_min_soc`, precharge is now allowed even when current price is above the normal precharge ceiling so buffer recovery is not skipped.
+
 ## 0.8.33 — 2026-03-04
 - **Release bump:** Published current validated baseline with schedule display integrity fixes retained.
 - **Note:** No additional date/time classification changes in this release.
