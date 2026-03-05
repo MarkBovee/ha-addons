@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.35 — 2026-03-05
+- **Fix: Discharge window priority in schema** — When building capped discharge periods for battery-api, profitable `discharge` windows are now selected before `adaptive` windows. This prevents adaptive filler periods from hiding expected high-price sell windows in the generated schedule.
+
 ## 0.8.34 — 2026-03-05
 - **Fix: Conservative SOC runtime downgrade** — During active discharge at or below `soc.conservative_soc`, the active window is now downgraded to adaptive/min-power behavior instead of continuing aggressive discharge.
 - **Fix: Today-only schedule range calculation** — Today's load/discharge/adaptive ranges and rank-based power now use only today's price points, preventing tomorrow prices from distorting today's sell windows in schedule text.

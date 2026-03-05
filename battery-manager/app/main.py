@@ -988,23 +988,38 @@ def generate_schedule(
                 "price": round(float(window.get("avg_price", 0.0)), 4),
             })
 
-    # Combine discharge + adaptive windows into discharge periods
-    # Adaptive windows use min discharge power; the monitoring loop will
-    # adjust power dynamically to target 0W grid export
+    # Combine discharge + adaptive windows into discharge periods.
+    # Important: profitable discharge windows are prioritized first so adaptive
+    # fillers never crowd out core sell windows when the API period cap applies.
     min_discharge_power = config["power"]["min_discharge_power"]
-    all_discharge_windows = []
-    for window in upcoming_windows.get("discharge", []):
-        all_discharge_windows.append(("discharge", window))
-    for window in upcoming_windows.get("adaptive", []):
-        all_discharge_windows.append(("adaptive", window))
-    # Sort by start time so we pick the earliest windows first
-    all_discharge_windows.sort(key=lambda x: x[1]["start"])
+    discharge_windows_sorted = sorted(
+        upcoming_windows.get("discharge", []),
+        key=lambda w: (
+            -float(w.get("avg_price", 0.0)),
+            w.get("start"),
+        ),
+    )
+    adaptive_windows_sorted = sorted(
+        upcoming_windows.get("adaptive", []),
+        key=lambda w: w.get("start"),
+    )
+
+    selected_discharge_windows: List[tuple[str, Dict[str, Any]]] = []
+    for window in discharge_windows_sorted[:MAX_DISCHARGE_PERIODS]:
+        selected_discharge_windows.append(("discharge", window))
+
+    remaining_slots = max(0, MAX_DISCHARGE_PERIODS - len(selected_discharge_windows))
+    for window in adaptive_windows_sorted[:remaining_slots]:
+        selected_discharge_windows.append(("adaptive", window))
+
+    # Publish in chronological order regardless of selection priority.
+    selected_discharge_windows.sort(key=lambda x: x[1]["start"])
 
     discharge_not_before = interval_start
     if precharge_until is not None:
         discharge_not_before = max(discharge_not_before, precharge_until)
 
-    for window_type, window in all_discharge_windows[:MAX_DISCHARGE_PERIODS]:
+    for window_type, window in selected_discharge_windows:
         start_dt = window["start"]
         end_dt = window["end"]
         if end_dt <= now:
