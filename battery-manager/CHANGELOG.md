@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.36 — 2026-03-05
+- **Fix: Combined schedule table source** — `Battery Charging Schedule` table now renders from the generated/published schedule payload instead of full-day candidate windows. This keeps the table aligned with actual scheduled periods and prevents past/non-selected windows from appearing as if they are active plan entries.
+
 ## 0.8.35 — 2026-03-05
 - **Fix: Discharge window priority in schema** — When building capped discharge periods for battery-api, profitable `discharge` windows are now selected before `adaptive` windows. This prevents adaptive filler periods from hiding expected high-price sell windows in the generated schedule.
 

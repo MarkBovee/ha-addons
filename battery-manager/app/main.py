@@ -656,6 +656,51 @@ def _calculate_dynamic_sell_buffer_soc(
     return required_soc, discharge_hours, main_charge_start
 
 
+def _build_display_windows_from_schedule(schedule: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    """Convert generated schedule periods into window buckets for display."""
+
+    display: Dict[str, List[Dict[str, Any]]] = {
+        "charge": [],
+        "discharge": [],
+        "adaptive": [],
+    }
+
+    for period in schedule.get("charge", []):
+        start = period.get("start")
+        duration = period.get("duration")
+        if not start or duration is None:
+            continue
+        try:
+            start_dt = isoparse(str(start))
+            end_dt = start_dt + timedelta(minutes=int(duration))
+            avg_price = float(period.get("price", 0.0))
+        except Exception:
+            continue
+        display["charge"].append({"start": start_dt, "end": end_dt, "avg_price": avg_price})
+
+    for period in schedule.get("discharge", []):
+        start = period.get("start")
+        duration = period.get("duration")
+        if not start or duration is None:
+            continue
+        try:
+            start_dt = isoparse(str(start))
+            end_dt = start_dt + timedelta(minutes=int(duration))
+            avg_price = float(period.get("price", 0.0))
+        except Exception:
+            continue
+
+        window_type = period.get("window_type", "discharge")
+        if window_type != "adaptive":
+            window_type = "discharge"
+        display[window_type].append({"start": start_dt, "end": end_dt, "avg_price": avg_price})
+
+    for key in ("charge", "discharge", "adaptive"):
+        display[key].sort(key=lambda w: w["start"])
+
+    return display
+
+
 
 
 def generate_schedule(
@@ -1188,8 +1233,11 @@ def generate_schedule(
     )
 
     # Update ENTITY_SCHEDULE with HA state length protection (split to _2)
+    # Use the generated schedule payload (not full-day candidate windows)
+    # so the table always matches what was actually published.
+    display_windows = _build_display_windows_from_schedule(schedule)
     combined_text = build_combined_schedule_display(
-        upcoming_windows,
+        display_windows,
         charge_power,
         config["power"]["max_discharge_power"],
         now,
