@@ -403,7 +403,7 @@ def _publish_schedule(
 
 
 def _split_curve_by_date(curve: List[Dict[str, Any]]) -> tuple[list[dict], list[dict]]:
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now().astimezone().date()
     tomorrow = today + timedelta(days=1)
     today_curve: List[Dict[str, Any]] = []
     tomorrow_curve: List[Dict[str, Any]] = []
@@ -416,9 +416,10 @@ def _split_curve_by_date(curve: List[Dict[str, Any]]) -> tuple[list[dict], list[
             start_dt = isoparse(start)
         except Exception:
             continue
-        if start_dt.date() == today:
+        local_start = start_dt.astimezone() if start_dt.tzinfo else start_dt.replace(tzinfo=timezone.utc).astimezone()
+        if local_start.date() == today:
             today_curve.append(entry)
-        elif start_dt.date() == tomorrow:
+        elif local_start.date() == tomorrow:
             tomorrow_curve.append(entry)
 
     return today_curve, tomorrow_curve
@@ -718,9 +719,16 @@ def generate_schedule(
     top_x_charge_count = calculate_top_x_count(top_x_charge_hours, interval_minutes)
     top_x_discharge_count = calculate_top_x_count(top_x_discharge_hours, interval_minutes)
 
+    today_import, tomorrow_import = _split_curve_by_date(import_curve)
+    today_export, tomorrow_export_curve = _split_curve_by_date(export_curve)
+
+    # Today's operating ranges must only use today's prices.
+    range_import_curve = today_import if today_import else import_curve
+    range_export_curve = today_export if today_export else export_curve
+
     load_range, discharge_range, adaptive_range = calculate_price_ranges(
-        import_curve,
-        export_curve,
+        range_import_curve,
+        range_export_curve,
         top_x_charge_count,
         top_x_discharge_count,
         min_profit,
@@ -750,7 +758,6 @@ def generate_schedule(
         adaptive_enabled=adaptive_enabled,
     )
 
-    today_import, tomorrow_import = _split_curve_by_date(import_curve)
     if price_range == "load" and now.hour >= 20:
         if _should_wait_for_overnight(today_import, tomorrow_import, overnight_threshold):
             logger.info("⏳ Evening prices higher than overnight; waiting to charge")
@@ -801,7 +808,7 @@ def generate_schedule(
     if tomorrow_import:
         tomorrow_export = tomorrow_import
         if export_curve:
-            _, tomorrow_export = _split_curve_by_date(export_curve)
+            tomorrow_export = tomorrow_export_curve
         tomorrow_load, tomorrow_discharge, tomorrow_adaptive = calculate_price_ranges(
             tomorrow_import,
             tomorrow_export,
@@ -818,8 +825,8 @@ def generate_schedule(
 
     update_entity(mqtt_client, ENTITY_FORECAST, forecast_text, dry_run=is_dry_run)
 
-    charge_rank = get_current_period_rank(import_curve, top_x_charge_count, now, reverse=False)
-    discharge_rank = get_current_period_rank(export_curve, top_x_discharge_count, now, reverse=True)
+    charge_rank = get_current_period_rank(range_import_curve, top_x_charge_count, now, reverse=False)
+    discharge_rank = get_current_period_rank(range_export_curve, top_x_discharge_count, now, reverse=True)
 
     min_scaled_power = config["power"].get(
         "min_scaled_power", config["power"]["min_discharge_power"]
@@ -895,14 +902,32 @@ def generate_schedule(
         and soc < buffer_required_soc
         and not skip_charge
     ):
+        sell_buffer_floor_soc = float(config["soc"].get("sell_buffer_min_soc", 20))
+        is_below_sell_buffer_floor = soc < sell_buffer_floor_soc
         # Prevent emergency precharge from buying at expensive prices.
-        if precharge_price_ceiling is not None and import_price > precharge_price_ceiling:
+        if (
+            precharge_price_ceiling is not None
+            and import_price > precharge_price_ceiling
+            and not is_below_sell_buffer_floor
+        ):
             logger.warning(
                 "🚫 Skipping pre-sell precharge: current price €%.3f above ceiling €%.3f",
                 import_price,
                 precharge_price_ceiling,
             )
         else:
+            if (
+                precharge_price_ceiling is not None
+                and import_price > precharge_price_ceiling
+                and is_below_sell_buffer_floor
+            ):
+                logger.warning(
+                    "⚠️ Forcing sell-buffer floor precharge: SOC %.1f%% below floor %.1f%% despite price €%.3f > €%.3f",
+                    soc,
+                    sell_buffer_floor_soc,
+                    import_price,
+                    precharge_price_ceiling,
+                )
             capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
             charge_power_watts = float(config["power"].get("max_charge_power", 8000))
             soc_per_hour_charge = max(0.0, (charge_power_watts / 1000.0) / max(capacity_kwh, 0.1) * 100.0)
@@ -1390,14 +1415,17 @@ def monitor_and_adjust_active_period(
     if soc is not None:
         min_soc = config["soc"]["min_soc"]
         dynamic_buffer_soc = state.sell_buffer_required_soc
+        low_soc_discharge_mode = active_discharge and soc <= conservative_soc
         # Sell-buffer floor protects planned precharge strategy in non-sell modes only.
-        use_sell_buffer_protection = runtime_price_range != "discharge"
+        use_sell_buffer_protection = runtime_price_range != "discharge" and not low_soc_discharge_mode
         effective_min_soc = (
             max(min_soc, dynamic_buffer_soc)
             if dynamic_buffer_soc is not None and use_sell_buffer_protection
             else min_soc
         )
-        is_conservative = runtime_price_range != "discharge"
+        # During active low-SOC discharge we switch to adaptive runtime behavior
+        # instead of hard-pausing based on conservative threshold.
+        is_conservative = runtime_price_range != "discharge" and not low_soc_discharge_mode
         if not can_discharge(soc, effective_min_soc, conservative_soc, is_conservative):
             should_pause = True
             if use_sell_buffer_protection and dynamic_buffer_soc is not None and effective_min_soc > min_soc:
@@ -1407,9 +1435,11 @@ def monitor_and_adjust_active_period(
             else:
                 pause_reasons.append(f"SOC protection ({soc:.1f}%)")
 
-        if active_discharge and soc <= conservative_soc and not should_pause:
+        if low_soc_discharge_mode and not should_pause:
             reduce_discharge = True
-            reduce_reasons.append(f"SOC <= conservative ({soc:.1f}% <= {conservative_soc:.1f}%)")
+            reduce_reasons.append(
+                f"SOC <= conservative ({soc:.1f}% <= {conservative_soc:.1f}%), switching to adaptive discharge"
+            )
 
     status_parts = []
     if active_charge:
@@ -1471,11 +1501,16 @@ def monitor_and_adjust_active_period(
         if reduce_discharge and not should_pause:
             reduced = []
             for period in state.schedule.get("discharge", []):
-                reduced_power = max(
-                    int(period.get("power", 0) * 0.5),
-                    config["power"]["min_discharge_power"],
-                )
-                reduced.append({**period, "power": reduced_power})
+                if _is_period_active(period, now):
+                    reduced.append(
+                        {
+                            **period,
+                            "power": config["power"]["min_discharge_power"],
+                            "window_type": "adaptive",
+                        }
+                    )
+                else:
+                    reduced.append(period)
 
             override = {"charge": state.schedule.get("charge", []), "discharge": reduced}
             _publish_schedule(mqtt_client, override, is_dry_run, state=state)
@@ -1494,7 +1529,7 @@ def monitor_and_adjust_active_period(
                 reduced=True, pause_reason=", ".join(reduce_reasons),
             )
             update_entity(
-                mqtt_client, ENTITY_STATUS, status_msg, {"reason": "conservative_soc"}, dry_run=is_dry_run,
+                mqtt_client, ENTITY_STATUS, status_msg, {"reason": "conservative_soc_adaptive"}, dry_run=is_dry_run,
             )
             return
 
