@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.37 — 2026-03-07
+- **Fix: Reduced-mode adaptive power response** — When low-SOC conservative protection downgrades an active discharge window to adaptive mode, runtime now calculates and publishes adaptive power from live grid conditions instead of staying at static min/0W. This restores real adaptive behavior above `charging_price_threshold` during reduced mode.
+
 ## 0.8.36 — 2026-03-05
 - **Fix: Combined schedule table source** — `Battery Charging Schedule` table now renders from the generated/published schedule payload instead of full-day candidate windows. This keeps the table aligned with actual scheduled periods and prevents past/non-selected windows from appearing as if they are active plan entries.
 

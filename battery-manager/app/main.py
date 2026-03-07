@@ -1562,13 +1562,53 @@ def monitor_and_adjust_active_period(
 
     if active_discharge and (should_pause or reduce_discharge):
         if reduce_discharge and not should_pause:
+            adaptive_grace = config["timing"].get("adaptive_power_grace_seconds", 60)
+            max_power = config["power"]["max_discharge_power"]
+            min_power = config["power"]["min_discharge_power"]
+
+            # Keep using the last command briefly to avoid reacting to lagging
+            # battery power telemetry while reduced/adaptive mode is active.
+            if (
+                state.last_commanded_power is not None
+                and state.last_power_adjustment is not None
+                and (now - state.last_power_adjustment).total_seconds() < adaptive_grace * 2
+            ):
+                current_power = state.last_commanded_power
+            else:
+                current_power = int(batt_power) if batt_power is not None else min_power
+
+            current_power = max(0, min(int(current_power), max_power))
+
+            target_power = _calculate_adaptive_power(
+                grid_power,
+                current_power,
+                min_power,
+                max_power,
+            )
+            if target_power is not None and soc is not None and soc <= 50:
+                target_power = min(target_power, int(max_power / 2))
+
+            adaptive_power = current_power
+            if target_power is not None:
+                if (
+                    state.last_power_adjustment
+                    and (now - state.last_power_adjustment).total_seconds() < adaptive_grace
+                ):
+                    adaptive_power = current_power
+                else:
+                    adaptive_power = target_power
+                    if adaptive_power != current_power:
+                        state.last_power_adjustment = now
+
+            adaptive_power = max(min_power, min(int(adaptive_power), max_power))
+
             reduced = []
             for period in state.schedule.get("discharge", []):
                 if _is_period_active(period, now):
                     reduced.append(
                         {
                             **period,
-                            "power": config["power"]["min_discharge_power"],
+                            "power": adaptive_power,
                             "window_type": "adaptive",
                         }
                     )
@@ -1578,13 +1618,11 @@ def monitor_and_adjust_active_period(
             override = {"charge": state.schedule.get("charge", []), "discharge": reduced}
             _publish_schedule(mqtt_client, override, is_dry_run, state=state)
             state.reduced_override_active = True
-            # Reset commanded power so adaptive recalculates from sensor
-            # after the reduction clears
-            state.last_commanded_power = None
+            state.last_commanded_power = adaptive_power
             update_entity(
                 mqtt_client,
                 ENTITY_LAST_COMMANDED_POWER,
-                "unknown",
+                f"{adaptive_power}",
                 dry_run=is_dry_run,
             )
             status_msg = build_status_message(

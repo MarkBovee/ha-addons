@@ -1,0 +1,99 @@
+"""Regression tests for reduced-mode adaptive behavior in main loop."""
+
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from copy import deepcopy
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from app import main as bm_main
+
+
+class _SolarMonitorStub:
+    def check_passive_state(self, _ha_api):
+        return False
+
+
+class _GapSchedulerStub:
+    def generate_passive_gap_schedule(self):
+        return {"charge": [], "discharge": []}
+
+
+def test_reduced_mode_uses_adaptive_power(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["conservative_soc"] = 30
+    config["soc"]["min_soc"] = 5
+    config["power"]["min_discharge_power"] = 0
+    config["power"]["max_discharge_power"] = 8000
+    config["timing"]["adaptive_power_grace_seconds"] = 60
+
+    now = datetime.now(timezone.utc)
+    state = bm_main.RuntimeState(
+        schedule={
+            "charge": [],
+            "discharge": [
+                {
+                    "start": (now - timedelta(minutes=10)).isoformat(),
+                    "duration": 60,
+                    "power": 6000,
+                    "window_type": "discharge",
+                }
+            ],
+        },
+        schedule_generated_at=now,
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 30.0,
+        config["entities"]["grid_power_entity"]: 138.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 120.0,
+        config["entities"]["battery_power_entity"]: 119.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 13.0,
+    }
+
+    published = []
+    entity_updates = []
+
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "discharge")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: entity_updates.append((_args, _kwargs)))
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: published.append((schedule, force)) or True,
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=object(),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=_SolarMonitorStub(),
+        gap_scheduler=_GapSchedulerStub(),
+    )
+
+    assert published, "Expected reduced/adaptive override schedule to be published"
+
+    override_schedule = published[-1][0]
+    active_period = override_schedule["discharge"][0]
+
+    assert active_period["window_type"] == "adaptive"
+    assert active_period["power"] == 300
+    assert state.last_commanded_power == 300
+
+    last_power_updates = [
+        call for call in entity_updates
+        if call[0][1] == bm_main.ENTITY_LAST_COMMANDED_POWER
+    ]
+    assert last_power_updates, "Expected ENTITY_LAST_COMMANDED_POWER to be updated"
+    assert last_power_updates[-1][0][2] == "300"
