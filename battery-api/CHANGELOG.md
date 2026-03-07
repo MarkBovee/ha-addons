@@ -2,6 +2,12 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.17] - 2026-03-07
+
+### Changed
+- Refactored schedule validation overlap checks by extracting shared period-bound and overlap helpers.
+- No functional behavior changes intended; validation logic remains equivalent.
+
 ## [0.2.16] - 2026-02-13
 
 ### Fixed

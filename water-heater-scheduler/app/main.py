@@ -175,6 +175,28 @@ def parse_price_curve(sensor_state: Dict[str, Any]) -> Dict[datetime, float]:
     return prices
 
 
+def _collect_window_prices(
+    prices: Dict[datetime, float],
+    start_dt: datetime,
+    duration_hours: int,
+    required_day: Optional[datetime.date] = None,
+) -> Optional[list[float]]:
+    """Collect contiguous hourly prices for a full window.
+
+    Returns None when one or more points are missing or outside required_day.
+    """
+    values: list[float] = []
+    for offset in range(duration_hours):
+        point = start_dt + timedelta(hours=offset)
+        if required_day is not None and point.date() != required_day:
+            return None
+        value = prices.get(point)
+        if value is None:
+            return None
+        values.append(value)
+    return values
+
+
 def get_lowest_price_window(
     prices: Dict[datetime, float],
     start_hour: int,
@@ -196,13 +218,16 @@ def get_lowest_price_window(
     last_start_hour = end_hour - duration
     for hour in range(start_hour, max(start_hour, last_start_hour) + 1):
         start_dt = target_date.replace(hour=hour, minute=0, second=0, microsecond=0)
-        window_points = [start_dt + timedelta(hours=i) for i in range(duration)]
-
-        # Ensure all points exist for a full window on the same day
-        if any(pt.date() != target_day or pt not in prices for pt in window_points):
+        window_prices = _collect_window_prices(
+            prices,
+            start_dt,
+            duration,
+            required_day=target_day,
+        )
+        if window_prices is None:
             continue
 
-        avg_price = sum(prices[pt] for pt in window_points) / duration
+        avg_price = sum(window_prices) / duration
         candidates[start_dt] = avg_price
 
     if not candidates:
@@ -246,13 +271,13 @@ def get_lowest_future_price_window(
         if candidate_start < now:
             continue
 
-        window_prices = []
-        for offset in range(duration):
-            price = prices.get(candidate_start + timedelta(hours=offset))
-            if price is None:
-                break
-            window_prices.append(price)
-        if len(window_prices) == duration:
+        window_prices = _collect_window_prices(
+            prices,
+            candidate_start,
+            duration,
+            required_day=target_day,
+        )
+        if window_prices is not None:
             candidates[candidate_start] = sum(window_prices) / duration
 
     if candidates:

@@ -453,6 +453,36 @@ def update_ha_entities(data: dict, ha_api: HomeAssistantApi, first_run: bool = F
         logger.error("Failed to update HA entities: %s", e, exc_info=True)
 
 
+def _mqtt_update_sensor(
+    mqtt_client: 'MqttDiscovery',
+    object_id: str,
+    value: Any,
+    attributes: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Update one MQTT Discovery sensor state with optional attributes."""
+    payload_attrs = attributes or {}
+    mqtt_client.update_state("sensor", object_id, str(value), payload_attrs)
+
+
+def _mqtt_update_stats_sensors(data: dict, mqtt_client: 'MqttDiscovery') -> None:
+    """Update common daily import/export statistic sensors."""
+    stats = [
+        ("average_price", data['avg_price_today']),
+        ("minimum_price", data['min_price_today']),
+        ("maximum_price", data['max_price_today']),
+        ("average_export_price", data['avg_export_today']),
+        ("minimum_export_price", data['min_export_today']),
+        ("maximum_export_price", data['max_export_today']),
+    ]
+    for object_id, value in stats:
+        _mqtt_update_sensor(
+            mqtt_client,
+            object_id,
+            value,
+            {'last_update': data['last_update']},
+        )
+
+
 def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run: bool = False):
     """Update Home Assistant entities via MQTT Discovery.
     
@@ -632,55 +662,51 @@ def update_ha_entities_mqtt(data: dict, mqtt_client: 'MqttDiscovery', first_run:
             logger.info("Entities have unique_id and can be managed from HA UI")
         else:
             # Just update state values
-            mqtt_client.update_state("sensor", "price_import", 
-                                     str(round(data['current_import'], 4)),
-                                     {'price_curve': data['price_curve_import'],
-                                      'percentiles': data['percentiles'],
-                                      'last_update': data['last_update']})
-            
-            mqtt_client.update_state("sensor", "price_export",
-                                     str(round(data['current_export'], 4)),
-                                     {'price_curve': data['price_curve_export'],
-                                      'last_update': data['last_update']})
-            
-            mqtt_client.update_state("sensor", "price_level",
-                                     data['price_level'],
-                                     {'current_price': data['current_import'],
-                                      'p20': data['percentiles']['p20'],
-                                      'p40': data['percentiles']['p40'],
-                                      'p60': data['percentiles']['p60']})
-            
-            # Update statistics sensors
-            mqtt_client.update_state("sensor", "average_price",
-                                     str(data['avg_price_today']),
-                                     {'last_update': data['last_update']})
-            
-            mqtt_client.update_state("sensor", "minimum_price",
-                                     str(data['min_price_today']),
-                                     {'last_update': data['last_update']})
-            
-            mqtt_client.update_state("sensor", "maximum_price",
-                                     str(data['max_price_today']),
-                                     {'last_update': data['last_update']})
-            
-            mqtt_client.update_state("sensor", "max_profit_today",
-                                     str(data['max_profit_today']),
-                                     {'min_import_price': data['min_price_today'],
-                                      'max_export_price': data['max_export_today'],
-                                      'last_update': data['last_update']})
-            
-            # Update export statistics sensors
-            mqtt_client.update_state("sensor", "average_export_price",
-                                     str(data['avg_export_today']),
-                                     {'last_update': data['last_update']})
-            
-            mqtt_client.update_state("sensor", "minimum_export_price",
-                                     str(data['min_export_today']),
-                                     {'last_update': data['last_update']})
-            
-            mqtt_client.update_state("sensor", "maximum_export_price",
-                                     str(data['max_export_today']),
-                                     {'last_update': data['last_update']})
+            _mqtt_update_sensor(
+                mqtt_client,
+                "price_import",
+                round(data['current_import'], 4),
+                {
+                    'price_curve': data['price_curve_import'],
+                    'percentiles': data['percentiles'],
+                    'last_update': data['last_update'],
+                },
+            )
+
+            _mqtt_update_sensor(
+                mqtt_client,
+                "price_export",
+                round(data['current_export'], 4),
+                {
+                    'price_curve': data['price_curve_export'],
+                    'last_update': data['last_update'],
+                },
+            )
+
+            _mqtt_update_sensor(
+                mqtt_client,
+                "price_level",
+                data['price_level'],
+                {
+                    'current_price': data['current_import'],
+                    'p20': data['percentiles']['p20'],
+                    'p40': data['percentiles']['p40'],
+                    'p60': data['percentiles']['p60'],
+                },
+            )
+
+            _mqtt_update_stats_sensors(data, mqtt_client)
+
+            _mqtt_update_sensor(
+                mqtt_client,
+                "max_profit_today",
+                data['max_profit_today'],
+                {
+                    'min_import_price': data['min_price_today'],
+                    'max_export_price': data['max_export_today'],
+                    'last_update': data['last_update'],
+                },
+            )
             
             # Update binary sensor
             mqtt_client.update_state("binary_sensor", "tomorrow_available",

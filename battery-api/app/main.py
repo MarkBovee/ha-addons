@@ -94,6 +94,31 @@ class ScheduleValidationError(Exception):
     pass
 
 
+def _period_bounds_minutes(period: Dict[str, Any]) -> tuple[int, int]:
+    """Return start/end minutes for a validated schedule period."""
+    start_minutes = int(period['start'][:2]) * 60 + int(period['start'][3:])
+    end_minutes = start_minutes + int(period['duration'])
+    return start_minutes, end_minutes
+
+
+def _periods_overlap(first: Dict[str, Any], second: Dict[str, Any]) -> bool:
+    """Return True when two validated periods overlap."""
+    start1, end1 = _period_bounds_minutes(first)
+    start2, end2 = _period_bounds_minutes(second)
+    return start1 < end2 and start2 < end1
+
+
+def _assert_no_overlaps(periods: List[Dict[str, Any]], period_type: str) -> None:
+    """Validate that periods within the same type do not overlap."""
+    for i, first in enumerate(periods):
+        for j, second in enumerate(periods[i + 1 :], i + 1):
+            if _periods_overlap(first, second):
+                raise ScheduleValidationError(
+                    f"{period_type}[{i}] and {period_type}[{j}] overlap "
+                    f"({first['start']} +{first['duration']}min vs {second['start']} +{second['duration']}min)"
+                )
+
+
 def validate_period(period: dict, index: int, period_type: str) -> Dict[str, Any]:
     """Validate a single period object.
     
@@ -207,32 +232,17 @@ def validate_schedule(json_str: str) -> Dict[str, List[Dict[str, Any]]]:
             result['discharge'].append(validate_period(period, i, 'discharge'))
     
     # Check for overlapping time periods within same type
-    for period_type in ('charge', 'discharge'):
-        periods = result[period_type]
-        for i, p1 in enumerate(periods):
-            start1 = int(p1['start'][:2]) * 60 + int(p1['start'][3:])
-            end1 = start1 + p1['duration']
-            for j, p2 in enumerate(periods[i+1:], i+1):
-                start2 = int(p2['start'][:2]) * 60 + int(p2['start'][3:])
-                end2 = start2 + p2['duration']
-                # Check overlap (handling midnight wrap would need more logic)
-                if start1 < end2 and start2 < end1:
-                    raise ScheduleValidationError(
-                        f"{period_type}[{i}] and {period_type}[{j}] overlap "
-                        f"({p1['start']} +{p1['duration']}min vs {p2['start']} +{p2['duration']}min)"
-                    )
+    _assert_no_overlaps(result['charge'], 'charge')
+    _assert_no_overlaps(result['discharge'], 'discharge')
     
     # Check for overlapping time periods across charge and discharge
-    for i, p1 in enumerate(result['charge']):
-        start1 = int(p1['start'][:2]) * 60 + int(p1['start'][3:])
-        end1 = start1 + p1['duration']
-        for j, p2 in enumerate(result['discharge']):
-            start2 = int(p2['start'][:2]) * 60 + int(p2['start'][3:])
-            end2 = start2 + p2['duration']
-            if start1 < end2 and start2 < end1:
+    for i, charge_period in enumerate(result['charge']):
+        for j, discharge_period in enumerate(result['discharge']):
+            if _periods_overlap(charge_period, discharge_period):
                 raise ScheduleValidationError(
                     f"charge[{i}] and discharge[{j}] overlap "
-                    f"({p1['start']} +{p1['duration']}min vs {p2['start']} +{p2['duration']}min)"
+                    f"({charge_period['start']} +{charge_period['duration']}min vs "
+                    f"{discharge_period['start']} +{discharge_period['duration']}min)"
                 )
     
     return result
