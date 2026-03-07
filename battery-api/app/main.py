@@ -101,6 +101,12 @@ def _period_bounds_minutes(period: Dict[str, Any]) -> tuple[int, int]:
     return start_minutes, end_minutes
 
 
+def _max_duration_to_end_of_day(start_hhmm: str) -> int:
+    """Return the maximum allowed duration so period end never crosses 23:59."""
+    start_minutes = int(start_hhmm[:2]) * 60 + int(start_hhmm[3:])
+    return max(0, (24 * 60 - 1) - start_minutes)
+
+
 def _periods_overlap(first: Dict[str, Any], second: Dict[str, Any]) -> bool:
     """Return True when two validated periods overlap."""
     start1, end1 = _period_bounds_minutes(first)
@@ -165,10 +171,23 @@ def validate_period(period: dict, index: int, period_type: str) -> Dict[str, Any
     if not isinstance(duration, (int, float)) or duration < 0 or duration > 1440:
         raise ScheduleValidationError(f"{period_type}[{index}] 'duration' must be 0-1440 minutes")
     
+    normalized_duration = int(duration)
+    max_duration = _max_duration_to_end_of_day(start)
+    if normalized_duration > max_duration:
+        logger.warning(
+            "%s[%d] duration clipped to fit same-day schedule: %s +%dm -> +%dm",
+            period_type,
+            index,
+            start,
+            normalized_duration,
+            max_duration,
+        )
+        normalized_duration = max_duration
+
     return {
         'start': start,
         'power': int(power),
-        'duration': int(duration),
+        'duration': normalized_duration,
     }
 
 
@@ -586,7 +605,7 @@ class BatteryApiAddon:
         try:
             validated = validate_schedule(json_str)
             self.validated_schedule = validated
-            self.schedule_json = json_str if json_str else "{}"
+            self.schedule_json = json.dumps(validated, separators=(",", ":"))
             
             charge_count = len(validated['charge'])
             discharge_count = len(validated['discharge'])
