@@ -153,6 +153,26 @@ def update_entity(
     mqtt.update_state("sensor", entity_id, state, attributes)
 
 
+def _to_aware(dt: datetime) -> datetime:
+    """Ensure datetime has timezone information for consistent comparisons."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _parse_period_bounds(period: Dict[str, Any]) -> Optional[tuple[datetime, datetime]]:
+    """Parse period start/duration into aware start/end datetimes."""
+    start_str = period.get("start")
+    duration = period.get("duration", 0)
+    if not start_str:
+        return None
+    try:
+        start_dt = isoparse(start_str)
+        start_dt = _to_aware(start_dt)
+        end_dt = start_dt + timedelta(minutes=int(duration))
+    except Exception:
+        return None
+    return start_dt, end_dt
+
+
 # ---------------------------------------------------------------------------
 # Status message builders (matching legacy NetDaemon app patterns)
 # ---------------------------------------------------------------------------
@@ -275,20 +295,13 @@ def build_schedule_display(
     active = None
     next_period = None
 
+    now_aware = _to_aware(now)
     for period in periods:
-        start_str = period.get("start")
-        duration = period.get("duration", 0)
-        if not start_str:
+        bounds = _parse_period_bounds(period)
+        if bounds is None:
             continue
-        try:
-            start_dt = isoparse(start_str)
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc)
-            end_dt = start_dt + timedelta(minutes=int(duration))
-        except Exception:
-            continue
+        start_dt, end_dt = bounds
 
-        now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
         if start_dt <= now_aware < end_dt:
             active = period
             break
@@ -315,24 +328,17 @@ def build_schedule_markdown(schedule: Dict[str, Any], now: datetime) -> str:
     """
     rows: List[Dict[str, Any]] = []
 
+    now_aware = _to_aware(now)
     for period_type in ["charge", "discharge"]:
         icon = "⚡" if period_type == "charge" else "📤"
         label = "Charge" if period_type == "charge" else "Discharge"
         for period in schedule.get(period_type, []):
-            start_str = period.get("start")
-            duration = period.get("duration", 0)
             power = period.get("power", 0)
-            if not start_str:
+            bounds = _parse_period_bounds(period)
+            if bounds is None:
                 continue
-            try:
-                start_dt = isoparse(start_str)
-                if start_dt.tzinfo is None:
-                    start_dt = start_dt.replace(tzinfo=timezone.utc)
-                end_dt = start_dt + timedelta(minutes=int(duration))
-            except Exception:
-                continue
+            start_dt, end_dt = bounds
 
-            now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
             if end_dt <= now_aware:
                 status = "✅"
             elif start_dt <= now_aware < end_dt:
@@ -657,7 +663,7 @@ def build_windows_display(
         label = "charge" if window_type == "charge" else "discharge"
         return f"No {label} windows today"
 
-    now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    now_aware = _to_aware(now)
     tomorrow_start = (now_aware + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     icon = "⚡" if window_type == "charge" else "💰"
     has_tomorrow = any(w["start"] >= tomorrow_start for w in windows)
@@ -703,7 +709,7 @@ def build_combined_schedule_display(
         |⚡ 02:00–04:00|Charge|8000W|€0.231|
         |💰 17:00–18:00|Discharge|6000W|€0.293|
     """
-    now_aware = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    now_aware = _to_aware(now)
     rows: List[Dict[str, Any]] = []
 
     for w in windows.get("charge", []):

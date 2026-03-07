@@ -388,7 +388,34 @@ def _publish_schedule(
             if success:
                 charge_count = len(api_schedule.get("charge", []))
                 discharge_count = len(api_schedule.get("discharge", []))
-                logger.info("📡 Schedule published: %d charge + %d discharge periods", charge_count, discharge_count)
+                schedule_discharge = schedule.get("discharge", [])
+                adaptive_periods = [
+                    p for p in schedule_discharge if p.get("window_type") == "adaptive"
+                ]
+                adaptive_count = len(adaptive_periods)
+                adaptive_powers = sorted(
+                    {
+                        int(p.get("power", 0))
+                        for p in adaptive_periods
+                        if isinstance(p.get("power"), (int, float))
+                    }
+                )
+
+                if adaptive_count > 0:
+                    adaptive_power_text = ",".join(f"{power}W" for power in adaptive_powers) if adaptive_powers else "unknown"
+                    logger.info(
+                        "📡 Schedule published: %d charge + %d discharge periods | adaptive discharging: %d (%s)",
+                        charge_count,
+                        discharge_count,
+                        adaptive_count,
+                        adaptive_power_text,
+                    )
+                else:
+                    logger.info(
+                        "📡 Schedule published: %d charge + %d discharge periods",
+                        charge_count,
+                        discharge_count,
+                    )
                 if state:
                     state.last_published_payload = payload_json
                 return True
@@ -701,6 +728,86 @@ def _build_display_windows_from_schedule(schedule: Dict[str, Any]) -> Dict[str, 
     return display
 
 
+def _build_range_state(
+    load_range: Optional[PriceRange],
+    discharge_range: Optional[PriceRange],
+    adaptive_range: Optional[PriceRange],
+) -> Dict[str, Dict[str, Optional[float]]]:
+    """Build a serializable price-range state payload for MQTT attributes."""
+    return {
+        "load": {
+            "min": load_range.min_price if load_range else None,
+            "max": load_range.max_price if load_range else None,
+        },
+        "discharge": {
+            "min": discharge_range.min_price if discharge_range else None,
+            "max": discharge_range.max_price if discharge_range else None,
+        },
+        "adaptive": {
+            "min": adaptive_range.min_price if adaptive_range else None,
+            "max": adaptive_range.max_price if adaptive_range else None,
+        },
+    }
+
+
+def _publish_price_ranges(
+    mqtt_client: Any,
+    load_range: Optional[PriceRange],
+    discharge_range: Optional[PriceRange],
+    adaptive_range: Optional[PriceRange],
+    charging_price_threshold: Optional[float],
+    dry_run: bool,
+) -> None:
+    """Publish textual and structured price ranges to Home Assistant entities."""
+    price_ranges_text = build_price_ranges_display(
+        load_range,
+        discharge_range,
+        adaptive_range,
+        charging_price_threshold,
+    )
+    update_entity(
+        mqtt_client,
+        ENTITY_PRICE_RANGES,
+        price_ranges_text,
+        _build_range_state(load_range, discharge_range, adaptive_range),
+        dry_run=dry_run,
+    )
+
+
+def _log_sensor_snapshot(
+    soc: Optional[float],
+    grid_power: Optional[float],
+    solar_power: Optional[float],
+    house_load: Optional[float],
+    batt_power: Optional[float],
+    ev_power: Optional[float],
+    level: int = logging.DEBUG,
+) -> None:
+    """Log current sensor values in a consistent, single-line format."""
+    logger.log(
+        level,
+        "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW | Bat: %sW | EV: %sW",
+        soc if soc is not None else "?",
+        grid_power if grid_power is not None else "?",
+        solar_power if solar_power is not None else "?",
+        house_load if house_load is not None else "?",
+        batt_power if batt_power is not None else "?",
+        ev_power if ev_power is not None else "?",
+    )
+
+
+def _get_active_period_power(
+    schedule: Dict[str, Any],
+    period_type: str,
+    now: datetime,
+) -> Optional[int]:
+    """Return power for the currently active period type, if any."""
+    for period in schedule.get(period_type, []):
+        if _is_period_active(period, now):
+            return period.get("power")
+    return None
+
+
 
 
 def generate_schedule(
@@ -819,24 +926,14 @@ def generate_schedule(
         state.last_curve_length = new_length
         state.last_price_curve = import_curve
 
-    range_state = {
-        "load": {
-            "min": load_range.min_price if load_range else None,
-            "max": load_range.max_price if load_range else None,
-        },
-        "discharge": {
-            "min": discharge_range.min_price if discharge_range else None,
-            "max": discharge_range.max_price if discharge_range else None,
-        },
-        "adaptive": {
-            "min": adaptive_range.min_price if adaptive_range else None,
-            "max": adaptive_range.max_price if adaptive_range else None,
-        },
-    }
-    price_ranges_text = build_price_ranges_display(
-        load_range, discharge_range, adaptive_range, charging_price_threshold,
+    _publish_price_ranges(
+        mqtt_client,
+        load_range,
+        discharge_range,
+        adaptive_range,
+        charging_price_threshold,
+        is_dry_run,
     )
-    update_entity(mqtt_client, ENTITY_PRICE_RANGES, price_ranges_text, range_state, dry_run=is_dry_run)
 
     reasoning_text = build_today_story(
         price_range, import_price, export_price,
@@ -1296,15 +1393,7 @@ def monitor_and_adjust_active_period(
             logger.warning("⚠️ EV charger sensor unavailable, skipping EV integration")
             state.warned_missing_ev = True
 
-    logger.debug(
-        "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW | Bat: %sW | EV: %sW",
-        soc if soc is not None else "?",
-        grid_power if grid_power is not None else "?",
-        solar_power if solar_power is not None else "?",
-        house_load if house_load is not None else "?",
-        batt_power if batt_power is not None else "?",
-        ev_power if ev_power is not None else "?",
-    )
+    _log_sensor_snapshot(soc, grid_power, solar_power, house_load, batt_power, ev_power)
 
     if grid_power is None and not state.warned_missing_grid:
         logger.warning("⚠️ Grid power sensor unavailable, skipping export prevention")
@@ -1410,29 +1499,13 @@ def monitor_and_adjust_active_period(
         runtime_price_range = "adaptive"
 
     if state.last_price_range != runtime_price_range:
-        price_ranges_text = build_price_ranges_display(
-            load_range, discharge_range, adaptive_range,
-            charging_price_threshold,
-        )
-        update_entity(
+        _publish_price_ranges(
             mqtt_client,
-            ENTITY_PRICE_RANGES,
-            price_ranges_text,
-            {
-                "load": {
-                    "min": load_range.min_price if load_range else None,
-                    "max": load_range.max_price if load_range else None,
-                },
-                "discharge": {
-                    "min": discharge_range.min_price if discharge_range else None,
-                    "max": discharge_range.max_price if discharge_range else None,
-                },
-                "adaptive": {
-                    "min": adaptive_range.min_price if adaptive_range else None,
-                    "max": adaptive_range.max_price if adaptive_range else None,
-                },
-            },
-            dry_run=is_dry_run,
+            load_range,
+            discharge_range,
+            adaptive_range,
+            charging_price_threshold,
+            is_dry_run,
         )
         update_entity(
             mqtt_client,
@@ -1532,14 +1605,14 @@ def monitor_and_adjust_active_period(
     if status_changed:
         state.last_monitor_status = monitor_status
         # Log sensor values on state transitions at INFO for context
-        logger.info(
-            "📊 Sensors | SOC: %s%% | Grid: %sW | Solar: %sW | Load: %sW | Bat: %sW | EV: %sW",
-            soc if soc is not None else "?",
-            grid_power if grid_power is not None else "?",
-            solar_power if solar_power is not None else "?",
-            house_load if house_load is not None else "?",
-            batt_power if batt_power is not None else "?",
-            ev_power if ev_power is not None else "?",
+        _log_sensor_snapshot(
+            soc,
+            grid_power,
+            solar_power,
+            house_load,
+            batt_power,
+            ev_power,
+            level=logging.INFO,
         )
 
     if active_discharge and should_pause:
@@ -1625,6 +1698,20 @@ def monitor_and_adjust_active_period(
                 f"{adaptive_power}",
                 dry_run=is_dry_run,
             )
+            update_entity(
+                mqtt_client,
+                ENTITY_CURRENT_ACTION,
+                f"Adaptive Discharging {adaptive_power}W",
+                {
+                    "price_range": runtime_price_range,
+                    "effective_price_range": "adaptive",
+                    "target_power": adaptive_power,
+                    "current_power": current_power,
+                    "grid_power": grid_power,
+                    "soc": soc,
+                },
+                dry_run=is_dry_run,
+            )
             status_msg = build_status_message(
                 runtime_price_range, False, True, None, None, temperature,
                 reduced=True, pause_reason=", ".join(reduce_reasons),
@@ -1646,11 +1733,7 @@ def monitor_and_adjust_active_period(
         )
     else:
         if active_charge:
-            charge_power_val = None
-            for p in state.schedule.get("charge", []):
-                if _is_period_active(p, now):
-                    charge_power_val = p.get("power")
-                    break
+            charge_power_val = _get_active_period_power(state.schedule, "charge", now)
             status_msg = build_status_message(
                 runtime_price_range, True, False, charge_power_val, None, temperature,
             )
@@ -1668,11 +1751,7 @@ def monitor_and_adjust_active_period(
                 dry_run=is_dry_run,
             )
         elif active_discharge:
-            discharge_power_val = None
-            for p in state.schedule.get("discharge", []):
-                if _is_period_active(p, now):
-                    discharge_power_val = p.get("power")
-                    break
+            discharge_power_val = _get_active_period_power(state.schedule, "discharge", now)
             status_msg = build_status_message(
                 runtime_price_range, False, True, None, discharge_power_val, temperature,
             )
