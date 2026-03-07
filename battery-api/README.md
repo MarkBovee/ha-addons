@@ -127,6 +127,7 @@ data:
 - Maximum 3 charge periods per day
 - Maximum 6 discharge periods per day
 - Periods cannot overlap
+- Period end times must not cross midnight; durations are normalized so each period ends by `23:59`
 
 ## Integration with NetDaemon
 

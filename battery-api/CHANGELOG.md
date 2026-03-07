@@ -2,6 +2,14 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.18] - 2026-03-07
+
+### Fixed
+- Prevented illegal cross-midnight schedule periods for SAJ writes.
+  - Validation now clips each period duration so end time never goes past 23:59.
+  - Example: `22:00 +720m` is normalized to `22:00 +119m` before apply.
+  - Stored schedule JSON now reflects normalized durations so logs/entities match what is sent.
+
 ## [0.2.17] - 2026-03-07
 
 ### Changed
