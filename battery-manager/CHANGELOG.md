@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.39 — 2026-03-07
+- **Release: Repository-wide add-on bump** — Version bump for coordinated all-addon release.
+- **Note:** Runtime behavior unchanged from 0.8.38.
+
 ## 0.8.38 — 2026-03-07
 - **Fix: Adaptive publish log clarity** — Schedule publish log now includes adaptive discharge context and commanded wattage when adaptive periods are present.
 - **Fix: Current action in adaptive override** — `sensor.battery_manager_current_action` is now updated during reduced/adaptive override with explicit `Adaptive Discharging {W}W` state.

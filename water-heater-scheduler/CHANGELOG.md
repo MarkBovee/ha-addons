@@ -2,6 +2,13 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.9] - 2026-03-07
+
+### Changed
+- Refactored heating-window price selection by extracting shared full-window price collection logic.
+- Reduced duplication between day/night and future-window selection paths.
+- No functional behavior changes intended.
+
 ## [1.2.7] - 2025-12-14
 
 ### Fixed

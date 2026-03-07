@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.7] - 2026-03-07
+
+### Changed
+- Refactored automation MQTT state updates by introducing a shared helper for repeated update calls.
+- No functional behavior changes intended.
+
 ## [1.3.6] - 2025-12-26
 
 ### Fixed

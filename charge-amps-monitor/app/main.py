@@ -160,6 +160,17 @@ def publish_automation_sensors_rest(status: AutomationStatus, ha_api_url: str, h
     )
 
 
+def _mqtt_update(
+    mqtt_client: 'MqttDiscovery',
+    component: str,
+    object_id: str,
+    state: str,
+    attributes: Optional[dict] = None,
+) -> None:
+    """Update one MQTT entity with optional attributes."""
+    mqtt_client.update_state(component, object_id, state, attributes)
+
+
 def publish_automation_sensors_mqtt(
     mqtt_client: 'MqttDiscovery',
     status: AutomationStatus,
@@ -239,17 +250,20 @@ def publish_automation_sensors_mqtt(
             )
         )
     else:
-        mqtt_client.update_state("sensor", "schedule_status", status.state, status_attrs)
-        mqtt_client.update_state("sensor", "next_start", status.next_start or "unknown")
-        mqtt_client.update_state("sensor", "next_end", status.next_end or "unknown")
-        mqtt_client.update_state("sensor", "schedule_error", status.last_error or "none")
-        mqtt_client.update_state("sensor", "schedule_source", schedule_source)
-        mqtt_client.update_state("sensor", "hems_last_command", hems_last_command or "unavailable")
-        mqtt_client.update_state(
-            "binary_sensor", 
-            "price_threshold_active", 
-            "ON" if price_threshold_active else "OFF"
+        _mqtt_update(mqtt_client, "sensor", "schedule_status", status.state, status_attrs)
+        _mqtt_update(mqtt_client, "sensor", "next_start", status.next_start or "unknown")
+        _mqtt_update(mqtt_client, "sensor", "next_end", status.next_end or "unknown")
+        _mqtt_update(mqtt_client, "sensor", "schedule_error", status.last_error or "none")
+        _mqtt_update(mqtt_client, "sensor", "schedule_source", schedule_source)
+        _mqtt_update(mqtt_client, "sensor", "hems_last_command", hems_last_command or "unavailable")
+        _mqtt_update(
+            mqtt_client,
+            "binary_sensor",
+            "price_threshold_active",
+            "ON" if price_threshold_active else "OFF",
         )
+
+
 def delete_entity(entity_id: str, ha_api_url: str, ha_api_token: str) -> bool:
     """Delete a Home Assistant entity."""
     try:
