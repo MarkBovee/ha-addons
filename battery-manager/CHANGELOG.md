@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.38 — 2026-03-07
+- **Fix: Adaptive publish log clarity** — Schedule publish log now includes adaptive discharge context and commanded wattage when adaptive periods are present.
+- **Fix: Current action in adaptive override** — `sensor.battery_manager_current_action` is now updated during reduced/adaptive override with explicit `Adaptive Discharging {W}W` state.
+- **Refactor: Main/status reporter cleanup** — Extracted duplicated range/state publishing, sensor snapshot logging, active-period power lookup, and datetime parsing helpers to reduce complexity without behavior changes.
+
 ## 0.8.37 — 2026-03-07
 - **Fix: Reduced-mode adaptive power response** — When low-SOC conservative protection downgrades an active discharge window to adaptive mode, runtime now calculates and publishes adaptive power from live grid conditions instead of staying at static min/0W. This restores real adaptive behavior above `charging_price_threshold` during reduced mode.
 
