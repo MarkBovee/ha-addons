@@ -116,6 +116,11 @@ DEFAULT_CONFIG = {
         "top_x_discharge_hours": 2,
         "min_profit_threshold": 0.1,
         "overnight_wait_threshold": 0.02,
+        "sell_wait_for_better_morning_enabled": False,
+        "sell_wait_horizon_hours": 12,
+        "sell_wait_min_gain_threshold": 0.02,
+        "sell_wait_morning_start_hour": 5,
+        "sell_wait_morning_end_hour": 10,
     },
     "temperature_based_discharge": {
         "enabled": True,
@@ -550,6 +555,90 @@ def _should_wait_for_overnight(
     evening_avg = sum(evening_prices) / len(evening_prices)
     overnight_avg = sum(overnight_prices) / len(overnight_prices)
     return (evening_avg - overnight_avg) >= threshold
+
+
+def _get_sell_wait_decision(
+    discharge_windows: List[Dict[str, Any]],
+    now: datetime,
+    heuristics: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Return a discharge wait decision when a better near-term morning sell window exists."""
+
+    if not heuristics.get("sell_wait_for_better_morning_enabled", False):
+        return None
+
+    horizon_hours = max(0.0, float(heuristics.get("sell_wait_horizon_hours", 12)))
+    min_gain = float(heuristics.get("sell_wait_min_gain_threshold", 0.02))
+    morning_start = int(heuristics.get("sell_wait_morning_start_hour", 5)) % 24
+    morning_end = int(heuristics.get("sell_wait_morning_end_hour", 10)) % 24
+
+    if horizon_hours <= 0:
+        return None
+
+    horizon_end = now + timedelta(hours=horizon_hours)
+
+    def _in_target_window(start_dt: datetime) -> bool:
+        hour = start_dt.astimezone().hour
+        if morning_start == morning_end:
+            return True
+        if morning_start < morning_end:
+            return morning_start <= hour < morning_end
+        return hour >= morning_start or hour < morning_end
+
+    future_candidates = []
+    for window in discharge_windows:
+        start_dt = window.get("start")
+        avg_price = window.get("avg_price")
+        if not isinstance(start_dt, datetime) or avg_price is None:
+            continue
+        if start_dt <= now or start_dt > horizon_end:
+            continue
+        if not _in_target_window(start_dt):
+            continue
+        future_candidates.append(window)
+
+    if not future_candidates:
+        return None
+
+    best_candidate = max(
+        future_candidates,
+        key=lambda w: (
+            float(w.get("avg_price", 0.0)),
+            -(w.get("start").timestamp() if isinstance(w.get("start"), datetime) else 0.0),
+        ),
+    )
+    candidate_start = best_candidate.get("start")
+    candidate_price = float(best_candidate.get("avg_price", 0.0))
+    if not isinstance(candidate_start, datetime):
+        return None
+
+    pre_target_prices: List[float] = []
+    for window in discharge_windows:
+        start_dt = window.get("start")
+        end_dt = window.get("end")
+        avg_price = window.get("avg_price")
+        if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime) or avg_price is None:
+            continue
+        if end_dt <= now:
+            continue
+        if start_dt >= candidate_start:
+            continue
+        pre_target_prices.append(float(avg_price))
+
+    if not pre_target_prices:
+        return None
+
+    best_pre_target_price = max(pre_target_prices)
+    gain = candidate_price - best_pre_target_price
+    if gain + 1e-9 < min_gain:
+        return None
+
+    return {
+        "wait_until": candidate_start,
+        "best_future_price": candidate_price,
+        "best_price_before_wait": best_pre_target_price,
+        "gain": gain,
+    }
 
 
 def _calculate_adaptive_power(
@@ -1008,6 +1097,21 @@ def generate_schedule(
         adaptive_enabled=adaptive_enabled,
     )
 
+    sell_wait_decision = _get_sell_wait_decision(
+        upcoming_windows.get("discharge", []),
+        now,
+        config.get("heuristics", {}),
+    )
+    if sell_wait_decision:
+        wait_until = sell_wait_decision["wait_until"]
+        logger.info(
+            "⏳ Sell-wait active until %s: best future %.3f vs pre-wait %.3f (gain %.3f)",
+            wait_until.astimezone().strftime("%H:%M"),
+            sell_wait_decision["best_future_price"],
+            sell_wait_decision["best_price_before_wait"],
+            sell_wait_decision["gain"],
+        )
+
     # Rank discharge windows once per schedule generation so window power stays
     # stable during the day when the underlying price curve is unchanged.
     ranked_discharge_windows = sorted(
@@ -1160,6 +1264,8 @@ def generate_schedule(
     discharge_not_before = interval_start
     if precharge_until is not None:
         discharge_not_before = max(discharge_not_before, precharge_until)
+    if sell_wait_decision:
+        discharge_not_before = max(discharge_not_before, sell_wait_decision["wait_until"])
 
     for window_type, window in selected_discharge_windows:
         start_dt = window["start"]

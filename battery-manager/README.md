@@ -59,6 +59,11 @@ Key options (defaults in config.yaml):
 - **heuristics.charging_price_threshold**: price below which battery stays idle (passive range, EUR/kWh)
 - **heuristics.min_profit_threshold**: minimum spread between load and discharge prices (EUR/kWh)
 - **heuristics.overnight_wait_threshold**: evening vs overnight price gap to wait for cheaper charging (EUR/kWh)
+- **heuristics.sell_wait_for_better_morning_enabled**: defer discharge when a better sell window exists within the configured horizon
+- **heuristics.sell_wait_horizon_hours**: look-ahead horizon used to evaluate deferred selling (hours, default 12)
+- **heuristics.sell_wait_min_gain_threshold**: minimum export-price gain needed to defer selling (EUR/kWh)
+- **heuristics.sell_wait_morning_start_hour**: local-hour start (inclusive) for preferred deferred sell window
+- **heuristics.sell_wait_morning_end_hour**: local-hour end (exclusive) for preferred deferred sell window
 - **temperature_based_discharge.enabled**: enable temperature mapping
 - **temperature_based_discharge.thresholds**: temperature → discharge hours mapping
 - **ev_charger.enabled**: enable EV charger integration

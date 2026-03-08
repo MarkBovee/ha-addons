@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.39"
+version: "0.8.40"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -64,6 +64,11 @@ options:
     top_x_discharge_hours: 2
     min_profit_threshold: 0.1
     overnight_wait_threshold: 0.02
+    sell_wait_for_better_morning_enabled: true
+    sell_wait_horizon_hours: 16
+    sell_wait_min_gain_threshold: 0.05
+    sell_wait_morning_start_hour: 0
+    sell_wait_morning_end_hour: 8
 
   temperature_based_discharge:
     enabled: true
@@ -142,6 +147,11 @@ schema:
     top_x_discharge_hours: int(0,24)
     min_profit_threshold: float(0,2)
     overnight_wait_threshold: float(0,1)
+    sell_wait_for_better_morning_enabled: bool?
+    sell_wait_horizon_hours: float(0,24)?
+    sell_wait_min_gain_threshold: float(0,1)?
+    sell_wait_morning_start_hour: int(0,23)?
+    sell_wait_morning_end_hour: int(0,23)?
 
   temperature_based_discharge:
     enabled: bool?

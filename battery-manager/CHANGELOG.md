@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.40 — 2026-03-08
+- **Feature: Deferred morning sell heuristic** — Added optional logic to delay discharge when a better sell window exists within a configurable look-ahead horizon (default 12h) and preferred morning window.
+- **Config: New heuristic options** — Added `sell_wait_for_better_morning_enabled`, `sell_wait_horizon_hours`, `sell_wait_min_gain_threshold`, `sell_wait_morning_start_hour`, and `sell_wait_morning_end_hour`.
+- **Tests:** Added focused unit tests for sell-wait decision boundaries and horizon handling.
+
 ## 0.8.39 — 2026-03-07
 - **Release: Repository-wide add-on bump** — Version bump for coordinated all-addon release.
 - **Note:** Runtime behavior unchanged from 0.8.38.
