@@ -23,6 +23,8 @@ This change introduces a consolidated **battery-manager** Home Assistant add-on 
 - "Passive Solar" strategy ported and integrated
 - "Dry Run" mode for safe side-by-side comparison with production
 - "Adaptive Monitoring" logs to visualize decision tree differences
+- Fractional temperature-based discharge durations that preserve 15/30-minute price slots
+- A max-SOC stabilizer discharge burst to keep SOC hovering around the configured charge ceiling
 
 ---
 
@@ -131,10 +133,15 @@ ev_charger:
 ### 2. Temperature-Based Discharge Duration
 **Rationale:** Heating costs dominate in cold weather; discharge longer to offset heating load
 - **<0°C:** 1 hour discharge (extreme cold, heating very expensive)
-- **0-8°C:** 1 hour (moderate heating needs)
-- **8-16°C:** 2 hours (lower heating, extend discharge)
-- **16-20°C:** 2 hours (minimal heating)
+- **0-8°C:** 1.5 hours (moderate heating needs)
+- **8-12°C:** 2 hours (lower heating, extend discharge)
+- **12-16°C:** 2.5 hours (minimal heating)
 - **≥20°C:** 3 hours (no heating, maximize discharge value)
+
+### 6. Max-SOC Stabilizer
+**Trigger:** Battery SOC reaches configured `soc.max_soc`
+- **Action:** Temporarily stop any active charging schedule and publish a 5-minute discharge burst at 50% discharge power
+- **Benefit:** Prevent the battery from sticking at the charge ceiling and keep SOC stable around `max_soc`
 
 ### 3. Rank-Based Power Scaling
 **Purpose:** Higher-ranked expensive periods get more aggressive discharge

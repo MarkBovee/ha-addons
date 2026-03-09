@@ -2,10 +2,17 @@
 
 import sys
 import os
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.price_analyzer import calculate_price_ranges
+from app.price_analyzer import (
+    PriceRange,
+    calculate_price_ranges,
+    calculate_top_x_count,
+    find_profitable_discharge_starts,
+)
+from app.status_reporter import find_upcoming_windows
 
 
 class TestCalculatePriceRanges:
@@ -102,3 +109,76 @@ class TestCalculatePriceRanges:
         # Depending on implementation, this may or may not meet profit requirement
         # Just verify the function doesn't crash
         assert load_range is not None
+
+
+class TestDischargeSelectionHelpers:
+    def test_fractional_hours_expand_to_required_slot_count(self):
+        assert calculate_top_x_count(1.5, 60) == 2
+        assert calculate_top_x_count(1.5, 30) == 3
+        assert calculate_top_x_count(2.5, 15) == 10
+
+    def test_profitable_discharge_starts_select_exact_top_slots(self):
+        import_curve = [
+            {"start": "2026-03-09T00:00:00+00:00", "price": 0.20},
+            {"start": "2026-03-09T01:00:00+00:00", "price": 0.22},
+            {"start": "2026-03-09T02:00:00+00:00", "price": 0.21},
+        ]
+        export_curve = [
+            {"start": "2026-03-09T00:00:00+00:00", "price": 0.36},
+            {"start": "2026-03-09T01:00:00+00:00", "price": 0.40},
+            {"start": "2026-03-09T02:00:00+00:00", "price": 0.38},
+            {"start": "2026-03-09T03:00:00+00:00", "price": 0.37},
+        ]
+
+        selected = find_profitable_discharge_starts(
+            import_curve,
+            export_curve,
+            top_x_discharge=2,
+            min_profit=0.10,
+        )
+
+        assert selected == {
+            "2026-03-09T01:00:00+00:00",
+            "2026-03-09T02:00:00+00:00",
+        }
+
+    def test_upcoming_windows_respect_exact_discharge_starts(self):
+        now = datetime(2026, 3, 9, 0, 0, tzinfo=timezone.utc)
+        import_curve = []
+        export_curve = []
+        base = now
+
+        for index, price in enumerate((0.20, 0.20, 0.20, 0.20)):
+            start = base + timedelta(hours=index)
+            end = start + timedelta(hours=1)
+            import_curve.append({
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "price": price,
+            })
+
+        for index, price in enumerate((0.35, 0.40, 0.38, 0.37)):
+            start = base + timedelta(hours=index)
+            end = start + timedelta(hours=1)
+            export_curve.append({
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "price": price,
+            })
+
+        windows = find_upcoming_windows(
+            import_curve,
+            export_curve,
+            load_range=None,
+            discharge_range=PriceRange(min_price=0.37, max_price=0.40),
+            charging_price_threshold=None,
+            now=now,
+            discharge_slot_starts={
+                (base + timedelta(hours=1)).isoformat(),
+                (base + timedelta(hours=2)).isoformat(),
+            },
+        )
+
+        assert len(windows["discharge"]) == 1
+        assert windows["discharge"][0]["start"] == base + timedelta(hours=1)
+        assert windows["discharge"][0]["end"] == base + timedelta(hours=3)

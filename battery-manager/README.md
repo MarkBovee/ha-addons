@@ -45,7 +45,7 @@ Key options (defaults in config.yaml):
 - **soc.min_soc**: hard minimum SOC (%)
 - **soc.conservative_soc**: conservative SOC threshold (%)
 - **soc.target_eod_soc**: end-of-day target SOC (%)
-- **soc.max_soc**: max SOC allowed for charging
+- **soc.max_soc**: max SOC allowed for charging; reaching this value also triggers a 5-minute 50% discharge stabilizer burst to keep SOC near the ceiling
 - **soc.battery_capacity_kwh**: battery usable capacity used for buffer calculation (kWh)
 - **soc.sell_buffer_enabled**: keep dynamic SOC reserve for discharge windows before main charge window
 - **soc.sell_buffer_min_soc**: safety minimum SOC floor for sell-buffer logic (%)
@@ -66,7 +66,7 @@ Key options (defaults in config.yaml):
 - **heuristics.sell_wait_morning_start_hour**: local-hour start (inclusive) for preferred deferred sell window
 - **heuristics.sell_wait_morning_end_hour**: local-hour end (exclusive) for preferred deferred sell window
 - **temperature_based_discharge.enabled**: enable temperature mapping
-- **temperature_based_discharge.thresholds**: temperature → discharge hours mapping
+- **temperature_based_discharge.thresholds**: temperature → discharge hours mapping; `discharge_hours` may be fractional (for example `1.5` or `2.5`)
 - **ev_charger.enabled**: enable EV charger integration
 - **ev_charger.charging_threshold**: EV charging threshold (W)
 - **ev_charger.entity_id**: EV charger power sensor

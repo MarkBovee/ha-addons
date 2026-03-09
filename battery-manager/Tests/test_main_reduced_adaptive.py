@@ -4,6 +4,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from copy import deepcopy
+from typing import Any, cast
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -80,11 +81,11 @@ def test_reduced_mode_uses_adaptive_power(monkeypatch):
 
     bm_main.monitor_and_adjust_active_period(
         config,
-        ha_api=object(),
+        ha_api=cast(Any, object()),
         mqtt_client=None,
         state=state,
-        solar_monitor=_SolarMonitorStub(),
-        gap_scheduler=_GapSchedulerStub(),
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
     )
 
     assert published, "Expected reduced/adaptive override schedule to be published"
@@ -160,13 +161,161 @@ def test_active_discharge_pauses_when_soc_unavailable(monkeypatch):
 
     bm_main.monitor_and_adjust_active_period(
         config,
-        ha_api=object(),
+        ha_api=cast(Any, object()),
         mqtt_client=None,
         state=state,
-        solar_monitor=_SolarMonitorStub(),
-        gap_scheduler=_GapSchedulerStub(),
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
     )
 
     assert published, "Expected protective pause override schedule to be published"
     override_schedule = published[-1][0]
     assert override_schedule["discharge"] == []
+
+
+def test_max_soc_stabilizer_starts_5_minute_half_power_discharge(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["max_soc"] = 97
+    config["power"]["max_discharge_power"] = 8000
+
+    now = datetime.now(timezone.utc)
+    state = bm_main.RuntimeState(
+        schedule={
+            "charge": [
+                {
+                    "start": (now - timedelta(minutes=5)).isoformat(),
+                    "duration": 30,
+                    "power": 8000,
+                    "window_type": "charge",
+                }
+            ],
+            "discharge": [],
+        },
+        schedule_generated_at=now,
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 97.0,
+        config["entities"]["grid_power_entity"]: 0.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 200.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 14.0,
+    }
+
+    published = []
+    entity_updates = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: entity_updates.append((_args, _kwargs)))
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: published.append((schedule, force)) or True,
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
+    )
+
+    assert published, "Expected max-SOC stabilizer override schedule to be published"
+    override_schedule = published[-1][0]
+    assert override_schedule["charge"] == []
+    assert len(override_schedule["discharge"]) == 1
+    assert override_schedule["discharge"][0]["power"] == 4000
+    assert override_schedule["discharge"][0]["duration"] == 5
+    assert override_schedule["discharge"][0]["window_type"] == "max_soc_stabilizer"
+    assert state.last_commanded_power == 4000
+    assert state.max_soc_stabilizer_until is not None
+
+    last_power_updates = [
+        call for call in entity_updates
+        if call[0][1] == bm_main.ENTITY_LAST_COMMANDED_POWER
+    ]
+    assert last_power_updates
+    assert last_power_updates[-1][0][2] == "4000"
+
+
+def test_max_soc_stabilizer_clears_below_hysteresis_floor(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["max_soc"] = 97
+
+    now = datetime.now(timezone.utc)
+    state = bm_main.RuntimeState(
+        schedule={"charge": [], "discharge": []},
+        schedule_generated_at=now,
+        max_soc_stabilizer_until=now + timedelta(minutes=4),
+        last_commanded_power=4000,
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 95.5,
+        config["entities"]["grid_power_entity"]: 0.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 200.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 14.0,
+    }
+
+    published = []
+    entity_updates = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: entity_updates.append((_args, _kwargs)))
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: published.append((schedule, force)) or True,
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
+    )
+
+    assert published, "Expected generated schedule to be restored after stabilizer clears"
+    assert published[-1][0] == state.schedule
+    assert state.max_soc_stabilizer_until is None
+    assert state.last_commanded_power is None
+
+    last_power_updates = [
+        call for call in entity_updates
+        if call[0][1] == bm_main.ENTITY_LAST_COMMANDED_POWER
+    ]
+    assert last_power_updates
+    assert last_power_updates[-1][0][2] == "unknown"

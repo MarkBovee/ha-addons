@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.42 — 2026-03-09
+- **Feature: Fractional temperature discharge durations** — `temperature_based_discharge.thresholds[].discharge_hours` now accepts decimals and preserves them through slot counting, so 15/30-minute schedules can target the intended discharge duration.
+- **Fix: Exact profitable discharge slot selection** — discharge windows are now built from the exact top-priced profitable export slots instead of every interval inside the broad discharge price band.
+- **Feature: Max-SOC stabilizer** — when SOC reaches `soc.max_soc`, Battery Manager now publishes a 5-minute discharge burst at 50% of configured max discharge power to keep SOC hovering around the ceiling.
+- **Docs:** Updated config/README notes for decimal `discharge_hours` and max-SOC stabilizer behavior.
+
 ## 0.8.41 — 2026-03-09
 - **Fix: SOC protection hardening** — Added SOC freshness guard (`timing.max_soc_sensor_age_seconds`, default 900s). Active discharge now enters a protective pause when SOC is unavailable/stale to prevent uncontrolled drain.
 - **Fix: Sell-wait observability** — `_get_sell_wait_decision` now emits structured diagnostics for skipped decisions (`disabled`, `invalid_horizon`, `no_target_window_candidate`, `no_pre_target_windows`, `gain_below_threshold`) and schedule generation logs the exact skip reason.

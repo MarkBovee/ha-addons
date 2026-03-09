@@ -25,6 +25,7 @@ from .price_analyzer import (
     calculate_price_ranges,
     calculate_top_x_count,
     detect_interval_minutes,
+    find_profitable_discharge_starts,
     get_current_period_rank,
     get_current_price_entry,
 )
@@ -127,9 +128,9 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "thresholds": [
             {"temp_max": 0, "discharge_hours": 1},
-            {"temp_max": 8, "discharge_hours": 1},
-            {"temp_max": 16, "discharge_hours": 2},
-            {"temp_max": 20, "discharge_hours": 2},
+            {"temp_max": 8, "discharge_hours": 1.5},
+            {"temp_max": 12, "discharge_hours": 2},
+            {"temp_max": 16, "discharge_hours": 2.5},
             {"temp_max": 999, "discharge_hours": 3},
         ],
     },
@@ -168,6 +169,7 @@ class RuntimeState:
     sell_buffer_discharge_hours: float = 0.0
     passive_gap_active: bool = False
     reduced_override_active: bool = False
+    max_soc_stabilizer_until: Optional[datetime] = None
 
 
 def _load_config() -> Dict[str, Any]:
@@ -392,6 +394,8 @@ def _format_schedule_for_api(schedule: Dict[str, Any]) -> Dict[str, Any]:
 # SAJ API period limits
 MAX_CHARGE_PERIODS = 3
 MAX_DISCHARGE_PERIODS = 6
+MAX_SOC_STABILIZER_MINUTES = 5
+MAX_SOC_STABILIZER_HYSTERESIS_PCT = 1.0
 
 
 def _publish_schedule(
@@ -473,6 +477,29 @@ def _publish_schedule(
     
     logger.error("❌ Failed to publish schedule after %d attempts", max_attempts)
     return False
+
+
+def _build_max_soc_stabilizer_schedule(
+    now: datetime,
+    power: int,
+    duration_minutes: int,
+) -> Dict[str, Any]:
+    return {
+        "charge": [],
+        "discharge": [
+            {
+                "start": now.isoformat(),
+                "power": power,
+                "duration": duration_minutes,
+                "window_type": "max_soc_stabilizer",
+            }
+        ],
+    }
+
+
+def _get_max_soc_stabilizer_power(config: Dict[str, Any]) -> int:
+    max_power = int(config.get("power", {}).get("max_discharge_power", 8000))
+    return max(0, int(max_power / 2))
 
 
 def _split_curve_by_date(curve: List[Dict[str, Any]]) -> tuple[list[dict], list[dict]]:
@@ -1036,7 +1063,7 @@ def generate_schedule(
             temperature,
             config["temperature_based_discharge"]["thresholds"],
         )
-        logger.info("  Effective discharge hours from temperature: %d", top_x_discharge_hours)
+        logger.info("  Effective discharge hours from temperature: %.2f", top_x_discharge_hours)
 
     top_x_charge_count = calculate_top_x_count(top_x_charge_hours, interval_minutes)
     top_x_discharge_count = calculate_top_x_count(top_x_discharge_hours, interval_minutes)
@@ -1052,6 +1079,12 @@ def generate_schedule(
         range_import_curve,
         range_export_curve,
         top_x_charge_count,
+        top_x_discharge_count,
+        min_profit,
+    )
+    today_discharge_slot_starts = find_profitable_discharge_starts(
+        range_import_curve,
+        range_export_curve,
         top_x_discharge_count,
         min_profit,
     )
@@ -1116,6 +1149,7 @@ def generate_schedule(
 
     tomorrow_load: Optional[PriceRange] = None
     tomorrow_discharge: Optional[PriceRange] = None
+    tomorrow_discharge_slot_starts: Optional[set[str]] = None
 
     if tomorrow_import:
         tomorrow_export = tomorrow_import
@@ -1125,6 +1159,12 @@ def generate_schedule(
             tomorrow_import,
             tomorrow_export,
             top_x_charge_count,
+            top_x_discharge_count,
+            min_profit,
+        )
+        tomorrow_discharge_slot_starts = find_profitable_discharge_starts(
+            tomorrow_import,
+            tomorrow_export,
             top_x_discharge_count,
             min_profit,
         )
@@ -1175,6 +1215,8 @@ def generate_schedule(
         charging_price_threshold, now,
         tomorrow_load_range=tomorrow_load,
         tomorrow_discharge_range=tomorrow_discharge,
+        discharge_slot_starts=today_discharge_slot_starts,
+        tomorrow_discharge_slot_starts=tomorrow_discharge_slot_starts,
         adaptive_enabled=adaptive_enabled,
     )
 
@@ -1479,6 +1521,8 @@ def generate_schedule(
         charging_price_threshold, now,
         tomorrow_load_range=tomorrow_load,
         tomorrow_discharge_range=tomorrow_discharge,
+        discharge_slot_starts=today_discharge_slot_starts,
+        tomorrow_discharge_slot_starts=tomorrow_discharge_slot_starts,
         adaptive_enabled=adaptive_enabled,
     )
 
@@ -1708,6 +1752,7 @@ def monitor_and_adjust_active_period(
     )
     runtime_price_range = price_range
     conservative_soc = config["soc"]["conservative_soc"]
+    max_soc = float(config["soc"].get("max_soc", 100))
     if soc is not None and soc <= conservative_soc and runtime_price_range == "discharge":
         runtime_price_range = "adaptive"
 
@@ -1739,7 +1784,7 @@ def monitor_and_adjust_active_period(
                   dry_run=is_dry_run)
 
     regen_cooldown = config["timing"].get("schedule_regen_cooldown_seconds", 60)
-    if runtime_price_range == "load" and not active_charge and import_curve:
+    if runtime_price_range == "load" and not active_charge and import_curve and not (soc is not None and soc >= max_soc):
         if (
             not state.last_schedule_publish
             or (now - state.last_schedule_publish).total_seconds() >= regen_cooldown
@@ -1793,6 +1838,92 @@ def monitor_and_adjust_active_period(
             reduce_reasons.append(
                 f"SOC <= conservative ({soc:.1f}% <= {conservative_soc:.1f}%), switching to adaptive discharge"
             )
+
+    stabilizer_active = (
+        state.max_soc_stabilizer_until is not None
+        and now < state.max_soc_stabilizer_until
+    )
+    stabilizer_floor = max_soc - MAX_SOC_STABILIZER_HYSTERESIS_PCT
+
+    if stabilizer_active:
+        if should_pause or reduce_discharge or (soc is not None and soc < stabilizer_floor):
+            logger.info("🟢 Max-SOC stabilizer cleared - restoring generated schedule")
+            _publish_schedule(mqtt_client, state.schedule, is_dry_run, state=state, force=True)
+            state.max_soc_stabilizer_until = None
+            state.last_commanded_power = None
+            update_entity(
+                mqtt_client,
+                ENTITY_LAST_COMMANDED_POWER,
+                "unknown",
+                dry_run=is_dry_run,
+            )
+            stabilizer_active = False
+        else:
+            stabilizer_power = _get_max_soc_stabilizer_power(config)
+            remaining_minutes = max(
+                1,
+                int(math.ceil((state.max_soc_stabilizer_until - now).total_seconds() / 60.0)),
+            )
+            status_msg = build_status_message(
+                runtime_price_range, False, True, None, stabilizer_power, temperature,
+            )
+            update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+            update_entity(
+                mqtt_client,
+                ENTITY_CURRENT_ACTION,
+                f"Max SOC stabilizing {stabilizer_power}W",
+                {
+                    "price_range": runtime_price_range,
+                    "effective_price_range": "max_soc_stabilizer",
+                    "discharge_power": stabilizer_power,
+                    "remaining_minutes": remaining_minutes,
+                    "soc": soc,
+                },
+                dry_run=is_dry_run,
+            )
+            return
+
+    should_start_max_soc_stabilizer = (
+        soc is not None
+        and soc >= max_soc
+        and not active_discharge
+        and not should_pause
+        and not reduce_discharge
+    )
+    if should_start_max_soc_stabilizer:
+        stabilizer_power = _get_max_soc_stabilizer_power(config)
+        override = _build_max_soc_stabilizer_schedule(
+            now,
+            stabilizer_power,
+            MAX_SOC_STABILIZER_MINUTES,
+        )
+        _publish_schedule(mqtt_client, override, is_dry_run, state=state, force=True)
+        state.max_soc_stabilizer_until = now + timedelta(minutes=MAX_SOC_STABILIZER_MINUTES)
+        state.last_commanded_power = stabilizer_power
+        update_entity(
+            mqtt_client,
+            ENTITY_LAST_COMMANDED_POWER,
+            f"{stabilizer_power}",
+            dry_run=is_dry_run,
+        )
+        status_msg = build_status_message(
+            runtime_price_range, False, True, None, stabilizer_power, temperature,
+        )
+        update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+        update_entity(
+            mqtt_client,
+            ENTITY_CURRENT_ACTION,
+            f"Max SOC stabilizing {stabilizer_power}W",
+            {
+                "price_range": runtime_price_range,
+                "effective_price_range": "max_soc_stabilizer",
+                "discharge_power": stabilizer_power,
+                "duration_minutes": MAX_SOC_STABILIZER_MINUTES,
+                "soc": soc,
+            },
+            dry_run=is_dry_run,
+        )
+        return
 
     status_parts = []
     if active_charge:

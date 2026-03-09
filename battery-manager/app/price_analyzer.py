@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, List, Optional, Sequence, Tuple, Union
+import math
+from typing import Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 from dateutil.parser import isoparse
 
@@ -73,13 +74,43 @@ def _ensure_aware(dt: datetime) -> datetime:
         return dt.replace(tzinfo=timezone.utc)
     return dt
 
-def calculate_top_x_count(hours: int, interval_minutes: int) -> int:
+def calculate_top_x_count(hours: float, interval_minutes: int) -> int:
     """Convert hours into interval count based on interval length."""
 
     if hours <= 0:
         return 0
     interval_minutes = max(interval_minutes, 1)
-    return max(1, int(hours * (60 / interval_minutes)))
+    required_minutes = float(hours) * 60.0
+    return max(1, int(math.ceil(required_minutes / interval_minutes)))
+
+
+def find_profitable_discharge_starts(
+    import_curve: Sequence[dict],
+    export_curve: Sequence[dict],
+    top_x_discharge: int,
+    min_profit: float,
+) -> Set[str]:
+    """Return exact export-curve start timestamps selected for profitable discharge."""
+
+    import_points = _to_price_points(import_curve)
+    export_points = _to_price_points(export_curve)
+
+    if not import_points or not export_points or top_x_discharge <= 0:
+        return set()
+
+    min_profitable_price = min(point.price for point in import_points) + float(min_profit)
+    selected = _select_top(export_points, top_x=top_x_discharge, reverse=True)
+
+    starts: Set[str] = set()
+    for point in selected:
+        if point.price < min_profitable_price:
+            continue
+        if isinstance(point.value, dict):
+            start = point.value.get("start")
+            if isinstance(start, str) and start:
+                starts.add(start)
+
+    return starts
 
 
 def calculate_price_ranges(

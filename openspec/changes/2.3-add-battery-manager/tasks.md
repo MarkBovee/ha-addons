@@ -261,6 +261,16 @@
 
 ---
 
+## Phase 6: Schedule Precision & Max-SOC Control (follow-up)
+
+- [x] 6.1 Preserve fractional `temperature_based_discharge.thresholds[].discharge_hours` values through schedule slot counting
+- [x] 6.2 Select discharge windows from exact top-priced profitable export slots instead of broad in-range matching
+- [x] 6.3 Add a 5-minute 50% power max-SOC stabilizer override when SOC reaches `soc.max_soc`
+- [x] 6.4 Add focused regressions for fractional discharge durations, exact slot selection, and max-SOC stabilizer behavior
+- [x] 6.5 Update README, config schema notes, and CHANGELOG for the new behavior
+
+---
+
 ## Phase 6: Testing & Validation (2 days) ✅
 
 ### 6.1 End-to-End Tests
