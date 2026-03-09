@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from dateutil.parser import isoparse
 
@@ -514,6 +514,8 @@ def find_upcoming_windows(
     now: datetime,
     tomorrow_load_range: Optional[PriceRange] = None,
     tomorrow_discharge_range: Optional[PriceRange] = None,
+    discharge_slot_starts: Optional[Set[str]] = None,
+    tomorrow_discharge_slot_starts: Optional[Set[str]] = None,
     adaptive_enabled: bool = True,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Scan full price curves and find all upcoming charge/discharge/adaptive windows.
@@ -576,9 +578,17 @@ def find_upcoming_windows(
         is_tomorrow = start_dt >= tomorrow_start
         effective_load = (tomorrow_load_range if is_tomorrow and tomorrow_load_range else load_range)
         effective_discharge = (tomorrow_discharge_range if is_tomorrow and tomorrow_discharge_range else discharge_range)
+        effective_discharge_starts = (
+            tomorrow_discharge_slot_starts
+            if is_tomorrow and tomorrow_discharge_slot_starts is not None
+            else discharge_slot_starts
+        )
 
         if effective_load and effective_load.min_price <= import_price <= effective_load.max_price:
             charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
+        elif effective_discharge_starts is not None:
+            if start_str in effective_discharge_starts:
+                discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
         elif effective_discharge and effective_discharge.min_price <= export_price <= effective_discharge.max_price:
             discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
         elif (

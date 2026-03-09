@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.41"
+version: "0.8.42"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -49,7 +49,7 @@ options:
     min_soc: 5
     conservative_soc: 40
     target_eod_soc: 20
-    max_soc: 100
+    max_soc: 97
     battery_capacity_kwh: 25
     sell_buffer_enabled: true
     sell_buffer_min_soc: 20
@@ -77,11 +77,11 @@ options:
       - temp_max: 0
         discharge_hours: 1
       - temp_max: 8
-        discharge_hours: 1
+        discharge_hours: 1.5
+      - temp_max: 12
+        discharge_hours: 2
       - temp_max: 16
-        discharge_hours: 2
-      - temp_max: 20
-        discharge_hours: 2
+        discharge_hours: 2.5
       - temp_max: 999
         discharge_hours: 3
 
@@ -159,7 +159,7 @@ schema:
     enabled: bool?
     thresholds:
       - temp_max: int
-        discharge_hours: int(1,6)
+        discharge_hours: float(0,6)
 
   ev_charger:
     enabled: bool?

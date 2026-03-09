@@ -31,6 +31,12 @@ The system **SHALL** analyze electricity price curves and identify the most expe
 - **THEN** system sorts prices descending and selects top X intervals (where X = TopXDischargeHours config)
 - **AND** selected periods are used for battery discharging schedule
 
+#### Scenario: In-range periods outside selected top slots are excluded
+- **WHEN** multiple export intervals fall inside the same profitable discharge price band
+- **AND** only a subset belong to the selected TopX profitable export slots
+- **THEN** the system SHALL schedule discharge only for the selected TopX slots
+- **AND** lower-ranked in-band intervals SHALL remain unscheduled
+
 #### Scenario: Insufficient expensive periods
 - **WHEN** fewer expensive periods exist than TopXDischargeHours config
 - **THEN** system uses all available expensive periods
@@ -50,6 +56,11 @@ The system **SHALL** adjust discharge duration based on outdoor temperature to a
 - **WHEN** outdoor temperature is between 8°C and 16°C
 - **THEN** system sets discharge duration to 2 hours
 - **AND** reasoning logged: "Temperature 12°C → 2 hours discharge (moderate heating)"
+
+#### Scenario: Fractional discharge duration preserved
+- **WHEN** a temperature threshold maps to a fractional discharge duration such as `1.5` or `2.5` hours
+- **THEN** the system SHALL preserve that fractional value through interval counting
+- **AND** the resulting discharge slot selection SHALL include the exact number of 15/30-minute periods needed to match the configured duration
 
 #### Scenario: Warm weather discharge (≥ 20°C)
 - **WHEN** outdoor temperature is 20°C or higher
@@ -115,6 +126,11 @@ The system **SHALL** protect battery health by enforcing minimum and maximum SOC
 - **WHEN** current time is after 20:00 and SOC below target_eod_soc (20%)
 - **THEN** system avoids further discharging
 - **AND** info logged: "EOD target (20%) not met, skipping discharge"
+
+#### Scenario: Max-SOC stabilizer burst
+- **WHEN** battery SOC reaches or exceeds `soc.max_soc`
+- **THEN** the system SHALL temporarily suspend charging and publish a 5-minute discharge burst at 50% of configured max discharge power
+- **AND** the burst SHALL clear once SOC drops below the max-SOC hysteresis floor or the 5-minute window expires
 
 ---
 

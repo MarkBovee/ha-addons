@@ -8,8 +8,8 @@ from typing import Iterable, List, Optional
 def get_discharge_hours(
     temperature: Optional[float],
     thresholds: Iterable[dict],
-    default_hours: int = 2,
-) -> int:
+    default_hours: float = 2.0,
+) -> float:
     """Return discharge hours based on temperature thresholds.
 
     Thresholds must be an iterable of dicts with keys: temp_max, discharge_hours.
@@ -17,7 +17,7 @@ def get_discharge_hours(
     """
 
     if temperature is None:
-        return default_hours
+        return float(default_hours)
 
     normalized: List[dict] = sorted(
         thresholds, key=lambda item: float(item.get("temp_max", float("inf")))
@@ -28,6 +28,6 @@ def get_discharge_hours(
         if hours is None:
             continue
         if temperature <= temp_max:
-            return int(hours)
+            return float(hours)
 
-    return default_hours
+    return float(default_hours)
