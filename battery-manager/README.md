@@ -29,6 +29,7 @@ Key options (defaults in config.yaml):
 - **timing.monitor_interval**: real-time monitoring interval (seconds)
 - **timing.adaptive_power_grace_seconds**: minimum seconds between adaptive power changes
 - **timing.schedule_regen_cooldown_seconds**: cooldown for rolling schedule regeneration
+- **timing.max_soc_sensor_age_seconds**: maximum accepted SOC sensor age before protective discharge pause (0 disables staleness check)
 - **dry_run**: log schedules without publishing to MQTT
 - **entities.price_curve_entity**: price curve sensor entity
 - **entities.export_price_curve_entity**: export price curve sensor entity
@@ -94,6 +95,8 @@ All entities use `unique_id` for UI management and carry rich attributes (schedu
 - If no schedule is published, verify the Energy Prices price curve sensor exists.
 - Ensure the MQTT broker is running and credentials match the add-on configuration.
 - Check add-on logs for missing sensor warnings.
+- If morning sell postponement does not trigger, check logs for `Sell-wait skipped:` diagnostics (reason + evaluated thresholds).
+- If discharge pauses unexpectedly, verify SOC sensor freshness against `timing.max_soc_sensor_age_seconds`.
 
 ## Development
 

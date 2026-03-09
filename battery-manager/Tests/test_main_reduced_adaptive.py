@@ -57,6 +57,11 @@ def test_reduced_mode_uses_adaptive_power(monkeypatch):
     published = []
     entity_updates = []
 
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
     monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
     monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
     monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
@@ -97,3 +102,71 @@ def test_reduced_mode_uses_adaptive_power(monkeypatch):
     ]
     assert last_power_updates, "Expected ENTITY_LAST_COMMANDED_POWER to be updated"
     assert last_power_updates[-1][0][2] == "300"
+
+
+def test_active_discharge_pauses_when_soc_unavailable(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["conservative_soc"] = 40
+    config["soc"]["min_soc"] = 5
+
+    now = datetime.now(timezone.utc)
+    state = bm_main.RuntimeState(
+        schedule={
+            "charge": [],
+            "discharge": [
+                {
+                    "start": (now - timedelta(minutes=10)).isoformat(),
+                    "duration": 60,
+                    "power": 6000,
+                    "window_type": "discharge",
+                }
+            ],
+        },
+        schedule_generated_at=now,
+    )
+
+    sensor_values = {
+        config["entities"]["grid_power_entity"]: 100.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 120.0,
+        config["entities"]["battery_power_entity"]: 100.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 13.0,
+    }
+
+    published = []
+    entity_updates = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, _entity_id, _now: (None, None),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "discharge")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: entity_updates.append((_args, _kwargs)))
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: published.append((schedule, force)) or True,
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=object(),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=_SolarMonitorStub(),
+        gap_scheduler=_GapSchedulerStub(),
+    )
+
+    assert published, "Expected protective pause override schedule to be published"
+    override_schedule = published[-1][0]
+    assert override_schedule["discharge"] == []

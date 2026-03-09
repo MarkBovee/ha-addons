@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.41 — 2026-03-09
+- **Fix: SOC protection hardening** — Added SOC freshness guard (`timing.max_soc_sensor_age_seconds`, default 900s). Active discharge now enters a protective pause when SOC is unavailable/stale to prevent uncontrolled drain.
+- **Fix: Sell-wait observability** — `_get_sell_wait_decision` now emits structured diagnostics for skipped decisions (`disabled`, `invalid_horizon`, `no_target_window_candidate`, `no_pre_target_windows`, `gain_below_threshold`) and schedule generation logs the exact skip reason.
+- **Config tuning: Morning deferral defaults** — Updated defaults to better support next-morning postponement: `sell_wait_horizon_hours: 20`, `sell_wait_min_gain_threshold: 0.02`, `sell_wait_morning_start_hour: 0`, `sell_wait_morning_end_hour: 10`.
+- **Fix: Config typo** — Corrected `soc.conservative_soc` default to `40` in `config.yaml`.
+- **Tests:** Added regressions for sell-wait diagnostics and protective pause when SOC is unavailable.
+
 ## 0.8.40 — 2026-03-08
 - **Feature: Deferred morning sell heuristic** — Added optional logic to delay discharge when a better sell window exists within a configurable look-ahead horizon (default 12h) and preferred morning window.
 - **Config: New heuristic options** — Added `sell_wait_for_better_morning_enabled`, `sell_wait_horizon_hours`, `sell_wait_min_gain_threshold`, `sell_wait_morning_start_hour`, and `sell_wait_morning_end_hour`.

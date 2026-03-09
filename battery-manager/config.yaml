@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.40"
+version: "0.8.41"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -30,6 +30,7 @@ options:
     monitor_interval: 60
     adaptive_power_grace_seconds: 60
     schedule_regen_cooldown_seconds: 60
+    max_soc_sensor_age_seconds: 900
 
   power:
     charging_power_limit: 1000
@@ -46,7 +47,7 @@ options:
 
   soc:
     min_soc: 5
-    conservative_soc: 30
+    conservative_soc: 40
     target_eod_soc: 20
     max_soc: 100
     battery_capacity_kwh: 25
@@ -65,10 +66,10 @@ options:
     min_profit_threshold: 0.1
     overnight_wait_threshold: 0.02
     sell_wait_for_better_morning_enabled: true
-    sell_wait_horizon_hours: 16
-    sell_wait_min_gain_threshold: 0.05
+    sell_wait_horizon_hours: 20
+    sell_wait_min_gain_threshold: 0.02
     sell_wait_morning_start_hour: 0
-    sell_wait_morning_end_hour: 8
+    sell_wait_morning_end_hour: 10
 
   temperature_based_discharge:
     enabled: true
@@ -113,6 +114,7 @@ schema:
     monitor_interval: int(10,300)
     adaptive_power_grace_seconds: int(0,600)
     schedule_regen_cooldown_seconds: int(0,600)
+    max_soc_sensor_age_seconds: int(0,86400)?
 
   power:
     charging_power_limit: int(0,10000)

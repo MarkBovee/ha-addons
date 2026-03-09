@@ -83,6 +83,7 @@ DEFAULT_CONFIG = {
         "monitor_interval": 60,
         "adaptive_power_grace_seconds": 60,
         "schedule_regen_cooldown_seconds": 60,
+        "max_soc_sensor_age_seconds": 900,
     },
     "power": {
         "charging_power_limit": 1000,
@@ -117,9 +118,9 @@ DEFAULT_CONFIG = {
         "min_profit_threshold": 0.1,
         "overnight_wait_threshold": 0.02,
         "sell_wait_for_better_morning_enabled": False,
-        "sell_wait_horizon_hours": 12,
+        "sell_wait_horizon_hours": 20,
         "sell_wait_min_gain_threshold": 0.02,
-        "sell_wait_morning_start_hour": 5,
+        "sell_wait_morning_start_hour": 0,
         "sell_wait_morning_end_hour": 10,
     },
     "temperature_based_discharge": {
@@ -153,6 +154,8 @@ class RuntimeState:
     warned_missing_price: bool = False
     warned_missing_temperature: bool = False
     warned_missing_ev: bool = False
+    warned_missing_soc: bool = False
+    warned_stale_soc: bool = False
     warned_missing_grid: bool = False
     warned_missing_solar: bool = False
     last_schedule_publish: Optional[datetime] = None
@@ -202,6 +205,44 @@ def _get_sensor_float(ha_api: HomeAssistantApi, entity_id: str) -> Optional[floa
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_ha_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = isoparse(value)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _get_sensor_float_and_age_seconds(
+    ha_api: HomeAssistantApi,
+    entity_id: str,
+    now: datetime,
+) -> tuple[Optional[float], Optional[float]]:
+    """Return sensor float value and age in seconds from HA timestamps when available."""
+    state = _get_entity_state(ha_api, entity_id)
+    if not state:
+        return None, None
+
+    value = state.get("state")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = None
+
+    updated_at = _parse_ha_timestamp(state.get("last_updated"))
+    changed_at = _parse_ha_timestamp(state.get("last_changed"))
+    ref_dt = updated_at or changed_at
+    if ref_dt is None:
+        return number, None
+
+    age_seconds = (now - ref_dt).total_seconds()
+    return number, max(0.0, age_seconds)
 
 
 def _get_first_available_entity(ha_api: HomeAssistantApi, entity_ids: List[str]) -> Optional[Dict[str, Any]]:
@@ -561,10 +602,18 @@ def _get_sell_wait_decision(
     discharge_windows: List[Dict[str, Any]],
     now: datetime,
     heuristics: Dict[str, Any],
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return a discharge wait decision when a better near-term morning sell window exists."""
 
+    def _set_diag(reason: str, **extra: Any) -> None:
+        if diagnostics is None:
+            return
+        diagnostics.clear()
+        diagnostics.update({"reason": reason, **extra})
+
     if not heuristics.get("sell_wait_for_better_morning_enabled", False):
+        _set_diag("disabled")
         return None
 
     horizon_hours = max(0.0, float(heuristics.get("sell_wait_horizon_hours", 12)))
@@ -573,6 +622,7 @@ def _get_sell_wait_decision(
     morning_end = int(heuristics.get("sell_wait_morning_end_hour", 10)) % 24
 
     if horizon_hours <= 0:
+        _set_diag("invalid_horizon", horizon_hours=horizon_hours)
         return None
 
     horizon_end = now + timedelta(hours=horizon_hours)
@@ -598,6 +648,13 @@ def _get_sell_wait_decision(
         future_candidates.append(window)
 
     if not future_candidates:
+        _set_diag(
+            "no_target_window_candidate",
+            horizon_hours=horizon_hours,
+            morning_start=morning_start,
+            morning_end=morning_end,
+            discharge_window_count=len(discharge_windows),
+        )
         return None
 
     best_candidate = max(
@@ -610,6 +667,7 @@ def _get_sell_wait_decision(
     candidate_start = best_candidate.get("start")
     candidate_price = float(best_candidate.get("avg_price", 0.0))
     if not isinstance(candidate_start, datetime):
+        _set_diag("invalid_candidate")
         return None
 
     pre_target_prices: List[float] = []
@@ -626,12 +684,35 @@ def _get_sell_wait_decision(
         pre_target_prices.append(float(avg_price))
 
     if not pre_target_prices:
+        _set_diag(
+            "no_pre_target_windows",
+            candidate_start=candidate_start.isoformat(),
+            candidate_price=candidate_price,
+            candidate_count=len(future_candidates),
+        )
         return None
 
     best_pre_target_price = max(pre_target_prices)
     gain = candidate_price - best_pre_target_price
     if gain + 1e-9 < min_gain:
+        _set_diag(
+            "gain_below_threshold",
+            candidate_start=candidate_start.isoformat(),
+            candidate_price=candidate_price,
+            best_pre_target_price=best_pre_target_price,
+            gain=gain,
+            min_gain=min_gain,
+        )
         return None
+
+    _set_diag(
+        "decision",
+        candidate_start=candidate_start.isoformat(),
+        candidate_price=candidate_price,
+        best_pre_target_price=best_pre_target_price,
+        gain=gain,
+        min_gain=min_gain,
+    )
 
     return {
         "wait_until": candidate_start,
@@ -1097,10 +1178,12 @@ def generate_schedule(
         adaptive_enabled=adaptive_enabled,
     )
 
+    sell_wait_diagnostics: Dict[str, Any] = {}
     sell_wait_decision = _get_sell_wait_decision(
         upcoming_windows.get("discharge", []),
         now,
         config.get("heuristics", {}),
+        diagnostics=sell_wait_diagnostics,
     )
     if sell_wait_decision:
         wait_until = sell_wait_decision["wait_until"]
@@ -1110,6 +1193,12 @@ def generate_schedule(
             sell_wait_decision["best_future_price"],
             sell_wait_decision["best_price_before_wait"],
             sell_wait_decision["gain"],
+        )
+    elif config.get("heuristics", {}).get("sell_wait_for_better_morning_enabled", False):
+        logger.info(
+            "⏭️ Sell-wait skipped: %s%s",
+            sell_wait_diagnostics.get("reason", "unknown"),
+            f" | details={sell_wait_diagnostics}" if sell_wait_diagnostics else "",
         )
 
     # Rank discharge windows once per schedule generation so window power stays
@@ -1477,6 +1566,7 @@ def monitor_and_adjust_active_period(
     gap_scheduler: GapScheduler,
 ) -> None:
     logger.debug("🔍 Monitoring active period...")
+    now = datetime.now(timezone.utc)
     soc_entity = config["entities"]["soc_entity"]
     grid_entity = config["entities"]["grid_power_entity"]
     solar_entity = config["entities"]["solar_power_entity"]
@@ -1486,7 +1576,7 @@ def monitor_and_adjust_active_period(
     # Dry run check
     is_dry_run = config.get("dry_run", False)
 
-    soc = _get_sensor_float(ha_api, soc_entity)
+    soc, soc_age_seconds = _get_sensor_float_and_age_seconds(ha_api, soc_entity, now)
     grid_power = _get_sensor_float(ha_api, grid_entity)
     solar_power = _get_sensor_float(ha_api, solar_entity)
     house_load = _get_sensor_float(ha_api, load_entity)
@@ -1499,6 +1589,25 @@ def monitor_and_adjust_active_period(
             logger.warning("⚠️ EV charger sensor unavailable, skipping EV integration")
             state.warned_missing_ev = True
 
+    max_soc_sensor_age = max(0, int(config.get("timing", {}).get("max_soc_sensor_age_seconds", 900)))
+    if soc_age_seconds is not None and max_soc_sensor_age > 0 and soc_age_seconds > max_soc_sensor_age:
+        if not state.warned_stale_soc:
+            logger.warning(
+                "⚠️ SOC sensor stale (age %.0fs > %ss), forcing protective pause behavior",
+                soc_age_seconds,
+                max_soc_sensor_age,
+            )
+            state.warned_stale_soc = True
+        soc = None
+    elif soc is not None:
+        state.warned_stale_soc = False
+
+    if soc is None and not state.warned_missing_soc:
+        logger.warning("⚠️ SOC sensor unavailable or invalid, forcing protective pause behavior")
+        state.warned_missing_soc = True
+    elif soc is not None:
+        state.warned_missing_soc = False
+
     _log_sensor_snapshot(soc, grid_power, solar_power, house_load, batt_power, ev_power)
 
     if grid_power is None and not state.warned_missing_grid:
@@ -1508,8 +1617,6 @@ def monitor_and_adjust_active_period(
     if (solar_power is None or house_load is None) and not state.warned_missing_solar:
         logger.warning("⚠️ Solar sensors unavailable, skipping opportunistic charging")
         state.warned_missing_solar = True
-
-    now = datetime.now(timezone.utc)
 
     passive_active = solar_monitor.check_passive_state(ha_api)
     if passive_active:
@@ -1654,7 +1761,11 @@ def monitor_and_adjust_active_period(
             should_pause = True
             pause_reasons.append(f"EV Charging >{ev_threshold}W")
 
-    if soc is not None:
+    if soc is None:
+        if active_discharge:
+            should_pause = True
+            pause_reasons.append("SOC unavailable/stale")
+    else:
         min_soc = config["soc"]["min_soc"]
         dynamic_buffer_soc = state.sell_buffer_required_soc
         low_soc_discharge_mode = active_discharge and soc <= conservative_soc
