@@ -30,11 +30,18 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_KEEPALIVE_SECONDS = 120
+DEFAULT_RECONNECT_MIN_DELAY_SECONDS = 1
+DEFAULT_RECONNECT_MAX_DELAY_SECONDS = 30
+DEFAULT_RECONNECT_THROTTLE_SECONDS = 5.0
+DEFAULT_PUBLISH_TIMEOUT_SECONDS = 5.0
 
 # Try to import paho-mqtt, provide helpful error if missing
 try:
@@ -220,6 +227,8 @@ class MqttDiscovery:
         self._connected = False
         self._published_entities: List[str] = []
         self._disconnect_warned = False
+        self._connection_lock = threading.Lock()
+        self._last_reconnect_attempt = 0.0
     
     @property
     def device_info(self) -> Dict[str, Any]:
@@ -259,6 +268,66 @@ class MqttDiscovery:
     def _discovery_topic(self, component: str, object_id: str) -> str:
         """Get discovery config topic for an entity."""
         return f"{self.DISCOVERY_PREFIX}/{component}/{self.addon_id}/{object_id}/config"
+
+    def _reason_code_value(self, reason_code: Any) -> int:
+        """Return an integer-ish value for a paho reason code."""
+        if reason_code is None:
+            return 0
+        if isinstance(reason_code, int):
+            return reason_code
+        value = getattr(reason_code, "value", None)
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def _reason_code_text(self, reason_code: Any) -> str:
+        """Return a readable reason code string for logging."""
+        if reason_code is None:
+            return "0"
+        return str(reason_code)
+
+    def _default_client_id_suffix(self) -> str:
+        """Use an explicit suffix when provided, else derive one from the host/container."""
+        if self._client_id_suffix:
+            return self._client_id_suffix
+
+        for candidate in (os.getenv("MQTT_CLIENT_ID_SUFFIX"), os.getenv("HOSTNAME"), os.getenv("COMPUTERNAME")):
+            safe = self._sanitize_suffix(candidate)
+            if safe:
+                return safe[:12]
+
+        return ""
+
+    def _build_client_id(self) -> str:
+        """Build a stable client ID with an optional environment-derived suffix."""
+        suffix = self._default_client_id_suffix()
+        if not suffix:
+            return f"{self.addon_id}_discovery"
+        return f"{self.addon_id}_discovery_{suffix}"
+
+    def _request_reconnect(self) -> bool:
+        """Ask paho to reconnect when the connection has dropped."""
+        if not self._client:
+            return False
+
+        now = time.time()
+        with self._connection_lock:
+            if self._connected:
+                return True
+            if (now - self._last_reconnect_attempt) < DEFAULT_RECONNECT_THROTTLE_SECONDS:
+                return False
+            self._last_reconnect_attempt = now
+
+            try:
+                self._client.reconnect()
+                logger.warning("Requested MQTT reconnect to %s:%d", self.mqtt_host, self.mqtt_port)
+                return True
+            except Exception as e:
+                logger.warning("MQTT reconnect request failed: %s", e)
+                return False
     
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         """Callback when MQTT connection is established.
@@ -273,6 +342,7 @@ class MqttDiscovery:
             logger.info("Connected to MQTT broker at %s:%d", self.mqtt_host, self.mqtt_port)
             self._connected = True
             self._disconnect_warned = False
+            self._last_reconnect_attempt = 0.0
             
             # Re-subscribe to all command topics on reconnection
             # This is needed because subscriptions don't persist across disconnects
@@ -289,8 +359,17 @@ class MqttDiscovery:
         
         Note: paho-mqtt 2.x callback has different signature with disconnect_flags.
         """
-        logger.info("Disconnected from MQTT broker: %s", reason_code)
         self._connected = False
+        reason_value = self._reason_code_value(reason_code)
+        reason_text = self._reason_code_text(reason_code)
+        if reason_value == 0:
+            logger.info("Disconnected from MQTT broker")
+            return
+
+        logger.warning(
+            "Disconnected from MQTT broker: %s (auto-reconnect enabled)",
+            reason_text,
+        )
     
     def connect(self, timeout: float = 10.0) -> bool:
         """Connect to MQTT broker.
@@ -303,22 +382,27 @@ class MqttDiscovery:
         """
         try:
             # Use callback API version 2 for paho-mqtt 2.x compatibility
-            client_id = f"{self.addon_id}_discovery{self._client_id_suffix}"
+            client_id = self._build_client_id()
             self._client = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
                 client_id=client_id,
                 protocol=mqtt.MQTTv311,
+                clean_session=True,
             )
             logger.debug("Using MQTT client_id=%s", client_id)
             
             self._client.on_connect = self._on_connect
             self._client.on_disconnect = self._on_disconnect
+            self._client.reconnect_delay_set(
+                min_delay=DEFAULT_RECONNECT_MIN_DELAY_SECONDS,
+                max_delay=DEFAULT_RECONNECT_MAX_DELAY_SECONDS,
+            )
             
             if self.mqtt_user and self.mqtt_password:
                 self._client.username_pw_set(self.mqtt_user, self.mqtt_password)
             
             logger.info("Connecting to MQTT broker at %s:%d...", self.mqtt_host, self.mqtt_port)
-            self._client.connect(self.mqtt_host, self.mqtt_port, keepalive=60)
+            self._client.connect(self.mqtt_host, self.mqtt_port, keepalive=DEFAULT_KEEPALIVE_SECONDS)
             self._client.loop_start()
             
             # Wait for connection with timeout
@@ -366,6 +450,7 @@ class MqttDiscovery:
             if not self._disconnect_warned:
                 logger.warning("Cannot publish: not connected to MQTT broker (auto-reconnecting)")
                 self._disconnect_warned = True
+            self._request_reconnect()
             return False
         
         try:
@@ -375,7 +460,7 @@ class MqttDiscovery:
                 payload = str(payload)
             
             result = self._client.publish(topic, payload, retain=retain, qos=1)
-            result.wait_for_publish(timeout=5.0)
+            result.wait_for_publish(timeout=DEFAULT_PUBLISH_TIMEOUT_SECONDS)
             
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
                 logger.error("Failed to publish to %s: rc=%d", topic, result.rc)
@@ -757,6 +842,7 @@ class MqttDiscovery:
         """
         if not self._client or not self._connected:
             logger.warning("Cannot subscribe to %s: not connected", topic)
+            self._request_reconnect()
             return False
         
         self._subscribe_command(topic, callback)
@@ -778,6 +864,7 @@ class MqttDiscovery:
         """
         if not self._client or not self._connected:
             logger.warning("Cannot publish to %s: not connected", topic)
+            self._request_reconnect()
             return False
         
         return self._publish(topic, payload, retain=retain)

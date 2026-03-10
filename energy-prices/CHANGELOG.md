@@ -5,6 +5,11 @@ All notable changes to the Energy Prices add-on will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.3] - 2026-03-10
+
+### Fixed
+- Hardened the shared MQTT discovery client with bounded reconnect backoff, throttled reconnect requests, and safer default client IDs to reduce transient broker disconnect churn.
+
 ## [1.6.2] - 2026-03-07
 
 ### Changed
