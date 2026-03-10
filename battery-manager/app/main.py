@@ -165,6 +165,7 @@ class RuntimeState:
     last_power_adjustment: Optional[datetime] = None
     last_effective_discharge_power: Optional[int] = None
     last_price_range: Optional[str] = None
+    last_effective_mode: Optional[str] = None
     last_published_payload: Optional[str] = None
     last_monitor_status: Optional[str] = None
     sell_buffer_required_soc: Optional[float] = None
@@ -582,6 +583,21 @@ def _update_effective_discharge_power(
         {key: value for key, value in attributes.items() if value is not None} or None,
         dry_run=dry_run,
     )
+
+
+def _update_mode_entity(
+    mqtt_client: Any,
+    state: RuntimeState,
+    mode: str,
+    dry_run: bool,
+    *,
+    price_range: Optional[str] = None,
+) -> None:
+    if state.last_effective_mode == mode:
+        return
+    attributes = {"price_range": price_range} if price_range is not None else None
+    update_entity(mqtt_client, ENTITY_MODE, mode, attributes, dry_run=dry_run)
+    state.last_effective_mode = mode
 
 
 def _interval_window(now: datetime, interval_minutes: int) -> tuple[datetime, datetime]:
@@ -1467,6 +1483,36 @@ def generate_schedule(
         else:
             scheduled_adaptive_windows += 1
 
+    has_active_charge_period = any(_is_period_active(period, now) for period in charge_schedule)
+    has_active_discharge_period = any(_is_period_active(period, now) for period in discharge_schedule)
+    if (
+        adaptive_enabled
+        and price_range == "adaptive"
+        and not has_active_charge_period
+        and not has_active_discharge_period
+        and len(discharge_schedule) < MAX_DISCHARGE_PERIODS
+    ):
+        fallback_duration = int((interval_end - interval_start).total_seconds() / 60)
+        if fallback_duration > 0:
+            discharge_schedule.insert(
+                0,
+                {
+                    "start": interval_start.isoformat(),
+                    "power": min_discharge_power,
+                    "duration": fallback_duration,
+                    "window_type": "adaptive",
+                    "price": round(import_price, 4),
+                },
+            )
+            scheduled_adaptive_windows += 1
+            logger.info(
+                "⚖️ Added current adaptive window for active price band: %s %dW %dm @€%.3f",
+                interval_start.isoformat(),
+                min_discharge_power,
+                fallback_duration,
+                import_price,
+            )
+
     if not charge_schedule and not discharge_schedule:
         if price_range == "passive":
             logger.info("💤 Passive range — price below threshold, battery idle")
@@ -1702,6 +1748,13 @@ def monitor_and_adjust_active_period(
             _publish_schedule(mqtt_client, gap_schedule, is_dry_run, state=state, force=True)
             state.passive_gap_active = True
         state.last_effective_discharge_power = 0
+        _update_mode_entity(
+            mqtt_client,
+            state,
+            "passive_solar",
+            is_dry_run,
+            price_range="passive",
+        )
         update_entity(
             mqtt_client,
             ENTITY_CURRENT_ACTION,
@@ -1815,12 +1868,6 @@ def monitor_and_adjust_active_period(
             adaptive_price_threshold,
             is_dry_run,
         )
-        update_entity(
-            mqtt_client,
-            ENTITY_MODE,
-            runtime_price_range,
-            dry_run=is_dry_run,
-        )
         state.last_price_range = runtime_price_range
 
     # Update "Today's Energy Market" every cycle so the "📍 Now" line stays current
@@ -1917,6 +1964,13 @@ def monitor_and_adjust_active_period(
                 1,
                 int(math.ceil((state.max_soc_stabilizer_until - now).total_seconds() / 60.0)),
             )
+            _update_mode_entity(
+                mqtt_client,
+                state,
+                "max_soc_stabilizer",
+                is_dry_run,
+                price_range=runtime_price_range,
+            )
             status_msg = build_status_message(
                 runtime_price_range, False, True, None, stabilizer_power, temperature,
             )
@@ -1963,6 +2017,13 @@ def monitor_and_adjust_active_period(
         _publish_schedule(mqtt_client, override, is_dry_run, state=state, force=True)
         state.max_soc_stabilizer_until = now + timedelta(minutes=MAX_SOC_STABILIZER_MINUTES)
         state.last_effective_discharge_power = stabilizer_power
+        _update_mode_entity(
+            mqtt_client,
+            state,
+            "max_soc_stabilizer",
+            is_dry_run,
+            price_range=runtime_price_range,
+        )
         status_msg = build_status_message(
             runtime_price_range, False, True, None, stabilizer_power, temperature,
         )
@@ -2042,6 +2103,28 @@ def monitor_and_adjust_active_period(
     else:
         if status_changed:
             logger.info("%s", " | ".join(status_parts))
+
+    active_window_type = active_discharge_period.get("window_type", "discharge") if active_discharge_period else None
+    if active_charge:
+        effective_mode = "load"
+    elif active_discharge and should_pause:
+        effective_mode = "paused"
+    elif active_discharge and (reduce_discharge or active_window_type == "adaptive"):
+        effective_mode = "adaptive"
+    elif active_discharge:
+        effective_mode = "discharge"
+    elif runtime_price_range == "passive":
+        effective_mode = "passive"
+    else:
+        effective_mode = "idle"
+
+    _update_mode_entity(
+        mqtt_client,
+        state,
+        effective_mode,
+        is_dry_run,
+        price_range=runtime_price_range,
+    )
 
     if state.reduced_override_active and not reduce_discharge and not should_pause:
         logger.info("🟢 Reduced mode cleared - restoring scheduled discharge power")
@@ -2228,18 +2311,26 @@ def monitor_and_adjust_active_period(
                 runtime_price_range, False, False, None, None, temperature,
             )
             update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
-            # Update current action based on price range when idle
+            next_event_summary = build_next_event_summary(effective_schedule, now, temperature)
             idle_labels = {
                 "passive": "Passive (battery idle)",
-                "adaptive": "Adaptive (no active window)",
+                "adaptive": "Idle (adaptive price, no active window)",
                 "load": "Waiting (charge window pending)",
             }
-            idle_action = idle_labels.get(runtime_price_range, f"Idle ({runtime_price_range})")
+            idle_action = (
+                f"Idle | {next_event_summary}"
+                if next_event_summary != "No upcoming events" and not next_event_summary.startswith("No upcoming")
+                else idle_labels.get(runtime_price_range, f"Idle ({runtime_price_range})")
+            )
             update_entity(
                 mqtt_client,
                 ENTITY_CURRENT_ACTION,
                 idle_action,
-                {"price_range": runtime_price_range, "soc": soc},
+                {
+                    "price_range": runtime_price_range,
+                    "soc": soc,
+                    "next_event": next_event_summary,
+                },
                 dry_run=is_dry_run,
             )
             state.last_effective_discharge_power = 0

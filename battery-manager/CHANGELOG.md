@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.45 — 2026-03-10
+- **Fix: Current adaptive window scheduling** — when the current interval is in the adaptive price band and no stronger charge/discharge override is active, battery-manager now publishes an adaptive window for the current slot instead of leaving the battery idle.
+- **Fix: Effective mode semantics** — `sensor.battery_manager_mode` now reflects actual operating behavior (`adaptive` only while adaptive discharge control is actively running) rather than raw market classification.
+- **Fix: Idle action clarity** — `sensor.battery_manager_current_action` now prefers the next scheduled event when the battery is idle, instead of reporting a generic adaptive label.
+- **Docs:** Recorded battery-manager agent instruction updates so future changes preserve the distinction between price classification and operating mode.
+
 ## 0.8.44 — 2026-03-10
 - **Breaking change: Config rename** — replaced `heuristics.charging_price_threshold` with `heuristics.adaptive_price_threshold` to match what the threshold actually controls.
 - **Breaking change: Runtime power sensor rename** — replaced `sensor.battery_manager_last_commanded_power` with `sensor.battery_manager_effective_discharge_power`, which now reflects the live effective discharge power and exposes `active_window_type` metadata.

@@ -117,6 +117,12 @@ def main():
 - Descriptive names: `sensor.ep_price_import`, `sensor.bm_schedule_next_charge`
 - Store rich data in entity attributes (price curves, metadata)
 
+### Battery Manager Mode Rules
+- Distinguish `price_range` from effective runtime mode.
+- `price_range` describes the market bucket (`load`, `adaptive`, `discharge`, `passive`).
+- `mode` and `current_action` must describe actual runtime behavior. Use `adaptive` only when discharge power is actively being adjusted to keep grid power near 0W.
+- If the battery is waiting for a future window, report `idle` or `passive` and include the next scheduled action when possible instead of labeling the state `adaptive`.
+
 ### Entity Creation
 - **Preferred:** MQTT Discovery via `shared/ha_mqtt_discovery.py` (provides `unique_id`, UI management)
 - **Fallback:** REST API via `shared/ha_api.py` (no `unique_id`, entities can't be managed in UI)

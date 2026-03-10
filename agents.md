@@ -89,6 +89,11 @@ Every add-on follows the same layout:
 ### Entity Naming
 Prefix all entities with the add-on identifier (`ca_`, `ep_`, `bm_`, `ba_`, `wh_`).
 
+### Battery Manager Semantics
+- In `battery-manager`, keep market classification separate from effective operating mode.
+- `price_range` may be `adaptive` when the current price is in the adaptive market band, but `mode` and `current_action` SHALL only use `adaptive` when adaptive discharge control is actively running.
+- When no charge/discharge/adaptive control window is active, the operating mode SHALL be `idle` or `passive` as appropriate, and `current_action` should prefer the next scheduled event over a generic adaptive label.
+
 ### Git
 - Never commit to `master` directly
 - Conventional commits: `feat(scope): description`
