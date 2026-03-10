@@ -250,7 +250,7 @@ class TestBuildPriceRangesDisplay:
     def test_with_threshold_no_adaptive(self):
         result = build_price_ranges_display(
             PriceRange(0.20, 0.22), PriceRange(0.35, 0.40), None,
-            charging_price_threshold=0.26,
+            adaptive_price_threshold=0.26,
         )
         assert "Passive:" in result
 
@@ -696,7 +696,7 @@ class TestBuildTodayStoryPassiveBalancingSplit:
             PriceRange(0.231, 0.234),   # load
             PriceRange(0.331, 0.341),   # discharge
             PriceRange(0.234, 0.331),   # adaptive range
-            charging_price_threshold=0.27,
+            adaptive_price_threshold=0.27,
         )
         assert "💤 Passive" in result
         assert "⚖️ Balancing" in result
@@ -711,7 +711,7 @@ class TestBuildTodayStoryPassiveBalancingSplit:
             PriceRange(0.231, 0.234),
             PriceRange(0.331, 0.341),
             PriceRange(0.234, 0.331),
-            charging_price_threshold=None,
+            adaptive_price_threshold=None,
         )
         assert "⚖️ Balancing" in result
         assert "💤 Passive" not in result
@@ -723,7 +723,7 @@ class TestBuildTodayStoryPassiveBalancingSplit:
             PriceRange(0.231, 0.234),
             PriceRange(0.331, 0.341),
             PriceRange(0.234, 0.331),
-            charging_price_threshold=0.234,  # At adaptive min
+            adaptive_price_threshold=0.234,  # At adaptive min
         )
         assert "⚖️ Balancing" in result
         assert "💤 Passive" not in result
@@ -737,7 +737,7 @@ class TestBuildPriceRangesDisplayPassiveBalancingSplit:
             PriceRange(0.20, 0.22),
             PriceRange(0.35, 0.40),
             PriceRange(0.22, 0.35),
-            charging_price_threshold=0.27,
+            adaptive_price_threshold=0.27,
         )
         assert "Passive:" in result
         assert "Adaptive:" in result

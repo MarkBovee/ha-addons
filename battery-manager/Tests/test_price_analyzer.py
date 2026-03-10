@@ -171,7 +171,7 @@ class TestDischargeSelectionHelpers:
             export_curve,
             load_range=None,
             discharge_range=PriceRange(min_price=0.37, max_price=0.40),
-            charging_price_threshold=None,
+            adaptive_price_threshold=None,
             now=now,
             discharge_slot_starts={
                 (base + timedelta(hours=1)).isoformat(),

@@ -57,7 +57,7 @@ Key options (defaults in config.yaml):
 - **passive_solar.entry_threshold**: grid export threshold to enter passive mode (W, default 1000)
 - **passive_solar.exit_threshold**: grid import threshold to exit passive mode (W, default 200)
 - **passive_solar.min_solar_entry_power**: minimum solar generation required to enter passive mode (W, default 200)
-- **heuristics.charging_price_threshold**: price below which battery stays idle (passive range, EUR/kWh)
+- **heuristics.adaptive_price_threshold**: price at or above which mid-range periods switch from passive idle to adaptive discharge (EUR/kWh)
 - **heuristics.min_profit_threshold**: minimum spread between load and discharge prices (EUR/kWh)
 - **heuristics.overnight_wait_threshold**: evening vs overnight price gap to wait for cheaper charging (EUR/kWh)
 - **heuristics.sell_wait_for_better_morning_enabled**: defer discharge when a better sell window exists within the configured horizon
@@ -86,7 +86,7 @@ The add-on publishes status entities via MQTT Discovery under the **Battery Mana
 | `sensor.bm_discharge_schedule` | Next discharge period display (e.g. "💰 08:00–10:00") |
 | `sensor.bm_schedule` | Full schedule as markdown table (charge + discharge periods) |
 | `sensor.bm_mode` | Active operating mode (Normal, Passive Solar) |
-| `sensor.bm_last_commanded_power` | Last commanded discharge power for adaptive mode (W) |
+| `sensor.battery_manager_effective_discharge_power` | Current effective discharge power with attributes including `active_window_type` and effective runtime mode |
 
 All entities use `unique_id` for UI management and carry rich attributes (schedule details, price data, timestamps).
 

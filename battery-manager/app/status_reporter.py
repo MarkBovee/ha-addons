@@ -31,7 +31,7 @@ ENTITY_DISCHARGE_SCHEDULE = "discharge_schedule"
 ENTITY_SCHEDULE = "schedule"
 ENTITY_SCHEDULE_2 = "schedule_part_2"
 ENTITY_MODE = "mode"
-ENTITY_LAST_COMMANDED_POWER = "last_commanded_power"
+ENTITY_EFFECTIVE_DISCHARGE_POWER = "effective_discharge_power"
 
 ALL_ENTITIES = [
     ENTITY_STATUS,
@@ -44,7 +44,7 @@ ALL_ENTITIES = [
     ENTITY_SCHEDULE,
     ENTITY_SCHEDULE_2,
     ENTITY_MODE,
-    ENTITY_LAST_COMMANDED_POWER,
+    ENTITY_EFFECTIVE_DISCHARGE_POWER,
 ]
 
 
@@ -116,8 +116,8 @@ def publish_all_entities(mqtt: MqttDiscovery) -> None:
             icon="mdi:cog",
         ),
         EntityConfig(
-            object_id=ENTITY_LAST_COMMANDED_POWER,
-            name="Last Commanded Power",
+            object_id=ENTITY_EFFECTIVE_DISCHARGE_POWER,
+            name="Effective Discharge Power",
             state="unknown",
             unit_of_measurement="W",
             device_class="power",
@@ -394,7 +394,7 @@ def build_today_story(
     load_range: Optional[PriceRange],
     discharge_range: Optional[PriceRange],
     adaptive_range: Optional[PriceRange],
-    charging_price_threshold: Optional[float] = None,
+    adaptive_price_threshold: Optional[float] = None,
     now: Optional[datetime] = None,
 ) -> str:
     """Build rich 'Today's Energy Market' text for the reasoning entity."""
@@ -405,17 +405,17 @@ def build_today_story(
 
     if load_range:
         lines.append(f"🔋 Charging: €{load_range.min_price:.3f} – €{load_range.max_price:.3f}")
-    if adaptive_range and charging_price_threshold is not None:
+    if adaptive_range and adaptive_price_threshold is not None:
         # Split adaptive range into passive (below threshold) and balancing (at/above)
-        if charging_price_threshold > adaptive_range.min_price:
-            lines.append(f"💤 Passive: €{adaptive_range.min_price:.3f} – €{charging_price_threshold:.3f}")
-        if charging_price_threshold < adaptive_range.max_price:
-            balancing_min = max(adaptive_range.min_price, charging_price_threshold)
+        if adaptive_price_threshold > adaptive_range.min_price:
+            lines.append(f"💤 Passive: €{adaptive_range.min_price:.3f} – €{adaptive_price_threshold:.3f}")
+        if adaptive_price_threshold < adaptive_range.max_price:
+            balancing_min = max(adaptive_range.min_price, adaptive_price_threshold)
             lines.append(f"⚖️ Balancing: €{balancing_min:.3f} – €{adaptive_range.max_price:.3f}")
     elif adaptive_range:
         lines.append(f"⚖️ Balancing: €{adaptive_range.min_price:.3f} – €{adaptive_range.max_price:.3f}")
-    elif charging_price_threshold is not None:
-        lines.append(f"💤 Passive below €{charging_price_threshold:.3f}")
+    elif adaptive_price_threshold is not None:
+        lines.append(f"💤 Passive below €{adaptive_price_threshold:.3f}")
     if discharge_range:
         lines.append(f"💰 Selling: €{discharge_range.min_price:.3f} – €{discharge_range.max_price:.3f}")
 
@@ -437,7 +437,7 @@ def build_tomorrow_story(
     tomorrow_discharge: Optional[PriceRange],
     tomorrow_adaptive: Optional[PriceRange],
     tomorrow_curve: Optional[List[Dict[str, Any]]] = None,
-    charging_price_threshold: Optional[float] = None,
+    adaptive_price_threshold: Optional[float] = None,
 ) -> str:
     """Build rich 'Tomorrow's Forecast' text for the forecast entity."""
     if not tomorrow_load and not tomorrow_discharge:
@@ -447,11 +447,11 @@ def build_tomorrow_story(
 
     if tomorrow_load:
         lines.append(f"🔋 Charging: €{tomorrow_load.min_price:.3f} – €{tomorrow_load.max_price:.3f}")
-    if tomorrow_adaptive and charging_price_threshold is not None:
-        if charging_price_threshold > tomorrow_adaptive.min_price:
-            lines.append(f"💤 Passive: €{tomorrow_adaptive.min_price:.3f} – €{charging_price_threshold:.3f}")
-        if charging_price_threshold < tomorrow_adaptive.max_price:
-            balancing_min = max(tomorrow_adaptive.min_price, charging_price_threshold)
+    if tomorrow_adaptive and adaptive_price_threshold is not None:
+        if adaptive_price_threshold > tomorrow_adaptive.min_price:
+            lines.append(f"💤 Passive: €{tomorrow_adaptive.min_price:.3f} – €{adaptive_price_threshold:.3f}")
+        if adaptive_price_threshold < tomorrow_adaptive.max_price:
+            balancing_min = max(tomorrow_adaptive.min_price, adaptive_price_threshold)
             lines.append(f"⚖️ Balancing: €{balancing_min:.3f} – €{tomorrow_adaptive.max_price:.3f}")
     elif tomorrow_adaptive:
         lines.append(f"⚖️ Balancing: €{tomorrow_adaptive.min_price:.3f} – €{tomorrow_adaptive.max_price:.3f}")
@@ -484,22 +484,22 @@ def build_price_ranges_display(
     load_range: Optional[PriceRange],
     discharge_range: Optional[PriceRange],
     adaptive_range: Optional[PriceRange],
-    charging_price_threshold: Optional[float] = None,
+    adaptive_price_threshold: Optional[float] = None,
 ) -> str:
     """Build readable price ranges state text for the price_ranges entity."""
     parts = []
     if load_range:
         parts.append(f"Load: €{load_range.min_price:.3f}–{load_range.max_price:.3f}")
-    if adaptive_range and charging_price_threshold is not None:
-        if charging_price_threshold > adaptive_range.min_price:
-            parts.append(f"Passive: €{adaptive_range.min_price:.3f}–{charging_price_threshold:.3f}")
-        if charging_price_threshold < adaptive_range.max_price:
-            balancing_min = max(adaptive_range.min_price, charging_price_threshold)
+    if adaptive_range and adaptive_price_threshold is not None:
+        if adaptive_price_threshold > adaptive_range.min_price:
+            parts.append(f"Passive: €{adaptive_range.min_price:.3f}–{adaptive_price_threshold:.3f}")
+        if adaptive_price_threshold < adaptive_range.max_price:
+            balancing_min = max(adaptive_range.min_price, adaptive_price_threshold)
             parts.append(f"Adaptive: €{balancing_min:.3f}–{adaptive_range.max_price:.3f}")
     elif adaptive_range:
         parts.append(f"Adaptive: €{adaptive_range.min_price:.3f}–{adaptive_range.max_price:.3f}")
-    elif charging_price_threshold is not None:
-        parts.append(f"Passive: <€{charging_price_threshold:.3f}")
+    elif adaptive_price_threshold is not None:
+        parts.append(f"Passive: <€{adaptive_price_threshold:.3f}")
     if discharge_range:
         parts.append(f"Discharge: €{discharge_range.min_price:.3f}–{discharge_range.max_price:.3f}")
     return " | ".join(parts) if parts else "No price data"
@@ -510,7 +510,7 @@ def find_upcoming_windows(
     export_curve: Optional[List[Dict[str, Any]]],
     load_range: Optional[PriceRange],
     discharge_range: Optional[PriceRange],
-    charging_price_threshold: Optional[float],
+    adaptive_price_threshold: Optional[float],
     now: datetime,
     tomorrow_load_range: Optional[PriceRange] = None,
     tomorrow_discharge_range: Optional[PriceRange] = None,
@@ -526,7 +526,7 @@ def find_upcoming_windows(
     Returns dict with 'charge', 'discharge', and 'adaptive' lists of grouped windows:
     [{"start": datetime, "end": datetime, "avg_price": float}, ...]
 
-    Adaptive windows are slots where the price is above the charging_price_threshold
+    Adaptive windows are slots where the price is above the adaptive_price_threshold
     but not in the load or discharge range — the battery should discharge adaptively
     (targeting 0W grid export) during these periods.
     """
@@ -593,8 +593,8 @@ def find_upcoming_windows(
             discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
         elif (
             adaptive_enabled
-            and charging_price_threshold is not None
-            and import_price >= charging_price_threshold
+            and adaptive_price_threshold is not None
+            and import_price >= adaptive_price_threshold
         ):
             # Above passive threshold but not in load/discharge — adaptive discharge
             adaptive_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
