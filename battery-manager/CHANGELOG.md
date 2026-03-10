@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.44 — 2026-03-10
+- **Breaking change: Config rename** — replaced `heuristics.charging_price_threshold` with `heuristics.adaptive_price_threshold` to match what the threshold actually controls.
+- **Breaking change: Runtime power sensor rename** — replaced `sensor.battery_manager_last_commanded_power` with `sensor.battery_manager_effective_discharge_power`, which now reflects the live effective discharge power and exposes `active_window_type` metadata.
+- **Tests/docs:** Updated battery-manager tests and documentation for the renamed threshold and runtime power sensor.
+
+## 0.8.43 — 2026-03-10
+- **Fix: Adaptive runtime state tracking** — monitor logic now follows the last published schedule, so conservative-SOC adaptive overrides keep reporting `adaptive` instead of falling back to stale passive/discharge state.
+- **Fix: Adaptive power visibility** — current action and mode now reflect the active published adaptive window power, preventing `Adaptive (no active window)` when adaptive discharge is actually running.
+- **Tests:** Added regressions for published adaptive override tracking and adaptive mode reporting.
+
 ## 0.8.42 — 2026-03-09
 - **Feature: Fractional temperature discharge durations** — `temperature_based_discharge.thresholds[].discharge_hours` now accepts decimals and preserves them through slot counting, so 15/30-minute schedules can target the intended discharge duration.
 - **Fix: Exact profitable discharge slot selection** — discharge windows are now built from the exact top-priced profitable export slots instead of every interval inside the broad discharge price band.
