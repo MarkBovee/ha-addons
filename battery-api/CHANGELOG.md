@@ -2,6 +2,14 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.2.19] - 2026-03-10
+
+### Fixed
+- Hardened MQTT broker reconnection behavior.
+  - Increased keepalive interval and enabled bounded reconnect backoff.
+  - Triggered throttled reconnect requests when publishes/subscriptions detect a dropped connection.
+  - Derived a safer default MQTT client ID suffix from the runtime host/container to reduce accidental client ID collisions.
+
 ## [0.2.18] - 2026-03-07
 
 ### Fixed

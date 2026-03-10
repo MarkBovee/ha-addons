@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.46 — 2026-03-10
+- **Fix: MQTT connection stability** — hardened the shared MQTT discovery client with bounded reconnect backoff, throttled reconnect requests, and safer default client IDs to reduce transient broker disconnect churn.
+
 ## 0.8.45 — 2026-03-10
 - **Fix: Current adaptive window scheduling** — when the current interval is in the adaptive price band and no stronger charge/discharge override is active, battery-manager now publishes an adaptive window for the current slot instead of leaving the battery idle.
 - **Fix: Effective mode semantics** — `sensor.battery_manager_mode` now reflects actual operating behavior (`adaptive` only while adaptive discharge control is actively running) rather than raw market classification.

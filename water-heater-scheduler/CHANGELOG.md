@@ -2,6 +2,11 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.10] - 2026-03-10
+
+### Fixed
+- Hardened the shared MQTT discovery client with bounded reconnect backoff, throttled reconnect requests, and safer default client IDs to reduce transient broker disconnect churn.
+
 ## [1.2.9] - 2026-03-07
 
 ### Changed
