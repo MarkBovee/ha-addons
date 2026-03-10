@@ -618,26 +618,43 @@ def _group_consecutive_slots(
         "start": slots[0]["start_dt"],
         "end": slots[0]["end_dt"],
         "prices": [slots[0]["price"]],
+        "slots": [{
+            "start": slots[0]["start_dt"],
+            "end": slots[0]["end_dt"],
+            "price": slots[0]["price"],
+        }],
     }
     for slot in slots[1:]:
         if slot["start_dt"] <= cur["end"]:
             cur["end"] = slot["end_dt"]
             cur["prices"].append(slot["price"])
+            cur["slots"].append({
+                "start": slot["start_dt"],
+                "end": slot["end_dt"],
+                "price": slot["price"],
+            })
         else:
             windows.append({
                 "start": cur["start"],
                 "end": cur["end"],
                 "avg_price": sum(cur["prices"]) / len(cur["prices"]),
+                "slots": list(cur["slots"]),
             })
             cur = {
                 "start": slot["start_dt"],
                 "end": slot["end_dt"],
                 "prices": [slot["price"]],
+                "slots": [{
+                    "start": slot["start_dt"],
+                    "end": slot["end_dt"],
+                    "price": slot["price"],
+                }],
             }
     windows.append({
         "start": cur["start"],
         "end": cur["end"],
         "avg_price": sum(cur["prices"]) / len(cur["prices"]),
+        "slots": list(cur["slots"]),
     })
     return windows
 
@@ -657,7 +674,7 @@ def _serialize_windows(windows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def build_windows_display(
     windows: List[Dict[str, Any]],
     window_type: str,
-    power: int,
+    power: Optional[int],
     now: datetime,
     no_range_reason: Optional[str] = None,
 ) -> str:
@@ -684,6 +701,7 @@ def build_windows_display(
         start = w["start"]
         end = w["end"]
         avg_price = w["avg_price"]
+        window_power = w.get("power", power)
 
         if has_tomorrow and not shown_tomorrow_header and start >= tomorrow_start:
             parts.append("— Tomorrow —")
@@ -697,7 +715,7 @@ def build_windows_display(
             status = icon
 
         parts.append(
-            f"{status} {start.astimezone().strftime('%H:%M')}–{end.astimezone().strftime('%H:%M')} {power}W (€{avg_price:.3f})"
+            f"{status} {start.astimezone().strftime('%H:%M')}–{end.astimezone().strftime('%H:%M')} {window_power}W (€{avg_price:.3f})"
         )
 
     return "\n".join(parts)
@@ -727,7 +745,7 @@ def build_combined_schedule_display(
             "start": w["start"],
             "end": w["end"],
             "type": "charge",
-            "power": charge_power,
+            "power": w.get("power", charge_power),
             "price": w["avg_price"],
         })
     for w in windows.get("discharge", []):
@@ -735,7 +753,7 @@ def build_combined_schedule_display(
             "start": w["start"],
             "end": w["end"],
             "type": "discharge",
-            "power": discharge_power,
+            "power": w.get("power", discharge_power),
             "price": w["avg_price"],
         })
     for w in windows.get("adaptive", []):
@@ -743,7 +761,7 @@ def build_combined_schedule_display(
             "start": w["start"],
             "end": w["end"],
             "type": "adaptive",
-            "power": discharge_power if adaptive_power is None else adaptive_power,
+            "power": w.get("power", discharge_power if adaptive_power is None else adaptive_power),
             "price": w["avg_price"],
         })
 

@@ -449,6 +449,22 @@ class TestBuildWindowsDisplay:
         result = build_windows_display(windows, "charge", 8000, now)
         assert "🔴" in result  # active
 
+    def test_per_window_power_overrides_default(self):
+        now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
+        windows = [
+            {"start": datetime(2026, 2, 11, 11, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 12, 0, tzinfo=timezone.utc),
+             "avg_price": 0.231,
+             "power": 4000},
+            {"start": datetime(2026, 2, 11, 12, 0, tzinfo=timezone.utc),
+             "end": datetime(2026, 2, 11, 13, 0, tzinfo=timezone.utc),
+             "avg_price": 0.220,
+             "power": 6000},
+        ]
+        result = build_windows_display(windows, "charge", 8000, now)
+        assert "4000W" in result
+        assert "6000W" in result
+
     def test_discharge_type(self):
         now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
         windows = [
@@ -563,6 +579,25 @@ class TestBuildCombinedScheduleDisplay:
         }
         result = build_combined_schedule_display(windows, 8000, 6000, now)
         assert "**Tomorrow**" in result
+
+    def test_combined_uses_window_specific_power(self):
+        now = datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc)
+        windows = {
+            "charge": [
+                {"start": datetime(2026, 2, 11, 11, 0, tzinfo=timezone.utc),
+                 "end": datetime(2026, 2, 11, 12, 0, tzinfo=timezone.utc),
+                 "avg_price": 0.231,
+                 "power": 4000},
+                {"start": datetime(2026, 2, 11, 12, 0, tzinfo=timezone.utc),
+                 "end": datetime(2026, 2, 11, 13, 0, tzinfo=timezone.utc),
+                 "avg_price": 0.220,
+                 "power": 8000},
+            ],
+            "discharge": [],
+        }
+        result = build_combined_schedule_display(windows, 8000, 6000, now)
+        assert "4000W" in result
+        assert "8000W" in result
 
 
 class TestGroupConsecutiveSlots:

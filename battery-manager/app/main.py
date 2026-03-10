@@ -948,7 +948,12 @@ def _build_display_windows_from_schedule(schedule: Dict[str, Any]) -> Dict[str, 
             avg_price = float(period.get("price", 0.0))
         except Exception:
             continue
-        display["charge"].append({"start": start_dt, "end": end_dt, "avg_price": avg_price})
+        display["charge"].append({
+            "start": start_dt,
+            "end": end_dt,
+            "avg_price": avg_price,
+            "power": int(period.get("power", 0)),
+        })
 
     for period in schedule.get("discharge", []):
         start = period.get("start")
@@ -965,7 +970,12 @@ def _build_display_windows_from_schedule(schedule: Dict[str, Any]) -> Dict[str, 
         window_type = period.get("window_type", "discharge")
         if window_type != "adaptive":
             window_type = "discharge"
-        display[window_type].append({"start": start_dt, "end": end_dt, "avg_price": avg_price})
+        display[window_type].append({
+            "start": start_dt,
+            "end": end_dt,
+            "avg_price": avg_price,
+            "power": int(period.get("power", 0)),
+        })
 
     for key in ("charge", "discharge", "adaptive"):
         display[key].sort(key=lambda w: w["start"])
@@ -993,6 +1003,38 @@ def _build_range_state(
             "max": adaptive_range.max_price if adaptive_range else None,
         },
     }
+
+
+def _expand_charge_window_slots(window: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Expand a grouped charge window into individual slot entries."""
+    expanded: List[Dict[str, Any]] = []
+    raw_slots = window.get("slots")
+    if isinstance(raw_slots, list) and raw_slots:
+        for slot in raw_slots:
+            start_dt = slot.get("start")
+            end_dt = slot.get("end")
+            price = slot.get("price")
+            if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime) or price is None:
+                continue
+            expanded.append({
+                "start": start_dt,
+                "end": end_dt,
+                "price": float(price),
+            })
+    if expanded:
+        return expanded
+
+    start_dt = window.get("start")
+    end_dt = window.get("end")
+    avg_price = window.get("avg_price")
+    if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime) or avg_price is None:
+        return []
+
+    return [{
+        "start": start_dt,
+        "end": end_dt,
+        "price": float(avg_price),
+    }]
 
 
 def _publish_price_ranges(
@@ -1225,20 +1267,12 @@ def generate_schedule(
 
     update_entity(mqtt_client, ENTITY_FORECAST, forecast_text, dry_run=is_dry_run)
 
-    charge_rank = get_current_period_rank(range_import_curve, top_x_charge_count, now, reverse=False)
     discharge_rank = get_current_period_rank(range_export_curve, top_x_discharge_count, now, reverse=True)
 
     min_scaled_power = config["power"].get(
         "min_scaled_power", config["power"]["min_discharge_power"]
     )
     charge_power = config["power"]["max_charge_power"]
-    if charge_rank:
-        charge_power = calculate_rank_scaled_power(
-            charge_rank,
-            top_x_charge_count,
-            config["power"]["max_charge_power"],
-            min_scaled_power,
-        )
 
     discharge_power = config["power"]["min_discharge_power"]
     if discharge_rank:
@@ -1311,6 +1345,18 @@ def generate_schedule(
         now,
         config,
     )
+
+    ranked_charge_slots = sorted(
+        [
+            slot
+            for window in upcoming_windows.get("charge", [])
+            for slot in _expand_charge_window_slots(window)
+        ],
+        key=lambda slot: (float(slot.get("price", 0.0)), slot["start"].isoformat()),
+    )
+    charge_slot_rank_by_start: Dict[str, int] = {}
+    for idx, slot in enumerate(ranked_charge_slots, start=1):
+        charge_slot_rank_by_start[slot["start"].isoformat()] = idx
 
     if state:
         state.sell_buffer_required_soc = buffer_required_soc
@@ -1393,25 +1439,36 @@ def generate_schedule(
             })
 
     if not skip_charge:
-        remaining_charge_slots = max(0, MAX_CHARGE_PERIODS - len(charge_schedule))
-        for window in upcoming_windows["charge"][:remaining_charge_slots]:
-            start_dt = window["start"]
-            end_dt = window["end"]
-            # Skip windows that have already ended
-            if end_dt <= now:
-                continue
-            # Clip start to now if window is partially elapsed
-            effective_start = max(start_dt, interval_start)
-            duration = int((end_dt - effective_start).total_seconds() / 60)
-            if duration <= 0:
-                continue
-            charge_schedule.append({
-                "start": effective_start.isoformat(),
-                "power": charge_power,
-                "duration": duration,
-                "window_type": "charge",
-                "price": round(float(window.get("avg_price", 0.0)), 4),
-            })
+        max_charge_rank = max(top_x_charge_count, 1)
+        for window in upcoming_windows["charge"]:
+            if len(charge_schedule) >= MAX_CHARGE_PERIODS:
+                break
+            for slot in _expand_charge_window_slots(window):
+                if len(charge_schedule) >= MAX_CHARGE_PERIODS:
+                    break
+                start_dt = slot["start"]
+                end_dt = slot["end"]
+                if end_dt <= now:
+                    continue
+                effective_start = max(start_dt, interval_start)
+                duration = int((end_dt - effective_start).total_seconds() / 60)
+                if duration <= 0:
+                    continue
+                slot_rank = charge_slot_rank_by_start.get(start_dt.isoformat(), max_charge_rank)
+                slot_rank = max(1, min(slot_rank, max_charge_rank))
+                slot_power = calculate_rank_scaled_power(
+                    slot_rank,
+                    max_charge_rank,
+                    config["power"]["max_charge_power"],
+                    min_scaled_power,
+                )
+                charge_schedule.append({
+                    "start": effective_start.isoformat(),
+                    "power": slot_power,
+                    "duration": duration,
+                    "window_type": "charge",
+                    "price": round(float(slot.get("price", 0.0)), 4),
+                })
 
     # Combine discharge + adaptive windows into discharge periods.
     # Important: profitable discharge windows are prioritized first so adaptive
@@ -1520,6 +1577,12 @@ def generate_schedule(
             logger.info("💤 No upcoming charge or discharge windows")
 
     schedule = {"charge": charge_schedule, "discharge": discharge_schedule}
+    active_charge_power = _get_active_period_power(schedule, "charge", now)
+    if active_charge_power is None and charge_schedule:
+        active_charge_power = int(charge_schedule[0].get("power", config["power"]["max_charge_power"]))
+    if active_charge_power is not None:
+        charge_power = active_charge_power
+
     published = _publish_schedule(mqtt_client, schedule, is_dry_run, state=state, force=True)
     if not published and not is_dry_run:
         logger.warning("⚠️ Schedule was NOT delivered to battery-api — will retry next cycle")
@@ -1611,10 +1674,12 @@ def generate_schedule(
         discharge_no_range_msg = f"📉 No profitable discharge today (spread €{spread:.3f} < €{min_profit:.2f} minimum)"
 
     # Update ENTITY_CHARGE_SCHEDULE with HA state length protection
-    charge_text = build_windows_display(upcoming_windows["charge"], "charge", charge_power, now)
+    display_windows = _build_display_windows_from_schedule(schedule)
+
+    charge_text = build_windows_display(display_windows["charge"], "charge", charge_power, now)
     charge_state = charge_text
     if len(charge_state) > 255:
-        count = len(upcoming_windows["charge"])
+        count = len(display_windows["charge"])
         charge_state = f"{count} charge windows planned"
 
     update_entity(
@@ -1622,7 +1687,7 @@ def generate_schedule(
         ENTITY_CHARGE_SCHEDULE,
         charge_state,
         {
-            "windows": _serialize_windows(upcoming_windows["charge"]),
+            "windows": _serialize_windows(display_windows["charge"]),
             "markdown": charge_text,
         },
         dry_run=is_dry_run,
@@ -1649,7 +1714,6 @@ def generate_schedule(
     # Update ENTITY_SCHEDULE with HA state length protection (split to _2)
     # Use the generated schedule payload (not full-day candidate windows)
     # so the table always matches what was actually published.
-    display_windows = _build_display_windows_from_schedule(schedule)
     combined_text = build_combined_schedule_display(
         display_windows,
         charge_power,
