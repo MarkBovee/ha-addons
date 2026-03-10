@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.47 — 2026-03-10
+- **Fix: Per-slot charge power scaling** — charge schedules now assign power per ranked charge slot instead of reusing one shared charge power across an entire grouped charge window, so consecutive cheap hours can publish different powers like `4000W`, `6000W`, and `8000W`.
+
 ## 0.8.46 — 2026-03-10
 - **Fix: MQTT connection stability** — hardened the shared MQTT discovery client with bounded reconnect backoff, throttled reconnect requests, and safer default client IDs to reduce transient broker disconnect churn.
 
