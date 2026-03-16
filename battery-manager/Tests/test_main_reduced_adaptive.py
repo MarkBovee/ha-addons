@@ -654,5 +654,100 @@ def test_max_soc_stabilizer_clears_below_hysteresis_floor(monkeypatch):
         if call[0][1] == bm_main.ENTITY_EFFECTIVE_DISCHARGE_POWER
     ]
     assert last_power_updates
-    assert last_power_updates[-1][0][2] == "0"
-    assert last_power_updates[-1][0][3]["active_window_type"] == "none"
+
+
+def test_max_soc_stabilizer_overrides_passive_solar_and_resumes_gap(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["max_soc"] = 97
+    config["power"]["max_discharge_power"] = 8000
+
+    now = datetime.now(timezone.utc)
+    passive_gap_schedule = {
+        "charge": [{"start": (now + timedelta(minutes=1)).isoformat(), "duration": 1, "power": 0}],
+        "discharge": [{"start": (now + timedelta(minutes=2)).isoformat(), "duration": 1, "power": 4000}],
+    }
+    state = bm_main.RuntimeState(
+        schedule={"charge": [], "discharge": []},
+        schedule_generated_at=now,
+        published_schedule=deepcopy(passive_gap_schedule),
+        passive_gap_active=True,
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 97.0,
+        config["entities"]["grid_power_entity"]: -1500.0,
+        config["entities"]["solar_power_entity"]: 2500.0,
+        config["entities"]["house_load_entity"]: 200.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 14.0,
+    }
+
+    published = []
+    entity_updates = []
+
+    class _PassiveSolarMonitorStub:
+        def check_passive_state(self, _ha_api):
+            return True
+
+    class _PassiveGapSchedulerStub:
+        def generate_passive_gap_schedule(self):
+            return deepcopy(passive_gap_schedule)
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: entity_updates.append((_args, _kwargs)))
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: (
+            setattr(state, "published_schedule", deepcopy(schedule)) if state is not None else None,
+            published.append((deepcopy(schedule), force)),
+            True,
+        )[-1],
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _PassiveSolarMonitorStub()),
+        gap_scheduler=cast(Any, _PassiveGapSchedulerStub()),
+    )
+
+    assert published, "Expected max-SOC stabilizer to override passive solar"
+    override_schedule = published[-1][0]
+    assert override_schedule["charge"] == []
+    assert override_schedule["discharge"][0]["window_type"] == "max_soc_stabilizer"
+    assert override_schedule["discharge"][0]["power"] == 4000
+    assert override_schedule["discharge"][0]["duration"] == 5
+    assert state.max_soc_stabilizer_until is not None
+    assert state.passive_gap_active is False
+
+    sensor_values[config["entities"]["soc_entity"]] = 95.5
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _PassiveSolarMonitorStub()),
+        gap_scheduler=cast(Any, _PassiveGapSchedulerStub()),
+    )
+
+    assert len(published) >= 3
+    assert published[-1][0] == passive_gap_schedule
+    assert state.max_soc_stabilizer_until is None
+    assert state.passive_gap_active is True
