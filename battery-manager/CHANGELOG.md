@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.48 — 2026-03-16
+- **Fix: Max-SOC stabilizer during Passive Solar** — the 5-minute max-SOC protection discharge now takes precedence over Passive Solar mode, so reaching `soc.max_soc` reliably triggers the stabilizer instead of being short-circuited by the passive gap schedule.
+- **Tests:** Added a regression covering max-SOC stabilization while Passive Solar is active and verified the passive gap resumes cleanly after the stabilizer clears.
+
 ## 0.8.47 — 2026-03-10
 - **Fix: Per-slot charge power scaling** — charge schedules now assign power per ranked charge slot instead of reusing one shared charge power across an entire grouped charge window, so consecutive cheap hours can publish different powers like `4000W`, `6000W`, and `8000W`.
 

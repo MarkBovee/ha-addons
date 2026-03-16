@@ -1805,44 +1805,6 @@ def monitor_and_adjust_active_period(
         state.warned_missing_solar = True
 
     passive_active = solar_monitor.check_passive_state(ha_api)
-    if passive_active:
-        if not state.passive_gap_active:
-            logger.info("☀️ Passive Solar Mode is ACTIVE (0W Charge Gap)")
-            gap_schedule = gap_scheduler.generate_passive_gap_schedule()
-            _publish_schedule(mqtt_client, gap_schedule, is_dry_run, state=state, force=True)
-            state.passive_gap_active = True
-        state.last_effective_discharge_power = 0
-        _update_mode_entity(
-            mqtt_client,
-            state,
-            "passive_solar",
-            is_dry_run,
-            price_range="passive",
-        )
-        update_entity(
-            mqtt_client,
-            ENTITY_CURRENT_ACTION,
-            "Passive Solar (0W charge gap)",
-            {"status": "active", "gap_schedule": True},
-            dry_run=is_dry_run,
-        )
-        _update_effective_discharge_power(
-            mqtt_client,
-            0,
-            is_dry_run,
-            active_window_type="passive_gap",
-            price_range="passive",
-            effective_price_range="passive_gap",
-            soc=soc,
-            grid_power=grid_power,
-        )
-        return
-
-    if state.passive_gap_active:
-        logger.info("☁️ Passive Solar Mode cleared - restoring generated schedule")
-        _publish_schedule(mqtt_client, state.schedule, is_dry_run, state=state, force=True)
-        state.passive_gap_active = False
-        state.last_monitor_status = None
 
     effective_schedule = state.published_schedule or state.schedule
     active_discharge_period = next(
@@ -2023,6 +1985,8 @@ def monitor_and_adjust_active_period(
             )
             stabilizer_active = False
         else:
+            if state.passive_gap_active:
+                state.passive_gap_active = False
             stabilizer_power = _get_max_soc_stabilizer_power(config)
             remaining_minutes = max(
                 1,
@@ -2072,6 +2036,9 @@ def monitor_and_adjust_active_period(
         and not reduce_discharge
     )
     if should_start_max_soc_stabilizer:
+        if state.passive_gap_active:
+            logger.info("🛡️ Max-SOC stabilizer overriding Passive Solar gap schedule")
+            state.passive_gap_active = False
         stabilizer_power = _get_max_soc_stabilizer_power(config)
         override = _build_max_soc_stabilizer_schedule(
             now,
@@ -2116,6 +2083,45 @@ def monitor_and_adjust_active_period(
             grid_power=grid_power,
         )
         return
+
+    if passive_active:
+        if not state.passive_gap_active:
+            logger.info("☀️ Passive Solar Mode is ACTIVE (0W Charge Gap)")
+            gap_schedule = gap_scheduler.generate_passive_gap_schedule()
+            _publish_schedule(mqtt_client, gap_schedule, is_dry_run, state=state, force=True)
+            state.passive_gap_active = True
+        state.last_effective_discharge_power = 0
+        _update_mode_entity(
+            mqtt_client,
+            state,
+            "passive_solar",
+            is_dry_run,
+            price_range="passive",
+        )
+        update_entity(
+            mqtt_client,
+            ENTITY_CURRENT_ACTION,
+            "Passive Solar (0W charge gap)",
+            {"status": "active", "gap_schedule": True},
+            dry_run=is_dry_run,
+        )
+        _update_effective_discharge_power(
+            mqtt_client,
+            0,
+            is_dry_run,
+            active_window_type="passive_gap",
+            price_range="passive",
+            effective_price_range="passive_gap",
+            soc=soc,
+            grid_power=grid_power,
+        )
+        return
+
+    if state.passive_gap_active:
+        logger.info("☁️ Passive Solar Mode cleared - restoring generated schedule")
+        _publish_schedule(mqtt_client, state.schedule, is_dry_run, state=state, force=True)
+        state.passive_gap_active = False
+        state.last_monitor_status = None
 
     status_parts = []
     if active_charge:
