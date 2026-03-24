@@ -38,6 +38,22 @@ class ChargerApi:
             "Accept": "application/json"
         })
 
+    def _browser_headers(
+        self,
+        referer_path: str,
+        include_auth: bool = False,
+        accept: str = "*/*",
+    ) -> Dict[str, str]:
+        headers = {
+            "Accept": accept,
+            "Origin": self.base_url,
+            "Referer": f"{self.base_url}{referer_path}",
+            "User-Agent": "Mozilla/5.0",
+        }
+        if include_auth:
+            headers.update(self._auth_headers())
+        return headers
+
     @staticmethod
     def _normalize_base_url(base_url: str) -> str:
         normalized = (base_url or "https://my.charge.space").strip().rstrip("/")
@@ -68,11 +84,7 @@ class ChargerApi:
                 "password": self.password,
                 "hostName": self.host_name
             }
-            login_headers = {
-                "Accept": "*/*",
-                "Origin": self.base_url,
-                "Referer": f"{self.base_url}/userapp/login",
-            }
+            login_headers = self._browser_headers("/userapp/login")
             
             response = self._session.post(
                 f"{self.base_url}/api/auth/login",
@@ -137,9 +149,12 @@ class ChargerApi:
     def get_charge_points(self) -> Optional[List[ChargePoint]]:
         """Get the list of charge points for the authenticated user."""
         try:
-            request_headers = self._auth_headers()
+            request_headers = self._browser_headers(
+                "/userapp/dashboard",
+                include_auth=True,
+            )
             response = self._session.post(
-                f"{self.base_url}/api/users/chargepoints/owned?expand=ocppConfig",
+                f"{self.base_url}/api/users/chargepoints/owned?expand=ocppConfig,topChargingLimitation",
                 headers=request_headers,
                 json=[],
                 timeout=30
@@ -162,7 +177,10 @@ class ChargerApi:
     def get_schedules(self, charge_point_id: str) -> Optional[List[Dict[str, Any]]]:
         """Fetch smart charging schedules for a charge point."""
         try:
-            headers = self._auth_headers()
+            headers = self._browser_headers(
+                "/userapp/dashboard",
+                include_auth=True,
+            )
             response = self._session.get(
                 f"{self.base_url}/api/smartChargingSchedules/chargepoint/{charge_point_id}",
                 headers=headers,
@@ -222,7 +240,10 @@ class ChargerApi:
         }
 
         try:
-            headers = self._auth_headers()
+            headers = self._browser_headers(
+                "/userapp/dashboard",
+                include_auth=True,
+            )
             response = self._session.put(
                 f"{self.base_url}/api/smartChargingSchedules",
                 headers=headers,
@@ -245,7 +266,10 @@ class ChargerApi:
     def delete_schedule(self, charge_point_id: str, connector_id: int) -> bool:
         """Delete the automation schedule for the connector."""
         try:
-            headers = self._auth_headers()
+            headers = self._browser_headers(
+                "/userapp/dashboard",
+                include_auth=True,
+            )
             response = self._session.delete(
                 f"{self.base_url}/api/smartChargingSchedules/{charge_point_id}/{connector_id}",
                 headers=headers,

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.10] - 2026-03-24
+
+### Fixed
+- Applied the same browser-style `Origin`/`Referer`/`User-Agent` request headers to authenticated Charge Amps API calls after login, not just the login request itself.
+- Updated charge-point discovery to match the live webapp request shape by requesting `expand=ocppConfig,topChargingLimitation`.
+
+### Tests
+- Added a regression to verify `get_charge_points()` sends the expected authenticated browser-style request.
+
 ## [1.3.9] - 2026-03-24
 
 ### Fixed

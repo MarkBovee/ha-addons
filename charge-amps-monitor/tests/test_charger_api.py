@@ -26,6 +26,9 @@ class _FakeSession:
     def __init__(self):
         self.headers = {}
         self.last_post = None
+        self.last_get = None
+        self.last_put = None
+        self.last_delete = None
 
     def post(self, url, headers=None, json=None, timeout=None):
         self.last_post = {
@@ -34,12 +37,48 @@ class _FakeSession:
             "json": json,
             "timeout": timeout,
         }
+        if url.endswith("/api/auth/login"):
+            return _FakeResponse(
+                payload={
+                    "token": "aaa.eyJleHAiOjE3NzQ0NTg5ODR9.bbb",
+                    "user": {"id": "user-123"},
+                }
+            )
         return _FakeResponse(
-            payload={
-                "token": "aaa.eyJleHAiOjE3NzQ0NTg5ODR9.bbb",
-                "user": {"id": "user-123"},
-            }
+            payload=[
+                {
+                    "id": "020100004457L",
+                    "name": "Mark",
+                    "chargePointStatus": "Online",
+                    "connectors": [{"connectorId": 1, "isCharging": False}],
+                }
+            ]
         )
+
+    def get(self, url, headers=None, timeout=None):
+        self.last_get = {
+            "url": url,
+            "headers": headers,
+            "timeout": timeout,
+        }
+        return _FakeResponse(payload=[])
+
+    def put(self, url, headers=None, json=None, timeout=None):
+        self.last_put = {
+            "url": url,
+            "headers": headers,
+            "json": json,
+            "timeout": timeout,
+        }
+        return _FakeResponse(payload={})
+
+    def delete(self, url, headers=None, timeout=None):
+        self.last_delete = {
+            "url": url,
+            "headers": headers,
+            "timeout": timeout,
+        }
+        return _FakeResponse(payload={})
 
 
 class _FakeMqttClient:
@@ -91,3 +130,30 @@ def test_publish_safe_charger_state_mqtt_zeros_live_measurements():
     assert ("current", "0") in mqtt_client.sensors
     assert ("status", "auth_error") in mqtt_client.sensors
     assert ("error_code", "api_403") in mqtt_client.sensors
+
+
+def test_get_charge_points_uses_browser_headers_and_expand_query():
+    api = ChargerApi(
+        "user@example.com",
+        "secret-pass",
+        "my.charge.space",
+        "https://my.charge.space",
+    )
+    fake_session = _FakeSession()
+    fake_session.headers.update(api._session.headers)
+    api._session = fake_session
+    api._auth_token = "token-123"
+    api._token_expiration = api._token_expiration.replace(year=2099)
+
+    charge_points = api.get_charge_points()
+
+    assert charge_points is not None
+    assert len(charge_points) == 1
+    assert fake_session.last_post["url"] == (
+        "https://my.charge.space/api/users/chargepoints/owned?expand=ocppConfig,topChargingLimitation"
+    )
+    assert fake_session.last_post["json"] == []
+    assert fake_session.last_post["headers"]["Authorization"] == "Bearer token-123"
+    assert fake_session.last_post["headers"]["Origin"] == "https://my.charge.space"
+    assert fake_session.last_post["headers"]["Referer"] == "https://my.charge.space/userapp/dashboard"
+    assert fake_session.last_post["headers"]["User-Agent"] == "Mozilla/5.0"
