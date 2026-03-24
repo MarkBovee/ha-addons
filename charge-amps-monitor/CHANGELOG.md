@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.3.9] - 2026-03-24
+
+### Fixed
+- Hardened Charge Amps login by trimming configured credentials/URLs and sending the same origin/referer headers used by the working web login flow.
+- When Charge Amps authentication or status refresh fails, the add-on now publishes a safe offline state with charging power forced to `0` and charging status forced `OFF` so downstream automations do not keep stale values.
+
+### Tests
+- Added focused regressions for login request normalization and safe MQTT zero-state publishing.
+
 ## [1.3.8] - 2026-03-10
 
 ### Fixed

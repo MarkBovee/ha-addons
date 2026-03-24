@@ -86,6 +86,7 @@ DEFAULT_CONFIG = {
         "adaptive_power_grace_seconds": 60,
         "schedule_regen_cooldown_seconds": 60,
         "max_soc_sensor_age_seconds": 900,
+        "max_ev_sensor_age_seconds": 180,
     },
     "power": {
         "charging_power_limit": 1000,
@@ -157,6 +158,7 @@ class RuntimeState:
     warned_missing_price: bool = False
     warned_missing_temperature: bool = False
     warned_missing_ev: bool = False
+    warned_stale_ev: bool = False
     warned_missing_soc: bool = False
     warned_stale_soc: bool = False
     warned_missing_grid: bool = False
@@ -1769,11 +1771,35 @@ def monitor_and_adjust_active_period(
     batt_power = _get_sensor_float(ha_api, batt_entity) if batt_entity else None
 
     ev_power = None
+    ev_age_seconds = None
     if config["ev_charger"]["enabled"]:
-        ev_power = _get_sensor_float(ha_api, config["ev_charger"]["entity_id"])
-        if ev_power is None and not state.warned_missing_ev:
-            logger.warning("⚠️ EV charger sensor unavailable, skipping EV integration")
-            state.warned_missing_ev = True
+        ev_power, ev_age_seconds = _get_sensor_float_and_age_seconds(
+            ha_api,
+            config["ev_charger"]["entity_id"],
+            now,
+        )
+        max_ev_sensor_age = max(
+            0,
+            int(config.get("timing", {}).get("max_ev_sensor_age_seconds", 180)),
+        )
+        if ev_age_seconds is not None and max_ev_sensor_age > 0 and ev_age_seconds > max_ev_sensor_age:
+            if not state.warned_stale_ev:
+                logger.warning(
+                    "⚠️ EV charger sensor stale (age %.0fs > %ss), ignoring EV charging hold",
+                    ev_age_seconds,
+                    max_ev_sensor_age,
+                )
+                state.warned_stale_ev = True
+            ev_power = None
+        elif ev_power is not None:
+            state.warned_stale_ev = False
+
+        if ev_power is None:
+            if ev_age_seconds is None and not state.warned_missing_ev:
+                logger.warning("⚠️ EV charger sensor unavailable, skipping EV integration")
+                state.warned_missing_ev = True
+        else:
+            state.warned_missing_ev = False
 
     max_soc_sensor_age = max(0, int(config.get("timing", {}).get("max_soc_sensor_age_seconds", 900)))
     if soc_age_seconds is not None and max_soc_sensor_age > 0 and soc_age_seconds > max_soc_sensor_age:

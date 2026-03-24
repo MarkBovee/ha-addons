@@ -343,6 +343,8 @@ The addon uses the Charge Amps API:
 
 - Verify email and password are correct
 - Check that host_name matches your Charge Amps account
+- The add-on now trims surrounding whitespace from `email`, `password`, `host_name`, and `base_url` before login, which helps when secrets or copied values include a trailing space/newline.
+- When the Charge Amps API becomes unavailable or returns authorization errors, the live charging sensors are forced back to a safe `0`/`OFF` state so Home Assistant automations do not keep acting on stale charger power.
 - Review logs for detailed error messages
 
 ## License

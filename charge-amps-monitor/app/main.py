@@ -756,6 +756,208 @@ def update_entities_mqtt(
         mqtt_client.update_state("sensor", "current", str(round(avg_current, 1)))
 
 
+def publish_safe_charger_state_rest(
+    ha_api_url: str,
+    ha_api_token: str,
+    status: str,
+    error_code: str,
+) -> None:
+    """Publish a safe offline/auth-error charger state via REST."""
+    create_or_update_entity(
+        "input_boolean.ca_charger_charging",
+        "off",
+        {"friendly_name": "Charger Charging", "icon": "mdi:ev-station"},
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+    create_or_update_entity(
+        "input_number.ca_charger_current_power_w",
+        "0",
+        {
+            "friendly_name": "Charger Current Power",
+            "unit_of_measurement": "W",
+            "icon": "mdi:flash",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+    create_or_update_entity(
+        "sensor.ca_charger_power_kw",
+        "0",
+        {
+            "friendly_name": "Charger Power",
+            "unit_of_measurement": "kW",
+            "device_class": "power",
+            "icon": "mdi:flash",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+    create_or_update_entity(
+        "sensor.ca_charger_voltage",
+        "0",
+        {
+            "friendly_name": "Charger Voltage",
+            "unit_of_measurement": "V",
+            "device_class": "voltage",
+            "icon": "mdi:lightning-bolt",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+    create_or_update_entity(
+        "sensor.ca_charger_current",
+        "0",
+        {
+            "friendly_name": "Charger Current",
+            "unit_of_measurement": "A",
+            "device_class": "current",
+            "icon": "mdi:current-ac",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+    create_or_update_entity(
+        "sensor.ca_charger_status",
+        status,
+        {"friendly_name": "Charger Status", "icon": "mdi:information"},
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+    create_or_update_entity(
+        "binary_sensor.ca_charger_online",
+        "off",
+        {
+            "friendly_name": "Charger Online",
+            "device_class": "connectivity",
+            "icon": "mdi:network",
+        },
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+    create_or_update_entity(
+        "binary_sensor.ca_charger_connector_enabled",
+        "off",
+        {"friendly_name": "Charger Connector Enabled", "icon": "mdi:power"},
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+    create_or_update_entity(
+        "sensor.ca_charger_error_code",
+        error_code,
+        {"friendly_name": "Charger Error Code", "icon": "mdi:alert"},
+        ha_api_url,
+        ha_api_token,
+        log_success=False,
+    )
+
+
+def publish_safe_charger_state_mqtt(
+    mqtt_client: 'MqttDiscovery',
+    status: str,
+    error_code: str,
+) -> None:
+    """Publish a safe offline/auth-error charger state via MQTT Discovery."""
+    mqtt_client.publish_binary_sensor(EntityConfig(
+        object_id="charging",
+        name="Charger Charging",
+        state="OFF",
+        device_class="plug",
+        icon="mdi:ev-station",
+    ))
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="current_power",
+        name="Charger Current Power",
+        state="0",
+        unit_of_measurement="W",
+        device_class="power",
+        state_class="measurement",
+        icon="mdi:flash",
+    ))
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="power_kw",
+        name="Charger Power",
+        state="0",
+        unit_of_measurement="kW",
+        device_class="power",
+        state_class="measurement",
+        icon="mdi:flash",
+    ))
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="voltage",
+        name="Charger Voltage",
+        state="0",
+        unit_of_measurement="V",
+        device_class="voltage",
+        state_class="measurement",
+        icon="mdi:lightning-bolt",
+    ))
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="current",
+        name="Charger Current",
+        state="0",
+        unit_of_measurement="A",
+        device_class="current",
+        state_class="measurement",
+        icon="mdi:current-ac",
+    ))
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="status",
+        name="Charger Status",
+        state=status,
+        icon="mdi:information",
+    ))
+    mqtt_client.publish_binary_sensor(EntityConfig(
+        object_id="online",
+        name="Charger Online",
+        state="OFF",
+        device_class="connectivity",
+        icon="mdi:network",
+    ))
+    mqtt_client.publish_binary_sensor(EntityConfig(
+        object_id="connector_enabled",
+        name="Charger Connector Enabled",
+        state="OFF",
+        icon="mdi:power",
+    ))
+    mqtt_client.publish_sensor(EntityConfig(
+        object_id="error_code",
+        name="Charger Error Code",
+        state=error_code,
+        icon="mdi:alert",
+        entity_category="diagnostic",
+    ))
+
+
+def publish_safe_charger_state(
+    use_mqtt: bool,
+    mqtt_client: Optional['MqttDiscovery'],
+    ha_api_url: str,
+    ha_api_token: str,
+    status: str,
+    error_code: str,
+) -> None:
+    """Publish a safe charger state when live Charge Amps data is unavailable."""
+    logger.warning(
+        "Publishing safe charger state: status=%s, error=%s",
+        status,
+        error_code,
+    )
+    if use_mqtt and mqtt_client and MQTT_ENTITY_CONFIG_AVAILABLE:
+        publish_safe_charger_state_mqtt(mqtt_client, status, error_code)
+        return
+    if ha_api_token:
+        publish_safe_charger_state_rest(ha_api_url, ha_api_token, status, error_code)
+
+
 def update_charger_status(
     charger_api: ChargerApi, ha_api_url: str, ha_api_token: str, verbose: bool = False
 ) -> Optional[str]:
@@ -938,21 +1140,6 @@ def main():
     logger.info(f"Base URL: {charger_base_url}")
     logger.info(f"Update Interval: {update_interval} minutes")
 
-    # Initialize API client
-    charger_api = ChargerApi(email, password, host_name, charger_base_url)
-
-    # Authenticate
-    if not charger_api.authenticate():
-        logger.error("Failed to authenticate with Charge Amps API")
-        sys.exit(1)
-
-    logger.info("Successfully authenticated with Charge Amps API")
-
-    if ha_api.token:
-        coordinator = ChargingAutomationCoordinator(charger_api, ha_api, automation_config)
-    else:
-        logger.warning("Home Assistant token not available; automation coordinator disabled")
-
     # Try MQTT Discovery first (provides unique_id for UI management)
     mqtt_client = setup_mqtt_client(
         addon_name="Charge Amps Monitor",
@@ -961,6 +1148,31 @@ def main():
         model="EV Charger"
     )
     use_mqtt = mqtt_client is not None
+
+    # Initialize API client
+    charger_api = ChargerApi(email, password, host_name, charger_base_url)
+
+    # Authenticate
+    if not charger_api.authenticate():
+        logger.error("Failed to authenticate with Charge Amps API")
+        publish_safe_charger_state(
+            use_mqtt,
+            mqtt_client,
+            ha_api.base_url,
+            ha_api.token,
+            status="auth_error",
+            error_code="api_403",
+        )
+        if mqtt_client:
+            mqtt_client.disconnect()
+        sys.exit(1)
+
+    logger.info("Successfully authenticated with Charge Amps API")
+
+    if ha_api.token:
+        coordinator = ChargingAutomationCoordinator(charger_api, ha_api, automation_config)
+    else:
+        logger.warning("Home Assistant token not available; automation coordinator disabled")
 
     if coordinator and use_mqtt and mqtt_client and MQTT_ENTITY_CONFIG_AVAILABLE:
         try:
@@ -1081,6 +1293,15 @@ def main():
         charge_point_id = update_charger_status_mqtt(charger_api, mqtt_client, verbose=True)
     else:
         charge_point_id = update_charger_status(charger_api, ha_api.base_url, ha_api.token, verbose=True)
+    if charge_point_id is None:
+        publish_safe_charger_state(
+            use_mqtt,
+            mqtt_client,
+            ha_api.base_url,
+            ha_api.token,
+            status="unavailable",
+            error_code="api_unavailable",
+        )
 
     # Run coordinator tick to analyze prices, log schedule, and push to charger
     if coordinator:
@@ -1113,6 +1334,16 @@ def main():
                     charge_point_id = update_charger_status_mqtt(charger_api, mqtt_client)
                 else:
                     charge_point_id = update_charger_status(charger_api, ha_api.base_url, ha_api.token)
+
+                if charge_point_id is None:
+                    publish_safe_charger_state(
+                        use_mqtt,
+                        mqtt_client,
+                        ha_api.base_url,
+                        ha_api.token,
+                        status="unavailable",
+                        error_code="api_unavailable",
+                    )
 
                 if coordinator:
                     try:

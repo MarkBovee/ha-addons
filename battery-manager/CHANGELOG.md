@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.49 — 2026-03-24
+- **Fix: Ignore stale EV charging state** — Battery Manager now stops trusting EV charger power after `timing.max_ev_sensor_age_seconds` (default 180s), preventing a stuck Charge Amps power value from pausing discharge after charger updates fail.
+- **Tests/docs:** Added a regression for stale EV charger readings and documented the new timing safeguard.
+
 ## 0.8.48 — 2026-03-16
 - **Fix: Max-SOC stabilizer during Passive Solar** — the 5-minute max-SOC protection discharge now takes precedence over Passive Solar mode, so reaching `soc.max_soc` reliably triggers the stabilizer instead of being short-circuited by the passive gap schedule.
 - **Tests:** Added a regression covering max-SOC stabilization while Passive Solar is active and verified the passive gap resumes cleanly after the stabilizer clears.

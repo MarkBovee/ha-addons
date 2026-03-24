@@ -3,9 +3,9 @@
 import base64
 import json
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -25,10 +25,10 @@ class ChargerApi:
         base_url: str = "https://my.charge.space"
     ):
         """Initialize the API client."""
-        self.email = email
-        self.password = password
-        self.host_name = host_name
-        self.base_url = base_url
+        self.email = (email or "").strip()
+        self.password = (password or "").strip()
+        self.base_url = self._normalize_base_url(base_url)
+        self.host_name = self._normalize_host_name(host_name, self.base_url)
         self._auth_token: Optional[str] = None
         self._user_id: Optional[str] = None
         self._token_expiration: datetime = datetime.min.replace(tzinfo=timezone.utc)
@@ -38,6 +38,21 @@ class ChargerApi:
             "Accept": "application/json"
         })
 
+    @staticmethod
+    def _normalize_base_url(base_url: str) -> str:
+        normalized = (base_url or "https://my.charge.space").strip().rstrip("/")
+        return normalized or "https://my.charge.space"
+
+    @staticmethod
+    def _normalize_host_name(host_name: str, base_url: str) -> str:
+        normalized = (host_name or "").strip().strip("/")
+        if normalized:
+            return normalized
+        parsed = urlparse(base_url)
+        if parsed.hostname:
+            return parsed.hostname
+        return "my.charge.space"
+
     def _auth_headers(self) -> Dict[str, str]:
         if not self._ensure_authenticated():
             raise RuntimeError("Authentication required")
@@ -46,20 +61,32 @@ class ChargerApi:
     def authenticate(self) -> bool:
         """Authenticate with the Charge Amps API and retrieve an access token."""
         try:
+            self._auth_token = None
+            self._user_id = None
             login_request = {
                 "email": self.email,
                 "password": self.password,
                 "hostName": self.host_name
             }
+            login_headers = {
+                "Accept": "*/*",
+                "Origin": self.base_url,
+                "Referer": f"{self.base_url}/userapp/login",
+            }
             
             response = self._session.post(
                 f"{self.base_url}/api/auth/login",
+                headers=login_headers,
                 json=login_request,
                 timeout=30
             )
             
             if not response.ok:
-                logger.error(f"Authentication failed with status code: {response.status_code}")
+                logger.error(
+                    "Authentication failed with status code: %s - %s",
+                    response.status_code,
+                    response.text[:200],
+                )
                 return False
             
             login_response = response.json()
