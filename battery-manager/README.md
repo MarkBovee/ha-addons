@@ -6,6 +6,8 @@ Optimize battery charging and discharging using dynamic electricity prices, sola
 
 Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into four ranges — **load** (cheapest, charge battery), **discharge** (most expensive, sell), **adaptive** (mid-range, discharge to 0W grid), and **passive** (below threshold, battery idle) — adjusts discharge power in real time, and applies SOC protection, conservative-SOC reduction, solar surplus, and EV charging rules.
 
+When `solar_aware_charging` is enabled, Battery Manager also reduces today's commanded grid charge power during planned charge windows based on the remaining solar forecast (`sensor.energy_production_today_remaining`). The calculation is rerun on every schedule refresh using the latest SOC and the latest remaining-solar value, so charge power can change hour by hour while still aiming for `soc.max_soc`.
+
 ## Prerequisites
 
 - Home Assistant Supervisor
@@ -34,6 +36,7 @@ Key options (defaults in config.yaml):
 - **dry_run**: log schedules without publishing to MQTT
 - **entities.price_curve_entity**: price curve sensor entity
 - **entities.export_price_curve_entity**: export price curve sensor entity
+- **entities.remaining_solar_energy_entity**: remaining solar energy forecast for the rest of today
 - **entities.soc_entity**: battery SOC sensor
 - **entities.grid_power_entity**: grid power sensor (import/export)
 - **entities.solar_power_entity**: solar production sensor
@@ -43,6 +46,9 @@ Key options (defaults in config.yaml):
 - **power.max_discharge_power**: maximum discharge power (W)
 - **power.min_discharge_power**: baseline discharge power for adaptive periods (W)
 - **power.min_scaled_power**: minimum scaled power for ranked charge/discharge (W)
+- **solar_aware_charging.enabled**: enable remaining-solar-aware charge power allocation for today's charge slots
+- **solar_aware_charging.forecast_safety_factor**: fraction of the remaining solar forecast that may be trusted for charge planning (default `0.8`)
+- **solar_aware_charging.min_charge_power**: minimum commanded grid charge power for a retained solar-aware charge slot (default `500W`)
 - **soc.min_soc**: hard minimum SOC (%)
 - **soc.conservative_soc**: conservative SOC threshold (%)
 - **soc.target_eod_soc**: end-of-day target SOC (%)
