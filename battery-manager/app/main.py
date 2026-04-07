@@ -31,6 +31,12 @@ from .price_analyzer import (
     get_current_price_entry,
 )
 from .solar_monitor import SolarMonitor
+from .solar_charge_optimizer import (
+    SolarAwareChargeAllocation,
+    allocate_solar_aware_charge_powers,
+    calculate_charge_deficit_kwh,
+    parse_remaining_solar_energy_kwh,
+)
 from .gap_scheduler import GapScheduler
 from .soc_guardian import calculate_sell_buffer_soc, can_charge, can_discharge
 from .temperature_advisor import get_discharge_hours
@@ -72,6 +78,7 @@ DEFAULT_CONFIG = {
     "entities": {
         "price_curve_entity": "sensor.energy_prices_electricity_import_price",
         "export_price_curve_entity": "sensor.energy_prices_electricity_export_price",
+        "remaining_solar_energy_entity": "sensor.energy_production_today_remaining",
         "soc_entity": "sensor.battery_api_battery_soc",
         "grid_power_entity": "sensor.power_usage",
         "solar_power_entity": "sensor.battery_api_pv_power",
@@ -97,6 +104,11 @@ DEFAULT_CONFIG = {
     },
     "adaptive": {
         "enabled": True,
+    },
+    "solar_aware_charging": {
+        "enabled": True,
+        "forecast_safety_factor": 0.8,
+        "min_charge_power": 500,
     },
     "passive_solar": {
         "enabled": True,
@@ -212,6 +224,15 @@ def _get_sensor_float(ha_api: HomeAssistantApi, entity_id: str) -> Optional[floa
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _get_remaining_solar_energy_kwh(
+    ha_api: HomeAssistantApi,
+    entity_id: Optional[str],
+) -> Optional[float]:
+    if not entity_id:
+        return None
+    return parse_remaining_solar_energy_kwh(_get_entity_state(ha_api, entity_id))
 
 
 def _parse_ha_timestamp(value: Any) -> Optional[datetime]:
@@ -1429,6 +1450,9 @@ def generate_schedule(
     discharge_schedule: List[Dict[str, Any]] = []
     scheduled_discharge_windows = 0
     scheduled_adaptive_windows = 0
+    solar_aware_allocation: Optional[SolarAwareChargeAllocation] = None
+    solar_aware_remaining_kwh: Optional[float] = None
+    solar_charge_deficit_kwh = 0.0
 
     if precharge_until is not None:
         precharge_minutes = int((precharge_until - interval_start).total_seconds() / 60)
@@ -1440,13 +1464,14 @@ def generate_schedule(
                 "window_type": "precharge",
             })
 
+    charge_slot_records: List[Dict[str, Any]] = []
     if not skip_charge:
         max_charge_rank = max(top_x_charge_count, 1)
         for window in upcoming_windows["charge"]:
-            if len(charge_schedule) >= MAX_CHARGE_PERIODS:
+            if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
                 break
             for slot in _expand_charge_window_slots(window):
-                if len(charge_schedule) >= MAX_CHARGE_PERIODS:
+                if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
                     break
                 start_dt = slot["start"]
                 end_dt = slot["end"]
@@ -1464,13 +1489,81 @@ def generate_schedule(
                     config["power"]["max_charge_power"],
                     min_scaled_power,
                 )
-                charge_schedule.append({
-                    "start": effective_start.isoformat(),
-                    "power": slot_power,
+                charge_slot_records.append({
+                    "start": effective_start,
+                    "end": end_dt,
+                    "base_power": slot_power,
                     "duration": duration,
                     "window_type": "charge",
                     "price": round(float(slot.get("price", 0.0)), 4),
                 })
+
+    solar_aware_cfg = config.get("solar_aware_charging", {})
+    solar_aware_enabled = bool(solar_aware_cfg.get("enabled", True))
+    if solar_aware_enabled and charge_slot_records and soc is not None:
+        solar_aware_remaining_kwh = _get_remaining_solar_energy_kwh(
+            ha_api,
+            config.get("entities", {}).get("remaining_solar_energy_entity"),
+        )
+        solar_charge_deficit_kwh = calculate_charge_deficit_kwh(
+            soc,
+            float(max_soc),
+            float(config["soc"].get("battery_capacity_kwh", 25)),
+        )
+        today_charge_slot_records = [
+            record
+            for record in charge_slot_records
+            if record["start"].astimezone().date() == now.astimezone().date()
+        ]
+        if solar_aware_remaining_kwh is not None and solar_charge_deficit_kwh > 0 and today_charge_slot_records:
+            solar_aware_allocation = allocate_solar_aware_charge_powers(
+                today_charge_slot_records,
+                solar_charge_deficit_kwh,
+                solar_aware_remaining_kwh,
+                int(solar_aware_cfg.get("min_charge_power", 500)),
+                float(solar_aware_cfg.get("forecast_safety_factor", 0.8)),
+            )
+            if solar_aware_allocation.applied:
+                logger.info(
+                    "☀️ Solar-aware charge planning: deficit %.2fkWh, remaining solar %.2fkWh, usable %.2fkWh, grid target %.2fkWh",
+                    solar_charge_deficit_kwh,
+                    solar_aware_remaining_kwh,
+                    solar_aware_allocation.usable_solar_kwh,
+                    solar_aware_allocation.grid_energy_target_kwh,
+                )
+
+    for record in charge_slot_records:
+        slot_start = record["start"]
+        slot_key = slot_start.isoformat()
+        slot_power = int(record["base_power"])
+        solar_aware = False
+        forecast_solar_kwh = None
+
+        if (
+            solar_aware_allocation is not None
+            and solar_aware_allocation.applied
+            and slot_start.astimezone().date() == now.astimezone().date()
+        ):
+            forecast_solar_kwh = solar_aware_allocation.slot_solar_kwh.get(slot_key)
+            if slot_key not in solar_aware_allocation.slot_powers:
+                logger.info(
+                    "☀️ Skipping grid charge slot %s; remaining solar forecast covers the residual charge target",
+                    slot_start.astimezone().strftime("%H:%M"),
+                )
+                continue
+            slot_power = solar_aware_allocation.slot_powers[slot_key]
+            solar_aware = True
+
+        charge_schedule.append({
+            "start": slot_start.isoformat(),
+            "power": slot_power,
+            "duration": int(record["duration"]),
+            "window_type": record["window_type"],
+            "price": record["price"],
+            "base_power": int(record["base_power"]),
+            "solar_aware": solar_aware,
+            "forecast_solar_kwh": forecast_solar_kwh,
+        })
 
     # Combine discharge + adaptive windows into discharge periods.
     # Important: profitable discharge windows are prioritized first so adaptive
@@ -1603,24 +1696,35 @@ def generate_schedule(
     for i, p in enumerate(schedule["charge"]):
         window_type = p.get("window_type", "charge")
         price = p.get("price")
+        solar_aware_text = ""
+        if p.get("solar_aware"):
+            forecast_kwh = p.get("forecast_solar_kwh")
+            base_power = p.get("base_power")
+            solar_aware_text = (
+                f" | solar-aware base={int(base_power)}W forecast={float(forecast_kwh):.2f}kWh"
+                if forecast_kwh is not None and base_power is not None
+                else " | solar-aware"
+            )
         if price is None:
             logger.info(
-                "   charge[%d] (%s): %s %dW %dm",
+                "   charge[%d] (%s): %s %dW %dm%s",
                 i,
                 window_type,
                 p["start"],
                 p["power"],
                 p["duration"],
+                solar_aware_text,
             )
         else:
             logger.info(
-                "   charge[%d] (%s): %s %dW %dm @€%.3f",
+                "   charge[%d] (%s): %s %dW %dm @€%.3f%s",
                 i,
                 window_type,
                 p["start"],
                 p["power"],
                 p["duration"],
                 float(price),
+                solar_aware_text,
             )
     for i, p in enumerate(schedule["discharge"]):
         window_type = p.get("window_type", "discharge")
@@ -1642,19 +1746,36 @@ def generate_schedule(
         "passive": "Passive (battery idle)",
     }
     action_state = action_labels.get(price_range, price_range)
+    if (
+        price_range == "load"
+        and not charge_schedule
+        and solar_aware_allocation is not None
+        and solar_aware_allocation.applied
+    ):
+        action_state = "Solar-aware (no grid charge needed)"
+
+    action_attributes = {
+        "price_range": price_range,
+        "import_price": import_price,
+        "export_price": export_price,
+        "charge_power": charge_power if price_range == "load" else None,
+        "discharge_power": discharge_power if price_range != "load" else None,
+        "interval_minutes": interval_minutes,
+    }
+    if solar_aware_allocation is not None and solar_aware_allocation.applied:
+        action_attributes.update({
+            "solar_aware_charging": True,
+            "remaining_solar_energy_kwh": solar_aware_remaining_kwh,
+            "charge_deficit_kwh": round(solar_charge_deficit_kwh, 3),
+            "usable_remaining_solar_kwh": solar_aware_allocation.usable_solar_kwh,
+            "grid_charge_target_kwh": solar_aware_allocation.grid_energy_target_kwh,
+        })
 
     update_entity(
         mqtt_client,
         ENTITY_CURRENT_ACTION,
         action_state,
-        {
-            "price_range": price_range,
-            "import_price": import_price,
-            "export_price": export_price,
-            "charge_power": charge_power if price_range == "load" else None,
-            "discharge_power": discharge_power if price_range != "load" else None,
-            "interval_minutes": interval_minutes,
-        },
+        action_attributes,
         dry_run=is_dry_run,
     )
 

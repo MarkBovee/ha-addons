@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.49"
+version: "0.8.50"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -17,6 +17,7 @@ options:
   entities:
     price_curve_entity: "sensor.energy_prices_electricity_import_price"
     export_price_curve_entity: "sensor.energy_prices_electricity_export_price"
+    remaining_solar_energy_entity: "sensor.energy_production_today_remaining"
     soc_entity: "sensor.battery_api_battery_soc"
     grid_power_entity: "sensor.average_power_usage"
     solar_power_entity: "sensor.battery_api_pv_power"
@@ -60,6 +61,11 @@ options:
   adaptive:
     enabled: true
 
+  solar_aware_charging:
+    enabled: true
+    forecast_safety_factor: 0.8
+    min_charge_power: 500
+
   heuristics:
     adaptive_price_threshold: 0.27
     top_x_charge_hours: 3
@@ -102,6 +108,7 @@ schema:
   entities:
     price_curve_entity: str
     export_price_curve_entity: str
+    remaining_solar_energy_entity: str?
     soc_entity: str
     grid_power_entity: str
     solar_power_entity: str
@@ -144,6 +151,11 @@ schema:
 
   adaptive:
     enabled: bool?
+
+  solar_aware_charging:
+    enabled: bool?
+    forecast_safety_factor: float(0,1)?
+    min_charge_power: int(0,10000)?
 
   heuristics:
     adaptive_price_threshold: float(0,5)?

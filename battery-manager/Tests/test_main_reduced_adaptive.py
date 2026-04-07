@@ -428,6 +428,99 @@ def test_generate_schedule_scales_charge_power_per_slot(monkeypatch):
     assert [period["power"] for period in schedule["charge"]] == [4000, 6000, 8000]
 
 
+def test_generate_schedule_reduces_charge_power_with_remaining_solar(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["adaptive_price_threshold"] = 0.27
+    config["heuristics"]["top_x_charge_hours"] = 3
+    config["power"]["max_charge_power"] = 8000
+    config["power"]["min_scaled_power"] = 4000
+    config["power"]["min_discharge_power"] = 0
+    config["soc"]["max_soc"] = 100
+    config["soc"]["battery_capacity_kwh"] = 12
+    config["solar_aware_charging"]["enabled"] = True
+    config["solar_aware_charging"]["forecast_safety_factor"] = 1.0
+    config["solar_aware_charging"]["min_charge_power"] = 500
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    current_entry = {
+        "start": now.isoformat(),
+        "end": (now + timedelta(hours=1)).isoformat(),
+        "price": 0.21,
+    }
+    grouped_charge_window = {
+        "start": now,
+        "end": now + timedelta(hours=3),
+        "avg_price": 0.20,
+        "slots": [
+            {"start": now, "end": now + timedelta(hours=1), "price": 0.21},
+            {"start": now + timedelta(hours=1), "end": now + timedelta(hours=2), "price": 0.20},
+            {"start": now + timedelta(hours=2), "end": now + timedelta(hours=3), "price": 0.19},
+        ],
+    }
+
+    published = []
+    sensor_values = {
+        config["entities"]["soc_entity"]: 50.0,
+    }
+
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda hours, _interval: int(hours))
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "find_profitable_discharge_starts", lambda *_args, **_kwargs: set())
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "load")
+    monkeypatch.setattr(
+        bm_main,
+        "get_current_price_entry",
+        lambda _curve, _now, _interval: current_entry,
+    )
+    monkeypatch.setattr(
+        bm_main,
+        "find_upcoming_windows",
+        lambda *_args, **_kwargs: {
+            "charge": [grouped_charge_window],
+            "discharge": [],
+            "adaptive": [],
+        },
+    )
+    monkeypatch.setattr(bm_main, "_calculate_dynamic_sell_buffer_soc", lambda *_args, **_kwargs: (None, 0.0, None))
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_tomorrow_story", lambda *_args, **_kwargs: "forecast")
+    monkeypatch.setattr(bm_main, "build_windows_display", lambda *_args, **_kwargs: "windows")
+    monkeypatch.setattr(bm_main, "build_combined_schedule_display", lambda *_args, **_kwargs: "combined")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(
+        bm_main,
+        "_get_entity_state",
+        lambda _ha, entity_id: (
+            {
+                "state": "3000",
+                "attributes": {"unit_of_measurement": "W"},
+            }
+            if entity_id == config["entities"]["remaining_solar_energy_entity"]
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: (
+            setattr(state, "published_schedule", deepcopy(schedule)) if state is not None else None,
+            published.append(schedule),
+            True,
+        )[-1],
+    )
+
+    state = bm_main.RuntimeState(schedule={"charge": [], "discharge": []}, schedule_generated_at=now)
+    schedule = bm_main.generate_schedule(config, ha_api=cast(Any, object()), mqtt_client=None, state=state)
+
+    assert published, "Expected schedule publish"
+    assert [period["power"] for period in schedule["charge"]] == [1000, 1000, 1000]
+    assert all(period["solar_aware"] is True for period in schedule["charge"])
+
+
 def test_active_discharge_pauses_when_soc_unavailable(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["conservative_soc"] = 40

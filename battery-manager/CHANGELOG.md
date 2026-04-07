@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.50 — 2026-04-07
+- **Feature: Solar-aware charge power** — Battery Manager now uses `sensor.energy_production_today_remaining` to reduce today's commanded grid charge power during planned charge windows, while still targeting `soc.max_soc`.
+- **Feature: Rolling hourly recalculation** — the remaining-solar discount is recalculated on every schedule refresh using the latest SOC and remaining charge slots, so charge power can adapt through the day.
+- **Config/docs/tests:** Added `entities.remaining_solar_energy_entity` and `solar_aware_charging.*` options, plus focused regressions for reduced charge-slot power and forecast fallback.
+
 ## 0.8.49 — 2026-03-24
 - **Fix: Ignore stale EV charging state** — Battery Manager now stops trusting EV charger power after `timing.max_ev_sensor_age_seconds` (default 180s), preventing a stuck Charge Amps power value from pausing discharge after charger updates fail.
 - **Tests/docs:** Added a regression for stale EV charger readings and documented the new timing safeguard.
