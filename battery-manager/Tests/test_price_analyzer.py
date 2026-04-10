@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.price_analyzer import (
     PriceRange,
+    calculate_discharge_top_x_count,
     calculate_price_ranges,
     calculate_top_x_count,
     find_profitable_discharge_starts,
@@ -116,6 +117,13 @@ class TestDischargeSelectionHelpers:
         assert calculate_top_x_count(1.5, 60) == 2
         assert calculate_top_x_count(1.5, 30) == 3
         assert calculate_top_x_count(2.5, 15) == 10
+
+    def test_fractional_discharge_hours_do_not_round_up_on_hourly_intervals(self):
+        assert calculate_discharge_top_x_count(0.5, 60) == 1
+        assert calculate_discharge_top_x_count(1.5, 60) == 1
+        assert calculate_discharge_top_x_count(2.5, 60) == 2
+        assert calculate_discharge_top_x_count(2.5, 30) == 5
+        assert calculate_discharge_top_x_count(2.5, 15) == 10
 
     def test_profitable_discharge_starts_select_exact_top_slots(self):
         import_curve = [

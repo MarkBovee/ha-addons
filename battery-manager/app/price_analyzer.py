@@ -84,6 +84,21 @@ def calculate_top_x_count(hours: float, interval_minutes: int) -> int:
     return max(1, int(math.ceil(required_minutes / interval_minutes)))
 
 
+def calculate_discharge_top_x_count(hours: float, interval_minutes: int) -> int:
+    """Convert discharge hours into a conservative interval count.
+
+    Discharge windows should not round up to an extra slot when the interval
+    granularity cannot represent the fractional remainder. That avoids building
+    impossible sell windows such as 3 hourly slots for a 2.5h target.
+    """
+
+    if hours <= 0:
+        return 0
+    interval_minutes = max(interval_minutes, 1)
+    required_minutes = float(hours) * 60.0
+    return max(1, int(math.floor(required_minutes / interval_minutes)))
+
+
 def find_profitable_discharge_starts(
     import_curve: Sequence[dict],
     export_curve: Sequence[dict],

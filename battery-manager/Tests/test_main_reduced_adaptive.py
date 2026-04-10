@@ -282,6 +282,40 @@ def test_idle_current_action_shows_next_scheduled_window(monkeypatch):
     assert mode_updates[-1][0][3]["price_range"] == "adaptive"
 
 
+def test_discharge_feasibility_keeps_one_hour_when_only_ten_kwh_available():
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["battery_capacity_kwh"] = 20
+    config["soc"]["min_soc"] = 5
+    config["power"]["max_discharge_power"] = 8000
+    config["power"]["min_discharge_power"] = 4000
+
+    now = datetime(2026, 4, 10, 17, 0, tzinfo=timezone.utc)
+    discharge_windows = [
+        {
+            "start": datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 4, 10, 20, 0, tzinfo=timezone.utc),
+            "avg_price": 0.412,
+        },
+        {
+            "start": datetime(2026, 4, 10, 20, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 4, 10, 21, 0, tzinfo=timezone.utc),
+            "avg_price": 0.401,
+        },
+    ]
+
+    feasible = bm_main._filter_supported_discharge_windows(
+        discharge_windows,
+        charge_schedule=[],
+        soc=55.0,
+        config=config,
+        not_before=now,
+        top_x_discharge_count=2,
+        min_scaled_power=4000,
+    )
+
+    assert feasible == [discharge_windows[0]]
+
+
 def test_monitor_regenerates_schedule_for_live_adaptive_gap(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["timing"]["schedule_regen_cooldown_seconds"] = 0

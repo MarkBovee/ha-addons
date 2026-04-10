@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.52 — 2026-04-10
+- **Fix: Conservative discharge slot rounding** — Temperature-based fractional discharge targets now round down to the last fully supportable interval for sell-window selection, so `2.5h` on hourly prices selects the best 2 sell slots instead of inflating to an unsupported 3-hour block.
+- **Tests:** Added a regression covering conservative discharge slot counting across hourly and sub-hourly curves.
+
 ## 0.8.51 — 2026-04-10
 - **Fix: Rolling adaptive gap recovery** — Monitor mode now regenerates the rolling schedule when the live price is still in the adaptive band but the published schedule has no active adaptive slot, preventing long idle gaps between hourly refreshes.
 - **Fix: Today-only runtime range calculation** — The monitor loop now uses the same today-only price ranges as schedule generation, so live status/range entities stay aligned with the generated schedule when tomorrow's prices would otherwise skew the bands.

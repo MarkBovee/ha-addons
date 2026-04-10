@@ -22,6 +22,7 @@ from shared.ha_mqtt_discovery import MqttDiscovery
 from .ev_charger_monitor import should_pause_discharge
 from .power_calculator import calculate_rank_scaled_power
 from .price_analyzer import (
+    calculate_discharge_top_x_count,
     PriceRange,
     calculate_price_ranges,
     calculate_top_x_count,
@@ -1309,7 +1310,7 @@ def generate_schedule(
         logger.info("  Effective discharge hours from temperature: %.2f", top_x_discharge_hours)
 
     top_x_charge_count = calculate_top_x_count(top_x_charge_hours, interval_minutes)
-    top_x_discharge_count = calculate_top_x_count(top_x_discharge_hours, interval_minutes)
+    top_x_discharge_count = calculate_discharge_top_x_count(top_x_discharge_hours, interval_minutes)
 
     today_import, tomorrow_import = _split_curve_by_date(import_curve, now)
     today_export, tomorrow_export_curve = _split_curve_by_date(export_curve, now)
@@ -2117,7 +2118,7 @@ def monitor_and_adjust_active_period(
             temperature,
             config["temperature_based_discharge"]["thresholds"],
         )
-    top_x_discharge_count = calculate_top_x_count(top_x_discharge_hours, interval_minutes)
+    top_x_discharge_count = calculate_discharge_top_x_count(top_x_discharge_hours, interval_minutes)
 
     min_profit = config["heuristics"].get("min_profit_threshold", 0.1)
     today_import, _ = _split_curve_by_date(import_curve or [], now)
