@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.51 — 2026-04-10
+- **Fix: Rolling adaptive gap recovery** — Monitor mode now regenerates the rolling schedule when the live price is still in the adaptive band but the published schedule has no active adaptive slot, preventing long idle gaps between hourly refreshes.
+- **Fix: Today-only runtime range calculation** — The monitor loop now uses the same today-only price ranges as schedule generation, so live status/range entities stay aligned with the generated schedule when tomorrow's prices would otherwise skew the bands.
+- **Fix: Supportable sell-window filtering** — Future discharge windows are now filtered against current SOC plus already-planned charge energy before they are published, so unsupported sell periods are dropped instead of appearing in the schedule and failing later.
+- **Tests/docs:** Added regressions for adaptive-gap regeneration, today-only monitor range calculation, and discharge feasibility filtering, and documented the new behavior.
+
 ## 0.8.50 — 2026-04-07
 - **Feature: Solar-aware charge power** — Battery Manager now uses `sensor.energy_production_today_remaining` to reduce today's commanded grid charge power during planned charge windows, while still targeting `soc.max_soc`.
 - **Feature: Rolling hourly recalculation** — the remaining-solar discount is recalculated on every schedule refresh using the latest SOC and remaining charge slots, so charge power can adapt through the day.

@@ -6,6 +6,8 @@ Optimize battery charging and discharging using dynamic electricity prices, sola
 
 Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into four ranges — **load** (cheapest, charge battery), **discharge** (most expensive, sell), **adaptive** (mid-range, discharge to 0W grid), and **passive** (below threshold, battery idle) — adjusts discharge power in real time, and applies SOC protection, conservative-SOC reduction, solar surplus, and EV charging rules.
 
+Live adaptive behavior is kept in sync with the current price band between hourly schedule refreshes: when the current interval is still adaptive but the published schedule no longer has an active adaptive slot, Battery Manager regenerates the rolling schedule instead of staying idle until the next hourly refresh. Future explicit discharge windows are also checked against current SOC plus any already-planned charge energy before they are published, so unsupported sell periods are dropped instead of being left to fail later at runtime.
+
 When `solar_aware_charging` is enabled, Battery Manager also reduces today's commanded grid charge power during planned charge windows based on the remaining solar forecast (`sensor.energy_production_today_remaining`). The calculation is rerun on every schedule refresh using the latest SOC and the latest remaining-solar value, so charge power can change hour by hour while still aiming for `soc.max_soc`.
 
 ## Prerequisites
@@ -102,6 +104,7 @@ All entities use `unique_id` for UI management and carry rich attributes (schedu
 - If no schedule is published, verify the Energy Prices price curve sensor exists.
 - Ensure the MQTT broker is running and credentials match the add-on configuration.
 - Check add-on logs for missing sensor warnings.
+- If an expected sell window is missing, check the logs for `Skipping discharge window`; Battery Manager now drops discharge periods that current SOC plus planned charging cannot realistically support.
 - If morning sell postponement does not trigger, check logs for `Sell-wait skipped:` diagnostics (reason + evaluated thresholds).
 - If discharge pauses unexpectedly, verify SOC sensor freshness against `timing.max_soc_sensor_age_seconds`.
 - If EV charging keeps blocking discharge after Charge Amps updates stop, lower or verify `timing.max_ev_sensor_age_seconds` so stale charger power is ignored faster.

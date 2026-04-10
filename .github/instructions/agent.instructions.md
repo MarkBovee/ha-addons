@@ -48,3 +48,7 @@ When behavior/config/version changes:
 
 OpenSpec proposal required for new capabilities and breaking changes.
 Skip OpenSpec for bug fixes, typos, formatting, and non-breaking maintenance.
+
+## 8) Completion Default
+
+- When a task or change is complete, merge back to `main` and clean up the branch/worktree unless the user explicitly asks to keep it open or there is an active review/PR.

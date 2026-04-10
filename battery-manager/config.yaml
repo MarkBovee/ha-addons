@@ -51,7 +51,7 @@ options:
     min_soc: 5
     conservative_soc: 40
     target_eod_soc: 20
-    max_soc: 97
+    max_soc: 99
     battery_capacity_kwh: 25
     sell_buffer_enabled: true
     sell_buffer_min_soc: 20
@@ -67,7 +67,7 @@ options:
     min_charge_power: 500
 
   heuristics:
-    adaptive_price_threshold: 0.27
+    adaptive_price_threshold: 0.25
     top_x_charge_hours: 3
     top_x_discharge_hours: 2
     min_profit_threshold: 0.1

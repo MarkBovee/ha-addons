@@ -530,8 +530,20 @@ def _get_max_soc_stabilizer_power(config: Dict[str, Any]) -> int:
     return max(0, int(max_power / 2))
 
 
-def _split_curve_by_date(curve: List[Dict[str, Any]]) -> tuple[list[dict], list[dict]]:
-    today = datetime.now().astimezone().date()
+def _split_curve_by_date(
+    curve: List[Dict[str, Any]],
+    reference_time: Optional[datetime] = None,
+) -> tuple[list[dict], list[dict]]:
+    if reference_time is None:
+        local_reference = datetime.now(timezone.utc).astimezone()
+    else:
+        local_reference = (
+            reference_time.astimezone()
+            if reference_time.tzinfo
+            else reference_time.replace(tzinfo=timezone.utc).astimezone()
+        )
+
+    today = local_reference.date()
     tomorrow = today + timedelta(days=1)
     today_curve: List[Dict[str, Any]] = []
     tomorrow_curve: List[Dict[str, Any]] = []
@@ -578,6 +590,36 @@ def _determine_price_range(
     if not adaptive_enabled:
         return "passive"
     return "adaptive"
+
+
+def _should_regenerate_live_schedule(
+    runtime_price_range: str,
+    active_charge: bool,
+    active_discharge: bool,
+    import_curve: Optional[List[Dict[str, Any]]],
+    soc: Optional[float],
+    config: Dict[str, Any],
+) -> Optional[str]:
+    """Return the live price band that should trigger a schedule refresh."""
+
+    if not import_curve:
+        return None
+
+    max_soc = float(config["soc"].get("max_soc", 100))
+    if runtime_price_range == "load":
+        if not active_charge and not (soc is not None and soc >= max_soc):
+            return "load"
+        return None
+
+    if runtime_price_range != "adaptive" or active_charge or active_discharge or soc is None:
+        return None
+
+    min_soc = float(config["soc"].get("min_soc", 5))
+    conservative_soc = float(config["soc"].get("conservative_soc", min_soc))
+    if can_discharge(soc, min_soc, conservative_soc, True):
+        return "adaptive"
+
+    return None
 
 
 def _update_effective_discharge_power(
@@ -846,16 +888,32 @@ def _calculate_adaptive_power(
 
 
 def _is_period_active(period: Dict[str, Any], now: datetime) -> bool:
+    bounds = _parse_schedule_period_bounds(period)
+    if bounds is None:
+        return False
+
+    start_dt, end_dt = bounds
+    return start_dt <= now < end_dt
+
+
+def _parse_schedule_period_bounds(period: Dict[str, Any]) -> Optional[tuple[datetime, datetime]]:
     start_str = period.get("start")
     duration = period.get("duration", 0)
     if not start_str or not duration:
-        return False
+        return None
     try:
         start_dt = isoparse(start_str)
         end_dt = start_dt + timedelta(minutes=int(duration))
-        return start_dt <= now < end_dt
     except Exception:
-        return False
+        return None
+
+    return start_dt, end_dt
+
+
+def _period_energy_kwh(power_watts: float, duration_minutes: int) -> float:
+    if power_watts <= 0 or duration_minutes <= 0:
+        return 0.0
+    return (float(power_watts) / 1000.0) * (duration_minutes / 60.0)
 
 
 def _sum_discharge_hours_before_main_charge(
@@ -882,6 +940,78 @@ def _sum_discharge_hours_before_main_charge(
         total_hours += (effective_end - effective_start).total_seconds() / 3600.0
 
     return total_hours
+
+
+def _filter_supported_discharge_windows(
+    discharge_windows: List[Dict[str, Any]],
+    charge_schedule: List[Dict[str, Any]],
+    soc: Optional[float],
+    config: Dict[str, Any],
+    not_before: datetime,
+    top_x_discharge_count: int,
+    min_scaled_power: int,
+) -> List[Dict[str, Any]]:
+    """Keep only future discharge windows that current/planned energy can support."""
+
+    if soc is None or not discharge_windows:
+        return discharge_windows
+
+    battery_capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
+    min_soc = float(config["soc"].get("min_soc", 5))
+    if battery_capacity_kwh <= 0:
+        return discharge_windows
+
+    available_energy_kwh = max(0.0, (float(soc) - min_soc) / 100.0 * battery_capacity_kwh)
+    charge_periods: List[tuple[datetime, datetime, int]] = []
+    for period in charge_schedule:
+        bounds = _parse_schedule_period_bounds(period)
+        if bounds is None:
+            continue
+        charge_periods.append((bounds[0], bounds[1], int(period.get("power", 0))))
+
+    charge_periods.sort(key=lambda item: item[0])
+    charge_index = 0
+    feasible_windows: List[Dict[str, Any]] = []
+    max_rank = max(top_x_discharge_count, 1)
+
+    for rank, window in enumerate(discharge_windows, start=1):
+        start_dt = window.get("start")
+        end_dt = window.get("end")
+        if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime):
+            continue
+
+        effective_start = max(start_dt, not_before)
+        duration_minutes = int((end_dt - effective_start).total_seconds() / 60)
+        if duration_minutes <= 0:
+            continue
+
+        while charge_index < len(charge_periods) and charge_periods[charge_index][1] <= effective_start:
+            charge_start, charge_end, charge_power = charge_periods[charge_index]
+            charge_duration = int((charge_end - charge_start).total_seconds() / 60)
+            available_energy_kwh += _period_energy_kwh(charge_power, charge_duration)
+            charge_index += 1
+
+        planned_power = calculate_rank_scaled_power(
+            rank,
+            max_rank,
+            config["power"]["max_discharge_power"],
+            min_scaled_power,
+        )
+        required_energy_kwh = _period_energy_kwh(planned_power, duration_minutes)
+        if required_energy_kwh <= available_energy_kwh + 1e-6:
+            available_energy_kwh = max(0.0, available_energy_kwh - required_energy_kwh)
+            feasible_windows.append(window)
+            continue
+
+        logger.info(
+            "⛔ Skipping discharge window %s @€%.3f: needs %.2fkWh, only %.2fkWh available before start",
+            effective_start.astimezone().strftime("%H:%M"),
+            float(window.get("avg_price", 0.0)),
+            required_energy_kwh,
+            available_energy_kwh,
+        )
+
+    return feasible_windows
 
 
 def _calculate_dynamic_sell_buffer_soc(
@@ -1181,8 +1311,8 @@ def generate_schedule(
     top_x_charge_count = calculate_top_x_count(top_x_charge_hours, interval_minutes)
     top_x_discharge_count = calculate_top_x_count(top_x_discharge_hours, interval_minutes)
 
-    today_import, tomorrow_import = _split_curve_by_date(import_curve)
-    today_export, tomorrow_export_curve = _split_curve_by_date(export_curve)
+    today_import, tomorrow_import = _split_curve_by_date(import_curve, now)
+    today_export, tomorrow_export_curve = _split_curve_by_date(export_curve, now)
 
     # Today's operating ranges must only use today's prices.
     range_import_curve = today_import if today_import else import_curve
@@ -1347,21 +1477,6 @@ def generate_schedule(
             sell_wait_diagnostics.get("reason", "unknown"),
             f" | details={sell_wait_diagnostics}" if sell_wait_diagnostics else "",
         )
-
-    # Rank discharge windows once per schedule generation so window power stays
-    # stable during the day when the underlying price curve is unchanged.
-    ranked_discharge_windows = sorted(
-        upcoming_windows.get("discharge", []),
-        key=lambda w: (
-            -float(w.get("avg_price", 0.0)),
-            w.get("start").isoformat() if isinstance(w.get("start"), datetime) else "",
-        ),
-    )
-    discharge_window_rank_by_start: Dict[str, int] = {}
-    for idx, window in enumerate(ranked_discharge_windows, start=1):
-        start_dt = window.get("start")
-        if isinstance(start_dt, datetime):
-            discharge_window_rank_by_start[start_dt.isoformat()] = idx
 
     buffer_required_soc, buffer_discharge_hours, main_charge_start = _calculate_dynamic_sell_buffer_soc(
         upcoming_windows,
@@ -1565,6 +1680,12 @@ def generate_schedule(
             "forecast_solar_kwh": forecast_solar_kwh,
         })
 
+    discharge_not_before = interval_start
+    if precharge_until is not None:
+        discharge_not_before = max(discharge_not_before, precharge_until)
+    if sell_wait_decision:
+        discharge_not_before = max(discharge_not_before, sell_wait_decision["wait_until"])
+
     # Combine discharge + adaptive windows into discharge periods.
     # Important: profitable discharge windows are prioritized first so adaptive
     # fillers never crowd out core sell windows when the API period cap applies.
@@ -1576,6 +1697,21 @@ def generate_schedule(
             w.get("start"),
         ),
     )
+    discharge_windows_sorted = _filter_supported_discharge_windows(
+        discharge_windows_sorted,
+        charge_schedule,
+        soc,
+        config,
+        discharge_not_before,
+        top_x_discharge_count,
+        min_scaled_power,
+    )
+    discharge_window_rank_by_start: Dict[str, int] = {}
+    for idx, window in enumerate(discharge_windows_sorted, start=1):
+        start_dt = window.get("start")
+        if isinstance(start_dt, datetime):
+            discharge_window_rank_by_start[start_dt.isoformat()] = idx
+
     adaptive_windows_sorted = sorted(
         upcoming_windows.get("adaptive", []),
         key=lambda w: w.get("start"),
@@ -1591,12 +1727,6 @@ def generate_schedule(
 
     # Publish in chronological order regardless of selection priority.
     selected_discharge_windows.sort(key=lambda x: x[1]["start"])
-
-    discharge_not_before = interval_start
-    if precharge_until is not None:
-        discharge_not_before = max(discharge_not_before, precharge_until)
-    if sell_wait_decision:
-        discharge_not_before = max(discharge_not_before, sell_wait_decision["wait_until"])
 
     for window_type, window in selected_discharge_windows:
         start_dt = window["start"]
@@ -1990,9 +2120,14 @@ def monitor_and_adjust_active_period(
     top_x_discharge_count = calculate_top_x_count(top_x_discharge_hours, interval_minutes)
 
     min_profit = config["heuristics"].get("min_profit_threshold", 0.1)
+    today_import, _ = _split_curve_by_date(import_curve or [], now)
+    today_export, _ = _split_curve_by_date(export_curve or [], now)
+    range_import_curve = today_import if today_import else (import_curve or [])
+    range_export_curve = today_export if today_export else (export_curve or import_curve or [])
+
     load_range, discharge_range, adaptive_range = calculate_price_ranges(
-        import_curve or [],
-        export_curve or [],
+        range_import_curve,
+        range_export_curve,
         top_x_charge_count,
         top_x_discharge_count,
         min_profit,
@@ -2054,12 +2189,23 @@ def monitor_and_adjust_active_period(
                   dry_run=is_dry_run)
 
     regen_cooldown = config["timing"].get("schedule_regen_cooldown_seconds", 60)
-    if runtime_price_range == "load" and not active_charge and import_curve and not (soc is not None and soc >= max_soc):
+    regen_price_range = _should_regenerate_live_schedule(
+        runtime_price_range,
+        active_charge,
+        active_discharge,
+        import_curve,
+        soc,
+        config,
+    )
+    if regen_price_range is not None:
         if (
             not state.last_schedule_publish
             or (now - state.last_schedule_publish).total_seconds() >= regen_cooldown
         ):
-            logger.info("🔄 Price moved into load range - regenerating rolling schedule")
+            logger.info(
+                "🔄 Live %s price band has no active window - regenerating rolling schedule",
+                regen_price_range,
+            )
             state.schedule = generate_schedule(config, ha_api, mqtt_client, state)
             state.schedule_generated_at = now
             state.last_schedule_publish = now
