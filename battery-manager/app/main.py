@@ -503,7 +503,7 @@ def _publish_schedule(
         logger.info("📝 [Dry-Run] Schedule generated (not published)")
         logger.info("   Content: %s", payload_json)
         if state:
-            state.published_schedule = deepcopy(schedule)
+            state.published_schedule = deepcopy(api_schedule)
             state.last_published_payload = payload_json
         return True
 
@@ -548,7 +548,7 @@ def _publish_schedule(
                         discharge_count,
                     )
                 if state:
-                    state.published_schedule = deepcopy(schedule)
+                    state.published_schedule = deepcopy(api_schedule)
                     state.last_published_payload = payload_json
                 return True
             logger.warning("⚠️ MQTT publish failed (attempt %d/%d)", attempt, max_attempts)
@@ -956,7 +956,15 @@ def _parse_schedule_period_bounds(period: Dict[str, Any]) -> Optional[tuple[date
     if not start_str or not duration:
         return None
     try:
-        start_dt = isoparse(start_str)
+        if isinstance(start_str, str) and len(start_str) == 5 and start_str[2] == ":":
+            hour = int(start_str[:2])
+            minute = int(start_str[3:])
+            local_now = datetime.now().astimezone()
+            start_dt = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        else:
+            start_dt = isoparse(start_str)
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
         end_dt = start_dt + timedelta(minutes=int(duration))
     except Exception:
         return None
@@ -1193,13 +1201,11 @@ def _build_display_windows_from_schedule(schedule: Dict[str, Any]) -> Dict[str, 
     }
 
     for period in schedule.get("charge", []):
-        start = period.get("start")
-        duration = period.get("duration")
-        if not start or duration is None:
+        bounds = _parse_schedule_period_bounds(period)
+        if bounds is None:
             continue
+        start_dt, end_dt = bounds
         try:
-            start_dt = isoparse(str(start))
-            end_dt = start_dt + timedelta(minutes=int(duration))
             avg_price = float(period.get("price", 0.0))
         except Exception:
             continue
@@ -1211,13 +1217,11 @@ def _build_display_windows_from_schedule(schedule: Dict[str, Any]) -> Dict[str, 
         })
 
     for period in schedule.get("discharge", []):
-        start = period.get("start")
-        duration = period.get("duration")
-        if not start or duration is None:
+        bounds = _parse_schedule_period_bounds(period)
+        if bounds is None:
             continue
+        start_dt, end_dt = bounds
         try:
-            start_dt = isoparse(str(start))
-            end_dt = start_dt + timedelta(minutes=int(duration))
             avg_price = float(period.get("price", 0.0))
         except Exception:
             continue
@@ -2028,8 +2032,11 @@ def generate_schedule(
         spread = max(p.get("price", 0) for p in export_curve) - min(p.get("price", 999) for p in import_curve)
         discharge_no_range_msg = f"📉 No profitable discharge today (spread €{spread:.3f} < €{min_profit:.2f} minimum)"
 
-    # Update ENTITY_CHARGE_SCHEDULE with HA state length protection
-    display_windows = _build_display_windows_from_schedule(schedule)
+    # Update schedule entities from the payload actually published to battery-api.
+    # When publish succeeds, state.published_schedule contains the sanitized payload;
+    # otherwise we fall back to the generated draft schedule.
+    display_schedule = state.published_schedule if state and state.published_schedule is not None else schedule
+    display_windows = _build_display_windows_from_schedule(display_schedule)
 
     charge_text = build_windows_display(display_windows["charge"], "charge", charge_power, now)
     charge_state = charge_text
@@ -2066,9 +2073,9 @@ def generate_schedule(
         dry_run=is_dry_run,
     )
 
-    # Update ENTITY_SCHEDULE with HA state length protection (split to _2)
-    # Use the generated schedule payload (not full-day candidate windows)
-    # so the table always matches what was actually published.
+    # Update schedule entities with HA state length protection (split to _2).
+    # Use the published schedule payload when available so the table matches
+    # what was actually sent to battery-api.
     combined_text = build_combined_schedule_display(
         display_windows,
         charge_power,

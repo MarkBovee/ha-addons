@@ -93,7 +93,7 @@ The add-on publishes status entities via MQTT Discovery under the **Battery Mana
 | `sensor.bm_current_action` | Real-time action description during monitoring |
 | `sensor.bm_charge_schedule` | Next charge period display (e.g. "⚡ 02:00–04:00") |
 | `sensor.bm_discharge_schedule` | Next discharge period display (e.g. "💰 08:00–10:00") |
-| `sensor.bm_schedule` | Full schedule as markdown table (charge + discharge periods) |
+| `sensor.bm_schedule` | Full schedule as markdown table for the payload actually published to battery-api (charge + discharge periods) |
 | `sensor.bm_mode` | Active operating mode (Normal, Passive Solar) |
 | `sensor.battery_manager_effective_discharge_power` | Current effective discharge power with attributes including `active_window_type` and effective runtime mode |
 

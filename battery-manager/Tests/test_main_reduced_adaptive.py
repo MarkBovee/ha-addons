@@ -22,6 +22,18 @@ class _GapSchedulerStub:
         return {"charge": [], "discharge": []}
 
 
+class _FakeMqttClient:
+    def __init__(self):
+        self.published = []
+
+    def is_connected(self):
+        return True
+
+    def publish_raw(self, topic, payload, retain=False):
+        self.published.append({"topic": topic, "payload": deepcopy(payload), "retain": retain})
+        return True
+
+
 def test_reduced_mode_uses_adaptive_power(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["conservative_soc"] = 30
@@ -655,6 +667,98 @@ def test_generate_schedule_inserts_current_adaptive_window_when_missing(monkeypa
     ]
     assert active_adaptive, "Expected current adaptive interval to be published when price band is adaptive"
     assert active_adaptive[0]["start"] == now.isoformat()
+
+
+def test_generate_schedule_uses_published_schedule_for_entity_display(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["temperature_based_discharge"]["enabled"] = False
+    config["solar_aware_charging"]["enabled"] = False
+    config["ev_charger"]["enabled"] = False
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    current_entry = {
+        "start": now.isoformat(),
+        "end": (now + timedelta(hours=1)).isoformat(),
+        "price": 0.24,
+    }
+    charge_window = {
+        "start": now + timedelta(hours=1),
+        "end": now + timedelta(hours=2),
+        "avg_price": 0.18,
+    }
+    discharge_today = {
+        "start": now + timedelta(hours=3),
+        "end": now + timedelta(hours=4),
+        "avg_price": 0.42,
+    }
+    discharge_tomorrow = {
+        "start": now + timedelta(days=1, hours=3),
+        "end": now + timedelta(days=1, hours=4),
+        "avg_price": 0.35,
+    }
+
+    entity_updates = []
+    fake_mqtt = _FakeMqttClient()
+
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "find_profitable_discharge_starts", lambda *_args, **_kwargs: set())
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "passive")
+    monkeypatch.setattr(
+        bm_main,
+        "get_current_price_entry",
+        lambda _curve, _now, _interval: current_entry,
+    )
+    monkeypatch.setattr(
+        bm_main,
+        "find_upcoming_windows",
+        lambda *_args, **_kwargs: {
+            "charge": [charge_window],
+            "discharge": [discharge_today, discharge_tomorrow],
+            "adaptive": [],
+        },
+    )
+    monkeypatch.setattr(bm_main, "_calculate_dynamic_sell_buffer_soc", lambda *_args, **_kwargs: (None, 0.0, None))
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_tomorrow_story", lambda *_args, **_kwargs: "forecast")
+    monkeypatch.setattr(bm_main, "build_windows_display", lambda *_args, **_kwargs: "windows")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: entity_updates.append((_args, _kwargs)))
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float",
+        lambda _ha, entity_id: {
+            config["entities"]["grid_power_entity"]: 0.0,
+            config["entities"]["solar_power_entity"]: 0.0,
+            config["entities"]["house_load_entity"]: 250.0,
+            config["entities"]["battery_power_entity"]: 0.0,
+            config["entities"]["temperature_entity"]: 15.0,
+        }.get(entity_id),
+    )
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (
+            (87.0, 0.0) if entity_id == config["entities"]["soc_entity"] else (None, None)
+        ),
+    )
+
+    state = bm_main.RuntimeState(schedule={"charge": [], "discharge": []}, schedule_generated_at=now)
+    schedule = bm_main.generate_schedule(config, ha_api=cast(Any, object()), mqtt_client=fake_mqtt, state=state)
+
+    assert len(schedule["discharge"]) == 2
+    assert fake_mqtt.published, "Expected schedule publish"
+    assert state.published_schedule is not None
+    assert len(state.published_schedule["discharge"]) == 1
+
+    schedule_updates = [call for call in entity_updates if call[0][1] == bm_main.ENTITY_SCHEDULE]
+    assert schedule_updates, "Expected combined schedule entity update"
+    schedule_markdown = schedule_updates[-1][0][3]["markdown"]
+    assert "**Tomorrow**" not in schedule_markdown
+    assert schedule_markdown.count("💰 Discharge") == 1
+    assert schedule_markdown.count("⚡ Charge") == 1
 
 
 def test_generate_schedule_skips_unsupported_future_discharge_without_charge(monkeypatch):

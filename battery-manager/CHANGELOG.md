@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.57 — 2026-04-12
+- **Fix: Published schedule display** — `sensor.battery_manager_schedule` now mirrors the schedule payload actually published to battery-api, so the combined markdown no longer shows draft discharge windows that were filtered out before publish.
+
 ## 0.8.56 — 2026-04-12
 - **Fix: Sell-wait runtime default** — Battery Manager now defaults `heuristics.sell_wait_for_better_morning_enabled` to `true` in the code fallback as well as the add-on schema, so installs without an explicit options file still defer discharge when a better morning sell window exists.
 

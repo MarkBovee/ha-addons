@@ -165,8 +165,14 @@ def _parse_period_bounds(period: Dict[str, Any]) -> Optional[tuple[datetime, dat
     if not start_str:
         return None
     try:
-        start_dt = isoparse(start_str)
-        start_dt = _to_aware(start_dt)
+        if isinstance(start_str, str) and len(start_str) == 5 and start_str[2] == ":":
+            hour = int(start_str[:2])
+            minute = int(start_str[3:])
+            local_now = datetime.now().astimezone()
+            start_dt = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        else:
+            start_dt = isoparse(start_str)
+            start_dt = _to_aware(start_dt)
         end_dt = start_dt + timedelta(minutes=int(duration))
     except Exception:
         return None
