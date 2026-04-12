@@ -174,6 +174,8 @@ class RuntimeState:
     warned_stale_ev: bool = False
     warned_missing_soc: bool = False
     warned_stale_soc: bool = False
+    warned_schedule_missing_soc: bool = False
+    warned_schedule_stale_soc: bool = False
     warned_missing_grid: bool = False
     warned_missing_solar: bool = False
     last_schedule_publish: Optional[datetime] = None
@@ -272,6 +274,47 @@ def _get_sensor_float_and_age_seconds(
 
     age_seconds = (now - ref_dt).total_seconds()
     return number, max(0.0, age_seconds)
+
+
+def _get_schedule_generation_soc(
+    ha_api: HomeAssistantApi,
+    config: Dict[str, Any],
+    now: datetime,
+    state: Optional[RuntimeState],
+) -> Optional[float]:
+    """Return SOC for schedule generation, ignoring stale readings."""
+
+    soc_entity = config["entities"]["soc_entity"]
+    soc, soc_age_seconds = _get_sensor_float_and_age_seconds(ha_api, soc_entity, now)
+    max_soc_sensor_age = max(0, int(config.get("timing", {}).get("max_soc_sensor_age_seconds", 900)))
+
+    if soc_age_seconds is not None and max_soc_sensor_age > 0 and soc_age_seconds > max_soc_sensor_age:
+        if state is None or not state.warned_schedule_stale_soc:
+            logger.warning(
+                "⚠️ SOC sensor stale during schedule generation (age %.0fs > %ss); skipping discharge feasibility pruning",
+                soc_age_seconds,
+                max_soc_sensor_age,
+            )
+        if state is not None:
+            state.warned_schedule_stale_soc = True
+            state.warned_schedule_missing_soc = False
+        return None
+
+    if soc is None:
+        if state is None or not state.warned_schedule_missing_soc:
+            logger.warning(
+                "⚠️ SOC sensor unavailable during schedule generation; skipping discharge feasibility pruning"
+            )
+        if state is not None:
+            state.warned_schedule_missing_soc = True
+            state.warned_schedule_stale_soc = False
+        return None
+
+    if state is not None:
+        state.warned_schedule_missing_soc = False
+        state.warned_schedule_stale_soc = False
+
+    return soc
 
 
 def _get_first_available_entity(ha_api: HomeAssistantApi, entity_ids: List[str]) -> Optional[Dict[str, Any]]:
@@ -962,7 +1005,8 @@ def _filter_supported_discharge_windows(
     if battery_capacity_kwh <= 0:
         return discharge_windows
 
-    available_energy_kwh = max(0.0, (float(soc) - min_soc) / 100.0 * battery_capacity_kwh)
+    base_available_energy_kwh = max(0.0, (float(soc) - min_soc) / 100.0 * battery_capacity_kwh)
+    available_energy_kwh = base_available_energy_kwh
     charge_periods: List[tuple[datetime, datetime, int]] = []
     for period in charge_schedule:
         bounds = _parse_schedule_period_bounds(period)
@@ -974,6 +1018,8 @@ def _filter_supported_discharge_windows(
     charge_index = 0
     feasible_windows: List[Dict[str, Any]] = []
     max_rank = max(top_x_discharge_count, 1)
+    charged_before_start_kwh = 0.0
+    reserved_before_start_kwh = 0.0
 
     for rank, window in enumerate(discharge_windows, start=1):
         start_dt = window.get("start")
@@ -989,7 +1035,9 @@ def _filter_supported_discharge_windows(
         while charge_index < len(charge_periods) and charge_periods[charge_index][1] <= effective_start:
             charge_start, charge_end, charge_power = charge_periods[charge_index]
             charge_duration = int((charge_end - charge_start).total_seconds() / 60)
-            available_energy_kwh += _period_energy_kwh(charge_power, charge_duration)
+            charge_energy_kwh = _period_energy_kwh(charge_power, charge_duration)
+            available_energy_kwh += charge_energy_kwh
+            charged_before_start_kwh += charge_energy_kwh
             charge_index += 1
 
         planned_power = calculate_rank_scaled_power(
@@ -1001,15 +1049,21 @@ def _filter_supported_discharge_windows(
         required_energy_kwh = _period_energy_kwh(planned_power, duration_minutes)
         if required_energy_kwh <= available_energy_kwh + 1e-6:
             available_energy_kwh = max(0.0, available_energy_kwh - required_energy_kwh)
+            reserved_before_start_kwh += required_energy_kwh
             feasible_windows.append(window)
             continue
 
         logger.info(
-            "⛔ Skipping discharge window %s @€%.3f: needs %.2fkWh, only %.2fkWh available before start",
+            "⛔ Skipping discharge window %s @€%.3f: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% min, scheduled charge +%.2fkWh, earlier discharge -%.2fkWh)",
             effective_start.astimezone().strftime("%H:%M"),
             float(window.get("avg_price", 0.0)),
             required_energy_kwh,
             available_energy_kwh,
+            float(soc),
+            base_available_energy_kwh,
+            min_soc,
+            charged_before_start_kwh,
+            reserved_before_start_kwh,
         )
 
     return feasible_windows
@@ -1437,7 +1491,7 @@ def generate_schedule(
             min_scaled_power,
         )
 
-    soc = _get_sensor_float(ha_api, config["entities"]["soc_entity"])
+    soc = _get_schedule_generation_soc(ha_api, config, now, state)
     max_soc = config["soc"].get("max_soc", 100)
     skip_charge = soc is not None and not can_charge(soc, max_soc)
     if skip_charge and price_range == "load":

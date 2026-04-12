@@ -6,7 +6,7 @@ Optimize battery charging and discharging using dynamic electricity prices, sola
 
 Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into four ranges — **load** (cheapest, charge battery), **discharge** (most expensive, sell), **adaptive** (mid-range, discharge to 0W grid), and **passive** (below threshold, battery idle) — adjusts discharge power in real time, and applies SOC protection, conservative-SOC reduction, solar surplus, and EV charging rules.
 
-Live adaptive behavior is kept in sync with the current price band between hourly schedule refreshes: when the current interval is still adaptive but the published schedule no longer has an active adaptive slot, Battery Manager regenerates the rolling schedule instead of staying idle until the next hourly refresh. Future explicit discharge windows are also checked against current SOC plus any already-planned charge energy before they are published, so unsupported sell periods are dropped instead of being left to fail later at runtime.
+Live adaptive behavior is kept in sync with the current price band between hourly schedule refreshes: when the current interval is still adaptive but the published schedule no longer has an active adaptive slot, Battery Manager regenerates the rolling schedule instead of staying idle until the next hourly refresh. Future explicit discharge windows are also checked against fresh current SOC plus any already-planned charge energy before they are published, so unsupported sell periods are dropped instead of being left to fail later at runtime. If the SOC reading is stale or unavailable, Battery Manager skips that pruning step instead of discarding future sell windows from bad telemetry.
 
 When `solar_aware_charging` is enabled, Battery Manager also reduces today's commanded grid charge power during planned charge windows based on the remaining solar forecast (`sensor.energy_production_today_remaining`). The calculation is rerun on every schedule refresh using the latest SOC and the latest remaining-solar value, so charge power can change hour by hour while still aiming for `soc.max_soc`.
 
@@ -33,7 +33,7 @@ Key options (defaults in config.yaml):
 - **timing.monitor_interval**: real-time monitoring interval (seconds)
 - **timing.adaptive_power_grace_seconds**: minimum seconds between adaptive power changes
 - **timing.schedule_regen_cooldown_seconds**: cooldown for rolling schedule regeneration
-- **timing.max_soc_sensor_age_seconds**: maximum accepted SOC sensor age before protective discharge pause (0 disables staleness check)
+- **timing.max_soc_sensor_age_seconds**: maximum accepted SOC sensor age before protective discharge pause and future discharge-feasibility pruning are bypassed (0 disables staleness check)
 - **timing.max_ev_sensor_age_seconds**: maximum accepted EV charger sensor age before Battery Manager ignores EV charging hold state (0 disables staleness check)
 - **dry_run**: log schedules without publishing to MQTT
 - **entities.price_curve_entity**: price curve sensor entity

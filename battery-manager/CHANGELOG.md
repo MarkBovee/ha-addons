@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.53 — 2026-04-12
+- **Fix: Stale SOC schedule pruning** — Rolling schedule generation now applies the SOC freshness guard before filtering future discharge windows, so stale Home Assistant SOC values cannot incorrectly remove profitable sell periods.
+- **Fix: Discharge energy-budget diagnostics** — `Skipping discharge window` logs now include the full budget breakdown: usable SOC energy, scheduled charge added before the window, and energy already reserved by earlier sell windows.
+
 ## 0.8.52 — 2026-04-10
 - **Fix: Conservative discharge slot rounding** — Temperature-based fractional discharge targets now round down to the last fully supportable interval for sell-window selection, so `2.5h` on hourly prices selects the best 2 sell slots instead of inflating to an unsupported 3-hour block.
 - **Tests:** Added a regression covering conservative discharge slot counting across hourly and sub-hourly curves.
