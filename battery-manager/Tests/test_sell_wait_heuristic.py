@@ -6,7 +6,16 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.main import _get_sell_wait_decision
+from app import main as bm_main
+
+
+def test_sell_wait_default_config_enabled_when_options_are_missing(monkeypatch):
+    monkeypatch.setattr(bm_main.os.path, "exists", lambda _path: False)
+
+    config = bm_main._load_config()
+
+    assert config["heuristics"]["sell_wait_for_better_morning_enabled"] is True
+
 
 
 def _window(start: datetime, end: datetime, avg_price: float) -> dict:
@@ -27,7 +36,7 @@ def test_sell_wait_decision_when_future_morning_price_is_better():
         "sell_wait_morning_end_hour": 10,
     }
 
-    decision = _get_sell_wait_decision(windows, now, heuristics)
+    decision = bm_main._get_sell_wait_decision(windows, now, heuristics)
 
     assert decision is not None
     assert decision["wait_until"] == now + timedelta(hours=12)
@@ -48,7 +57,7 @@ def test_sell_wait_no_decision_when_gain_too_small():
         "sell_wait_morning_end_hour": 10,
     }
 
-    decision = _get_sell_wait_decision(windows, now, heuristics)
+    decision = bm_main._get_sell_wait_decision(windows, now, heuristics)
 
     assert decision is None
 
@@ -67,7 +76,7 @@ def test_sell_wait_no_decision_when_target_outside_horizon():
         "sell_wait_morning_end_hour": 10,
     }
 
-    decision = _get_sell_wait_decision(windows, now, heuristics)
+    decision = bm_main._get_sell_wait_decision(windows, now, heuristics)
 
     assert decision is None
 
@@ -82,7 +91,7 @@ def test_sell_wait_no_decision_when_disabled():
         "sell_wait_for_better_morning_enabled": False,
     }
 
-    decision = _get_sell_wait_decision(windows, now, heuristics)
+    decision = bm_main._get_sell_wait_decision(windows, now, heuristics)
 
     assert decision is None
 
@@ -101,7 +110,7 @@ def test_sell_wait_exact_threshold_triggers_defer():
         "sell_wait_morning_end_hour": 10,
     }
 
-    decision = _get_sell_wait_decision(windows, now, heuristics)
+    decision = bm_main._get_sell_wait_decision(windows, now, heuristics)
 
     assert decision is not None
     assert decision["wait_until"] == now + timedelta(hours=12)
@@ -122,7 +131,7 @@ def test_sell_wait_diagnostics_reports_missing_target_window():
     }
     diagnostics = {}
 
-    decision = _get_sell_wait_decision(windows, now, heuristics, diagnostics=diagnostics)
+    decision = bm_main._get_sell_wait_decision(windows, now, heuristics, diagnostics=diagnostics)
 
     assert decision is None
     assert diagnostics["reason"] == "no_target_window_candidate"
@@ -144,7 +153,7 @@ def test_sell_wait_diagnostics_reports_gain_below_threshold():
     }
     diagnostics = {}
 
-    decision = _get_sell_wait_decision(windows, now, heuristics, diagnostics=diagnostics)
+    decision = bm_main._get_sell_wait_decision(windows, now, heuristics, diagnostics=diagnostics)
 
     assert decision is None
     assert diagnostics["reason"] == "gain_below_threshold"

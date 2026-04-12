@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.56 — 2026-04-12
+- **Fix: Sell-wait runtime default** — Battery Manager now defaults `heuristics.sell_wait_for_better_morning_enabled` to `true` in the code fallback as well as the add-on schema, so installs without an explicit options file still defer discharge when a better morning sell window exists.
+
 ## 0.8.55 — 2026-04-12
 - **Fix: Fractional sell windows** — Rolling schedule generation can now trim the last discharge window to a partial duration when enough energy remains for at least 30 minutes, so peak-hour selling does not have to be rounded to whole hours.
 - **Fix: Sell-window reserve floor** — Rolling schedule generation now reserves future sell windows above the highest configured floor from `soc.min_soc`, `soc.conservative_soc`, and `soc.target_eod_soc`, so 100% SOC does not treat the full battery as freely sellable.

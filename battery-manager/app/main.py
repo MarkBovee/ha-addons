@@ -133,7 +133,7 @@ DEFAULT_CONFIG = {
         "top_x_discharge_hours": 2,
         "min_profit_threshold": 0.1,
         "overnight_wait_threshold": 0.02,
-        "sell_wait_for_better_morning_enabled": False,
+        "sell_wait_for_better_morning_enabled": True,
         "sell_wait_horizon_hours": 20,
         "sell_wait_min_gain_threshold": 0.02,
         "sell_wait_morning_start_hour": 0,

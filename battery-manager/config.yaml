@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.55"
+version: "0.8.56"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -49,7 +49,7 @@ options:
 
   soc:
     min_soc: 5
-    conservative_soc: 40
+    conservative_soc: 25
     target_eod_soc: 20
     max_soc: 99
     battery_capacity_kwh: 25
