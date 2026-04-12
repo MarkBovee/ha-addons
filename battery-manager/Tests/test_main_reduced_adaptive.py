@@ -669,7 +669,7 @@ def test_generate_schedule_inserts_current_adaptive_window_when_missing(monkeypa
     assert active_adaptive[0]["start"] == now.isoformat()
 
 
-def test_generate_schedule_uses_published_schedule_for_entity_display(monkeypatch):
+def test_generate_schedule_uses_planned_schedule_for_entity_display(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["temperature_based_discharge"]["enabled"] = False
     config["solar_aware_charging"]["enabled"] = False
@@ -751,14 +751,20 @@ def test_generate_schedule_uses_published_schedule_for_entity_display(monkeypatc
     assert len(schedule["discharge"]) == 2
     assert fake_mqtt.published, "Expected schedule publish"
     assert state.published_schedule is not None
-    assert len(state.published_schedule["discharge"]) == 1
+    assert len(state.published_schedule["discharge"]) == 2
+
+    published_payload = fake_mqtt.published[-1]["payload"]
+    assert len(published_payload["charge"]) == 1
+    assert len(published_payload["discharge"]) == 1
 
     schedule_updates = [call for call in entity_updates if call[0][1] == bm_main.ENTITY_SCHEDULE]
     assert schedule_updates, "Expected combined schedule entity update"
     schedule_markdown = schedule_updates[-1][0][3]["markdown"]
-    assert "**Tomorrow**" not in schedule_markdown
-    assert schedule_markdown.count("💰 Discharge") == 1
+    assert "**Tomorrow**" in schedule_markdown
+    assert schedule_markdown.count("💰 Discharge") == 2
     assert schedule_markdown.count("⚡ Charge") == 1
+    assert "€0.420" in schedule_markdown
+    assert "€0.350" in schedule_markdown
 
 
 def test_generate_schedule_skips_unsupported_future_discharge_without_charge(monkeypatch):

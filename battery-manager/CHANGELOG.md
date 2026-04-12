@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.58 — 2026-04-12
+- **Fix: Planned schedule display** — `sensor.battery_manager_schedule` and `sensor.battery_manager_schedule_part_2` now render the full planned schedule again, while the MQTT payload remains filtered to local-day periods for battery-api.
+
 ## 0.8.57 — 2026-04-12
 - **Fix: Published schedule display** — `sensor.battery_manager_schedule` now mirrors the schedule payload actually published to battery-api, so the combined markdown no longer shows draft discharge windows that were filtered out before publish.
 

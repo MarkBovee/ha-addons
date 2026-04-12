@@ -503,7 +503,7 @@ def _publish_schedule(
         logger.info("📝 [Dry-Run] Schedule generated (not published)")
         logger.info("   Content: %s", payload_json)
         if state:
-            state.published_schedule = deepcopy(api_schedule)
+            state.published_schedule = deepcopy(schedule)
             state.last_published_payload = payload_json
         return True
 
@@ -548,7 +548,7 @@ def _publish_schedule(
                         discharge_count,
                     )
                 if state:
-                    state.published_schedule = deepcopy(api_schedule)
+                    state.published_schedule = deepcopy(schedule)
                     state.last_published_payload = payload_json
                 return True
             logger.warning("⚠️ MQTT publish failed (attempt %d/%d)", attempt, max_attempts)
