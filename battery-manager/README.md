@@ -6,7 +6,7 @@ Optimize battery charging and discharging using dynamic electricity prices, sola
 
 Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into four ranges — **load** (cheapest, charge battery), **discharge** (most expensive, sell), **adaptive** (mid-range, discharge to 0W grid), and **passive** (below threshold, battery idle) — adjusts discharge power in real time, and applies SOC protection, conservative-SOC reduction, solar surplus, and EV charging rules.
 
-Live adaptive behavior is kept in sync with the current price band between hourly schedule refreshes: when the current interval is still adaptive but the published schedule no longer has an active adaptive slot, Battery Manager regenerates the rolling schedule instead of staying idle until the next hourly refresh. Future explicit discharge windows are also checked against fresh current SOC plus any already-planned charge energy before they are published, so unsupported sell periods are dropped instead of being left to fail later at runtime. If the SOC reading is stale or unavailable, Battery Manager skips that pruning step instead of discarding future sell windows from bad telemetry.
+Live adaptive behavior is kept in sync with the current price band between hourly schedule refreshes: when the current interval is still adaptive but the published schedule no longer has an active adaptive slot, Battery Manager regenerates the rolling schedule instead of staying idle until the next hourly refresh. Future explicit discharge windows are checked against fresh current SOC plus any already-planned charge energy, while also preserving the highest configured reserve floor from `soc.min_soc`, `soc.conservative_soc`, and `soc.target_eod_soc`, so unsupported sell periods are dropped instead of being left to fail later at runtime. If the SOC reading is stale or unavailable, Battery Manager skips that pruning step instead of discarding future sell windows from bad telemetry.
 
 When `solar_aware_charging` is enabled, Battery Manager also reduces today's commanded grid charge power during planned charge windows based on the remaining solar forecast (`sensor.energy_production_today_remaining`). The calculation is rerun on every schedule refresh using the latest SOC and the latest remaining-solar value, so charge power can change hour by hour while still aiming for `soc.max_soc`.
 
@@ -53,7 +53,7 @@ Key options (defaults in config.yaml):
 - **solar_aware_charging.min_charge_power**: minimum commanded grid charge power for a retained solar-aware charge slot (default `500W`)
 - **soc.min_soc**: hard minimum SOC (%)
 - **soc.conservative_soc**: conservative SOC threshold (%)
-- **soc.target_eod_soc**: end-of-day target SOC (%)
+- **soc.target_eod_soc**: end-of-day target SOC (%) that can raise the sell-window reserve floor above `soc.conservative_soc` when configured higher
 - **soc.max_soc**: max SOC allowed for charging; reaching this value also triggers a 5-minute 50% discharge stabilizer burst to keep SOC near the ceiling
 - **soc.battery_capacity_kwh**: battery usable capacity used for buffer calculation (kWh)
 - **soc.sell_buffer_enabled**: keep dynamic SOC reserve for discharge windows before main charge window

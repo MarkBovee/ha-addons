@@ -287,6 +287,8 @@ def test_discharge_feasibility_keeps_one_hour_when_only_ten_kwh_available():
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["battery_capacity_kwh"] = 20
     config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 5
+    config["soc"]["target_eod_soc"] = 5
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
 
@@ -315,6 +317,68 @@ def test_discharge_feasibility_keeps_one_hour_when_only_ten_kwh_available():
     )
 
     assert feasible == [discharge_windows[0]]
+
+
+def test_discharge_feasibility_respects_conservative_soc_floor():
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["battery_capacity_kwh"] = 10
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 40
+    config["soc"]["target_eod_soc"] = 20
+    config["power"]["max_discharge_power"] = 7000
+    config["power"]["min_scaled_power"] = 7000
+
+    now = datetime(2026, 4, 10, 17, 0, tzinfo=timezone.utc)
+    discharge_windows = [
+        {
+            "start": datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 4, 10, 20, 0, tzinfo=timezone.utc),
+            "avg_price": 0.412,
+        },
+    ]
+
+    feasible = bm_main._filter_supported_discharge_windows(
+        discharge_windows,
+        charge_schedule=[],
+        soc=100.0,
+        config=config,
+        not_before=now,
+        top_x_discharge_count=1,
+        min_scaled_power=7000,
+    )
+
+    assert feasible == []
+
+
+def test_discharge_feasibility_respects_target_eod_soc_floor():
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["battery_capacity_kwh"] = 10
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 20
+    config["soc"]["target_eod_soc"] = 60
+    config["power"]["max_discharge_power"] = 5000
+    config["power"]["min_scaled_power"] = 5000
+
+    now = datetime(2026, 4, 10, 17, 0, tzinfo=timezone.utc)
+    discharge_windows = [
+        {
+            "start": datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 4, 10, 20, 0, tzinfo=timezone.utc),
+            "avg_price": 0.412,
+        },
+    ]
+
+    feasible = bm_main._filter_supported_discharge_windows(
+        discharge_windows,
+        charge_schedule=[],
+        soc=100.0,
+        config=config,
+        not_before=now,
+        top_x_discharge_count=1,
+        min_scaled_power=5000,
+    )
+
+    assert feasible == []
 
 
 def test_monitor_regenerates_schedule_for_live_adaptive_gap(monkeypatch):
@@ -842,7 +906,7 @@ def test_supported_discharge_skip_log_includes_energy_budget_breakdown(caplog):
         feasible = bm_main._filter_supported_discharge_windows(
             discharge_windows,
             charge_schedule,
-            soc=98.0,
+            soc=100.0,
             config=config,
             not_before=now,
             top_x_discharge_count=3,
@@ -856,8 +920,9 @@ def test_supported_discharge_skip_log_includes_energy_budget_breakdown(caplog):
         if "Skipping discharge window" in record.getMessage()
     )
     assert "needs 15.00kWh" in skip_message
-    assert "only 11.25kWh available before start" in skip_message
-    assert "SOC 98.0% => 23.25kWh usable above 5.0% min" in skip_message
+    assert "only 3.00kWh available before start" in skip_message
+    assert "SOC 100.0% => 15.00kWh usable above 40.0% reserve floor" in skip_message
+    assert "min 5.0%, conservative 40.0%, target EOD 20.0%" in skip_message
     assert "scheduled charge +10.00kWh" in skip_message
     assert "earlier discharge -22.00kWh" in skip_message
 

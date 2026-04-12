@@ -1,7 +1,7 @@
 # Changelog
 
-## 0.8.53 — 2026-04-12
-- **Fix: Stale SOC schedule pruning** — Rolling schedule generation now applies the SOC freshness guard before filtering future discharge windows, so stale Home Assistant SOC values cannot incorrectly remove profitable sell periods.
+## 0.8.54 — 2026-04-12
+- **Fix: Sell-window reserve floor** — Rolling schedule generation now reserves future sell windows above the highest configured floor from `soc.min_soc`, `soc.conservative_soc`, and `soc.target_eod_soc`, so 100% SOC does not treat the full battery as freely sellable.
 - **Fix: Discharge energy-budget diagnostics** — `Skipping discharge window` logs now include the full budget breakdown: usable SOC energy, scheduled charge added before the window, and energy already reserved by earlier sell windows.
 
 ## 0.8.52 — 2026-04-10
