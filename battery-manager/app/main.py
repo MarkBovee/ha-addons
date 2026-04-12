@@ -1047,6 +1047,8 @@ def _filter_supported_discharge_windows(
         if duration_minutes <= 0:
             continue
 
+        available_before_window_kwh = available_energy_kwh
+
         while charge_index < len(charge_periods) and charge_periods[charge_index][1] <= effective_start:
             charge_start, charge_end, charge_power = charge_periods[charge_index]
             charge_duration = int((charge_end - charge_start).total_seconds() / 60)
@@ -1068,12 +1070,39 @@ def _filter_supported_discharge_windows(
             feasible_windows.append(window)
             continue
 
+        supported_duration_minutes = int((available_energy_kwh * 1000.0 / float(planned_power)) * 60.0 + 1e-9)
+        if supported_duration_minutes >= 30:
+            supported_duration_minutes = min(supported_duration_minutes, duration_minutes)
+            partial_window = dict(window)
+            partial_window["end"] = effective_start + timedelta(minutes=supported_duration_minutes)
+            partial_energy_kwh = _period_energy_kwh(planned_power, supported_duration_minutes)
+            logger.info(
+                "✂️ Truncating discharge window %s @€%.3f to %dm: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% reserve floor [min %.1f%%, conservative %.1f%%, target EOD %.1f%%], scheduled charge +%.2fkWh, earlier discharge -%.2fkWh)",
+                effective_start.astimezone().strftime("%H:%M"),
+                float(window.get("avg_price", 0.0)),
+                supported_duration_minutes,
+                required_energy_kwh,
+                available_before_window_kwh,
+                float(soc),
+                base_available_energy_kwh,
+                reserve_floor_soc,
+                min_soc,
+                conservative_soc,
+                target_eod_soc,
+                charged_before_start_kwh,
+                reserved_before_start_kwh,
+            )
+            available_energy_kwh = max(0.0, available_energy_kwh - partial_energy_kwh)
+            reserved_before_start_kwh += partial_energy_kwh
+            feasible_windows.append(partial_window)
+            continue
+
         logger.info(
             "⛔ Skipping discharge window %s @€%.3f: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% reserve floor [min %.1f%%, conservative %.1f%%, target EOD %.1f%%], scheduled charge +%.2fkWh, earlier discharge -%.2fkWh)",
             effective_start.astimezone().strftime("%H:%M"),
             float(window.get("avg_price", 0.0)),
             required_energy_kwh,
-            available_energy_kwh,
+            available_before_window_kwh,
             float(soc),
             base_available_energy_kwh,
             reserve_floor_soc,
@@ -2020,10 +2049,10 @@ def generate_schedule(
     )
 
     # Update ENTITY_DISCHARGE_SCHEDULE with HA state length protection
-    discharge_text = build_windows_display(upcoming_windows["discharge"], "discharge", discharge_power, now, discharge_no_range_msg)
+    discharge_text = build_windows_display(display_windows["discharge"], "discharge", discharge_power, now, discharge_no_range_msg)
     discharge_state = discharge_text
     if len(discharge_state) > 255:
-        count = len(upcoming_windows["discharge"])
+        count = len(display_windows["discharge"])
         discharge_state = f"{count} discharge windows planned"
 
     update_entity(
@@ -2031,7 +2060,7 @@ def generate_schedule(
         ENTITY_DISCHARGE_SCHEDULE,
         discharge_state,
         {
-            "windows": _serialize_windows(upcoming_windows["discharge"]),
+            "windows": _serialize_windows(display_windows["discharge"]),
             "markdown": discharge_text,
         },
         dry_run=is_dry_run,
