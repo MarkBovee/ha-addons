@@ -35,6 +35,7 @@ class GapScheduler:
                     "start": fallback_str,
                     "duration": 1,
                     "power": 4000,
+                    "window_type": "passive_gap",
                 }
             ],
         }

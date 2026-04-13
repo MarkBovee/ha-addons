@@ -2203,6 +2203,14 @@ def monitor_and_adjust_active_period(
     )
     active_discharge = active_discharge_period is not None
     active_charge = active_charge_period is not None
+    if (
+        passive_active
+        and active_discharge
+        and active_discharge_period
+        and active_discharge_period.get("window_type") not in {"max_soc_stabilizer", "passive_gap"}
+    ):
+        logger.info("☁️ Passive Solar ignored while discharge is active")
+        passive_active = False
 
     import_curve = (
         _get_price_curve(ha_api, config["entities"]["price_curve_entity"]) or state.last_price_curve

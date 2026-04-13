@@ -62,7 +62,7 @@ Key options (defaults in config.yaml):
 - **soc.sell_buffer_activation_hours_before_sell**: only activate sell-buffer/precharge this many hours before first planned sell window (default 3)
 - **heuristics.top_x_charge_hours**: cheapest periods to charge
 - **heuristics.top_x_discharge_hours**: most expensive periods to discharge
-- **passive_solar.enabled**: enable 0W charge gap on excess solar
+- **passive_solar.enabled**: enable 0W charge gap on excess solar (suppressed during active sell windows; the built-in passive-gap fallback stays allowed)
 - **passive_solar.entry_threshold**: grid export threshold to enter passive mode (W, default 1000)
 - **passive_solar.exit_threshold**: grid import threshold to exit passive mode (W, default 200)
 - **passive_solar.min_solar_entry_power**: minimum solar generation required to enter passive mode (W, default 200)

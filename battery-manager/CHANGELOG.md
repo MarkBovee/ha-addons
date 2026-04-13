@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.59 — 2026-04-13
+- **Fix: Passive Solar during discharge** — Passive Solar no longer overrides active sell windows, while the built-in passive-gap fallback can still run to self-consume excess solar.
+
 ## 0.8.58 — 2026-04-12
 - **Fix: Planned schedule display** — `sensor.battery_manager_schedule` and `sensor.battery_manager_schedule_part_2` now render the full planned schedule again, while the MQTT payload remains filtered to local-day periods for battery-api.
 

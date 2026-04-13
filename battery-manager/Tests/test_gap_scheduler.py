@@ -42,3 +42,7 @@ class TestGapScheduler:
         result = scheduler.generate_passive_gap_schedule()
         assert isinstance(result["charge"][0]["start"], str)
         assert isinstance(result["discharge"][0]["start"], str)
+
+    def test_passive_fallback_is_tagged(self, scheduler):
+        result = scheduler.generate_passive_gap_schedule()
+        assert result["discharge"][0]["window_type"] == "passive_gap"

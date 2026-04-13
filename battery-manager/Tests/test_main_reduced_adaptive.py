@@ -1296,6 +1296,100 @@ def test_active_discharge_pauses_when_soc_unavailable(monkeypatch):
     assert override_schedule["discharge"] == []
 
 
+def test_active_passive_gap_keeps_passive_solar_mode(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+
+    now = datetime.now(timezone.utc)
+    passive_gap_schedule = {
+        "charge": [
+            {
+                "start": (now - timedelta(minutes=2)).isoformat(),
+                "duration": 1,
+                "power": 0,
+            }
+        ],
+        "discharge": [
+            {
+                "start": (now - timedelta(minutes=1)).isoformat(),
+                "duration": 2,
+                "power": 4000,
+                "window_type": "passive_gap",
+            }
+        ],
+    }
+    state = bm_main.RuntimeState(
+        schedule=deepcopy(passive_gap_schedule),
+        published_schedule=deepcopy(passive_gap_schedule),
+        schedule_generated_at=now,
+        passive_gap_active=True,
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 55.0,
+        config["entities"]["grid_power_entity"]: -1400.0,
+        config["entities"]["solar_power_entity"]: 2400.0,
+        config["entities"]["house_load_entity"]: 200.0,
+        config["entities"]["battery_power_entity"]: 6000.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 13.0,
+    }
+
+    published = []
+    entity_updates = []
+
+    class _PassiveSolarMonitorStub:
+        def __init__(self):
+            self.calls = 0
+
+        def check_passive_state(self, _ha_api):
+            self.calls += 1
+            return True
+
+    class _PassiveGapSchedulerStub:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_passive_gap_schedule(self):
+            self.calls += 1
+            return {"charge": [{"start": now.isoformat(), "duration": 1, "power": 0}], "discharge": []}
+
+    solar_monitor = _PassiveSolarMonitorStub()
+    gap_scheduler = _PassiveGapSchedulerStub()
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "discharge")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: entity_updates.append((_args, _kwargs)))
+    monkeypatch.setattr(bm_main, "_publish_schedule", lambda *_args, **_kwargs: published.append(_args[1]) or True)
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=solar_monitor,
+        gap_scheduler=gap_scheduler,
+    )
+
+    mode_updates = [call for call in entity_updates if call[0][1] == bm_main.ENTITY_MODE]
+    assert mode_updates
+    assert mode_updates[-1][0][2] == "passive_solar"
+    assert not published
+    assert gap_scheduler.calls == 0
+    assert state.passive_gap_active is True
+
+
 def test_active_discharge_ignores_stale_ev_sensor(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["conservative_soc"] = 40
@@ -1537,7 +1631,14 @@ def test_max_soc_stabilizer_overrides_passive_solar_and_resumes_gap(monkeypatch)
     now = datetime.now(timezone.utc)
     passive_gap_schedule = {
         "charge": [{"start": (now + timedelta(minutes=1)).isoformat(), "duration": 1, "power": 0}],
-        "discharge": [{"start": (now + timedelta(minutes=2)).isoformat(), "duration": 1, "power": 4000}],
+        "discharge": [
+            {
+                "start": (now + timedelta(minutes=2)).isoformat(),
+                "duration": 1,
+                "power": 4000,
+                "window_type": "passive_gap",
+            }
+        ],
     }
     state = bm_main.RuntimeState(
         schedule={"charge": [], "discharge": []},
