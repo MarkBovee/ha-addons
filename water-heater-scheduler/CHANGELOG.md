@@ -2,6 +2,11 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.11] - 2026-04-24
+
+### Fixed
+- Negative price now overrules **all** other programs (away, bath, night, legionella, day). When price < 0 EUR/kWh, the heater is immediately set to 70°C regardless of schedule or mode, wait-cycles are bypassed, and the ⚡ free energy status is shown.
+
 ## [1.2.10] - 2026-03-10
 
 ### Fixed
