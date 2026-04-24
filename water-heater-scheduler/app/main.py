@@ -629,7 +629,14 @@ def set_water_temperature(
     # Track decision reasoning for logging
     decision_reason = None
     
-    if away_mode:
+    if energy_price_level == "None":
+        # Negative price overrules all other programs
+        program = ProgramType.NEGATIVE_PRICE
+        program_type = "NegativePrice"
+        program_temperature = preset.negative_price  # 70°C
+        heating_temperature = preset.negative_price
+        decision_reason = f"Negative price (€{current_price:.3f}): max heating 70°C"
+    elif away_mode:
         # Away mode: only heat for legionella on Saturday
         if use_legionella_protection and not use_night_program:
             program_temperature = 66 if current_price < 0.2 else 60
@@ -643,10 +650,7 @@ def set_water_temperature(
         decision_reason = f"Bath mode: {program_temperature}°C"
     else:
         # Normal operation - set heating temp based on price level
-        if energy_price_level == "None":
-            heating_temperature = 70  # Free energy
-            decision_reason = "Free energy: max heating"
-        elif energy_price_level == "Low":
+        if energy_price_level == "Low":
             heating_temperature = 50
             decision_reason = f"Low price (€{current_price:.3f}): opportunistic 50°C"
         else:
@@ -662,22 +666,18 @@ def set_water_temperature(
             else:
                 decision_reason = f"Day cheaper: minimal night heating {program_temperature}°C"
         elif use_legionella_protection:
-            program_temperature = 70 if energy_price_level == "None" else preset.legionella
+            program_temperature = preset.legionella
             decision_reason = f"Legionella protection: {program_temperature}°C"
         else:
             # Day program
-            if energy_price_level == "None":
-                program_temperature = 70
-                decision_reason = "Free energy: max heating 70°C"
-            else:
-                program_temperature = preset.day_preheat  # 58
-                decision_reason = f"Day program: {program_temperature}°C"
-                
-                # If tomorrow night is cheaper, skip heating now
-                if next_night_price[1] > 0 and next_night_price[1] < current_price:
-                    if energy_price_level in ("Medium", "High"):
-                        program_temperature = heating_temperature
-                        decision_reason = f"Tomorrow night cheaper (€{next_night_price[1]:.3f} vs €{current_price:.3f}): skip day heating"
+            program_temperature = preset.day_preheat  # 58
+            decision_reason = f"Day program: {program_temperature}°C"
+            
+            # If tomorrow night is cheaper, skip heating now
+            if next_night_price[1] > 0 and next_night_price[1] < current_price:
+                if energy_price_level in ("Medium", "High"):
+                    program_temperature = heating_temperature
+                    decision_reason = f"Tomorrow night cheaper (€{next_night_price[1]:.3f} vs €{current_price:.3f}): skip day heating"
     
     # === Apply Temperature (matching WaterHeater.cs logic) ===
     try:
@@ -731,12 +731,12 @@ def set_water_temperature(
             
             if current_temp < program_temperature:
                 # Active heating - show what and until when
-                if away_mode:
+                if energy_price_level == "None":
+                    status_msg = f"⚡ Free energy! Heating to {program_temperature}°C"
+                elif away_mode:
                     status_msg = f"🏖️ Away mode | Legionella cycle ({program_temperature}°C) until {end_time.strftime('%H:%M')}"
                 elif bath_mode:
                     status_msg = f"🛁 Bath mode | Heating to {program_temperature}°C"
-                elif energy_price_level == "None":
-                    status_msg = f"⚡ Free energy! Heating to {program_temperature}°C"
                 elif use_legionella_protection:
                     status_msg = f"🦠 Legionella protection ({program_temperature}°C) until {end_time.strftime('%H:%M')}"
                 else:
@@ -755,7 +755,7 @@ def set_water_temperature(
                     )
         else:
             # Outside heating window - use wait cycles logic
-            if state.target_temperature > idle_temperature and state.wait_cycles > 0:
+            if state.target_temperature > idle_temperature and state.wait_cycles > 0 and energy_price_level != "None":
                 state.wait_cycles -= 1
                 state.save()
                 
