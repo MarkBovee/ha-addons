@@ -584,6 +584,16 @@ def _get_max_soc_stabilizer_power(config: Dict[str, Any]) -> int:
     return max(0, int(max_power / 2))
 
 
+def _has_negative_price_block(
+    curve: List[Dict[str, Any]],
+    interval_minutes: int,
+    min_hours: float = 1.0,
+) -> bool:
+    """Return True if the curve contains more than min_hours of negative-price intervals."""
+    negative_count = sum(1 for entry in curve if float(entry.get("price", 0)) < 0)
+    return negative_count * interval_minutes > min_hours * 60
+
+
 def _split_curve_by_date(
     curve: List[Dict[str, Any]],
     reference_time: Optional[datetime] = None,
@@ -2241,6 +2251,16 @@ def monitor_and_adjust_active_period(
     today_export, _ = _split_curve_by_date(export_curve or [], now)
     range_import_curve = today_import if today_import else (import_curve or [])
     range_export_curve = today_export if today_export else (export_curve or import_curve or [])
+
+    if passive_active:
+        neg_block_hours = float(config.get("passive_solar", {}).get("negative_price_block_hours", 1.0))
+        if _has_negative_price_block(today_import or [], interval_minutes, neg_block_hours):
+            logger.info(
+                "🚫 Passive Solar suppressed: today has >%.1fh of negative import prices",
+                neg_block_hours,
+            )
+            passive_active = False
+            solar_monitor.is_passive_active = False
 
     load_range, discharge_range, adaptive_range = calculate_price_ranges(
         range_import_curve,

@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.59"
+version: "0.8.60"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -46,6 +46,7 @@ options:
     entry_threshold: 1000
     exit_threshold: 200
     min_solar_entry_power: 200
+    negative_price_block_hours: 1.0
 
   soc:
     min_soc: 5
@@ -137,6 +138,7 @@ schema:
     entry_threshold: int(0,10000)
     exit_threshold: int(0,10000)
     min_solar_entry_power: int(0,10000)
+    negative_price_block_hours: float(0,24)?
 
   soc:
     min_soc: int(0,100)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.60 — 2026-04-25
+- **Feature: Passive Solar blocked on negative-price days** — Passive Solar mode is now suppressed when today's import curve contains more than `passive_solar.negative_price_block_hours` hours of negative prices (default: 1.0h). Avoids storing low-value solar energy on days with deeply negative spot prices.
+- **Config: `passive_solar.negative_price_block_hours`** — New option to control the minimum hours of negative prices required to suppress Passive Solar (default `1.0`, range 0–24).
+
 ## 0.8.59 — 2026-04-13
 - **Fix: Passive Solar during discharge** — Passive Solar no longer overrides active sell windows, while the built-in passive-gap fallback can still run to self-consume excess solar.
 
