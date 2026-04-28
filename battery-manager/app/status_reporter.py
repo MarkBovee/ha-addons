@@ -590,7 +590,10 @@ def find_upcoming_windows(
             else discharge_slot_starts
         )
 
-        if effective_load and effective_load.min_price <= import_price <= effective_load.max_price:
+        # Negative import prices always trigger charging regardless of top-X range.
+        # The grid is paying to consume; we always want to charge at these prices.
+        is_in_load_range = effective_load and effective_load.min_price <= import_price <= effective_load.max_price
+        if import_price < 0 or is_in_load_range:
             charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
         elif effective_discharge_starts is not None:
             if start_str in effective_discharge_starts:

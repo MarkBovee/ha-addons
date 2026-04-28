@@ -154,6 +154,9 @@ DEFAULT_CONFIG = {
         "charging_threshold": 500,
         "entity_id": "sensor.charge_amps_monitor_charger_current_power",
     },
+    "negative_price_charging": {
+        "enabled": True,
+    },
     "mqtt_host": "core-mosquitto",
     "mqtt_port": 1883,
     "mqtt_user": "",
@@ -644,7 +647,12 @@ def _determine_price_range(
     battery should neither charge nor actively discharge (house runs on grid).
     Prices at or above the threshold stay "adaptive" and the battery will
     discharge to bring grid export to 0W.
+
+    Negative import prices always classify as "load": the grid pays us to
+    consume, so the battery should always charge regardless of top-X ranges.
     """
+    if import_price < 0:
+        return "load"
     if load_range and load_range.min_price <= import_price <= load_range.max_price:
         return "load"
     if discharge_range and discharge_range.min_price <= export_price <= discharge_range.max_price:
@@ -1696,9 +1704,77 @@ def generate_schedule(
             })
 
     charge_slot_records: List[Dict[str, Any]] = []
+    neg_price_enabled = config.get("negative_price_charging", {}).get("enabled", True)
     if not skip_charge:
+        max_charge_power_w = config["power"]["max_charge_power"]
         max_charge_rank = max(top_x_charge_count, 1)
+
+        # --- Pass 1: Negative-price windows (price-proportional power, fill slots first) ---
+        # The more negative the price, the harder the inverter charges:
+        #   most-negative hour  → max_charge_power
+        #   less-negative hours → proportionally lower, floor = min_scaled_power
+        # This leaves headroom during mildly-negative hours so the battery
+        # still has capacity when the deepest-negative window arrives.
+        if neg_price_enabled:
+            # Scan all negative-price slots upfront to find the scaling reference.
+            neg_all_prices = [
+                float(slot.get("price", 0.0))
+                for window in upcoming_windows["charge"]
+                if float(window.get("avg_price", 0.0)) < 0
+                for slot in _expand_charge_window_slots(window)
+                if float(slot.get("price", 0.0)) < 0
+            ]
+            most_negative_price = min(neg_all_prices) if neg_all_prices else -1.0  # e.g. -0.40
+
+            neg_slots_added = 0
+            for window in upcoming_windows["charge"]:
+                if float(window.get("avg_price", 0.0)) >= 0:
+                    continue  # regular price window — handled in pass 2
+                if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
+                    break
+                for slot in _expand_charge_window_slots(window):
+                    if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
+                        break
+                    start_dt = slot["start"]
+                    end_dt = slot["end"]
+                    if end_dt <= now:
+                        continue
+                    effective_start = max(start_dt, interval_start)
+                    duration = int((end_dt - effective_start).total_seconds() / 60)
+                    if duration <= 0:
+                        continue
+                    slot_price = float(slot.get("price", 0.0))
+                    # Power proportional to how negative the price is relative to the
+                    # most-negative slot: deeper negative → closer to max charge power.
+                    ratio = abs(slot_price) / abs(most_negative_price)
+                    neg_power = max(
+                        min_scaled_power,
+                        int(round(max_charge_power_w * ratio, -2)),  # round to nearest 100 W
+                    )
+                    charge_slot_records.append({
+                        "start": effective_start,
+                        "end": end_dt,
+                        "base_power": neg_power,
+                        "duration": duration,
+                        "window_type": "negative_price_charge",
+                        "price": round(slot_price, 4),
+                        "is_negative_price": True,
+                    })
+                    neg_slots_added += 1
+            if neg_slots_added:
+                logger.info(
+                    "⚡ Negative price charging: %d slot(s) scheduled "
+                    "(reference €%.3f/kWh → max %dW, floor %dW)",
+                    neg_slots_added,
+                    most_negative_price,
+                    max_charge_power_w,
+                    min_scaled_power,
+                )
+
+        # --- Pass 2: Regular charge windows (rank-scaled, fill remaining API slots) ---
         for window in upcoming_windows["charge"]:
+            if neg_price_enabled and float(window.get("avg_price", 0.0)) < 0:
+                continue  # already handled in pass 1
             if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
                 break
             for slot in _expand_charge_window_slots(window):
@@ -1727,6 +1803,7 @@ def generate_schedule(
                     "duration": duration,
                     "window_type": "charge",
                     "price": round(float(slot.get("price", 0.0)), 4),
+                    "is_negative_price": False,
                 })
 
     solar_aware_cfg = config.get("solar_aware_charging", {})
@@ -1741,10 +1818,13 @@ def generate_schedule(
             float(max_soc),
             float(config["soc"].get("battery_capacity_kwh", 25)),
         )
+        # Exclude negative-price slots from solar-aware reduction:
+        # we always charge at max power when the grid pays us to consume.
         today_charge_slot_records = [
             record
             for record in charge_slot_records
-            if record["start"].astimezone().date() == now.astimezone().date()
+            if not record.get("is_negative_price", False)
+            and record["start"].astimezone().date() == now.astimezone().date()
         ]
         if solar_aware_remaining_kwh is not None and solar_charge_deficit_kwh > 0 and today_charge_slot_records:
             solar_aware_allocation = allocate_solar_aware_charge_powers(
@@ -1769,6 +1849,22 @@ def generate_schedule(
         slot_power = int(record["base_power"])
         solar_aware = False
         forecast_solar_kwh = None
+
+        if record.get("is_negative_price"):
+            # Negative-price slots always run at max charge power.
+            # Solar-aware reduction is intentionally skipped: the grid
+            # pays us to consume, so we charge as fast as possible.
+            charge_schedule.append({
+                "start": slot_start.isoformat(),
+                "power": slot_power,
+                "duration": int(record["duration"]),
+                "window_type": record["window_type"],
+                "price": record["price"],
+                "base_power": int(record["base_power"]),
+                "solar_aware": False,
+                "forecast_solar_kwh": None,
+            })
+            continue
 
         if (
             solar_aware_allocation is not None

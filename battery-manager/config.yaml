@@ -98,6 +98,9 @@ options:
     charging_threshold: 500
     entity_id: "sensor.charge_amps_monitor_charger_current_power"
 
+  negative_price_charging:
+    enabled: true
+
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
   mqtt_user: ""
@@ -181,6 +184,9 @@ schema:
     enabled: bool?
     charging_threshold: int(100,5000)
     entity_id: str
+
+  negative_price_charging:
+    enabled: bool?
 
   mqtt_host: str?
   mqtt_port: int?
