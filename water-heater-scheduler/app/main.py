@@ -5,7 +5,7 @@ Logic ported directly from NetDaemon WaterHeater.cs for reliability.
 """
 
 import logging
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from typing import Optional, Tuple, Dict, Any
 
 from .models import ScheduleConfig, HeaterState, ProgramType
@@ -173,6 +173,46 @@ def parse_price_curve(sensor_state: Dict[str, Any]) -> Dict[datetime, float]:
             continue
     
     return prices
+
+
+def _parse_curve_timestamp(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _get_active_curve_price(sensor_state: Dict[str, Any], now: datetime) -> Optional[float]:
+    if now.tzinfo is None:
+        now = now.astimezone()
+
+    attributes = sensor_state.get("attributes", {})
+    for entry in attributes.get("price_curve", []):
+        if not isinstance(entry, dict):
+            continue
+        start_dt = _parse_curve_timestamp(entry.get("start") or entry.get("time"))
+        end_dt = _parse_curve_timestamp(entry.get("end"))
+        price = entry.get("price")
+        if start_dt is None or end_dt is None or price is None:
+            continue
+        if start_dt <= now.astimezone(start_dt.tzinfo) < end_dt:
+            try:
+                return float(price)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def get_current_price_from_sensor_state(sensor_state: Dict[str, Any], now: Optional[datetime] = None) -> float:
+    active_price = _get_active_curve_price(sensor_state, now or datetime.now().astimezone())
+    if active_price is not None:
+        return active_price
+    return float(sensor_state.get("state", 0))
 
 
 def _collect_window_prices(
@@ -870,7 +910,7 @@ def main():
                 prices_today = {dt: p for dt, p in prices_today.items() 
                                if dt.date() == datetime.now().date()}
                 
-                current_price = float(price_state.get("state", 0))
+                current_price = get_current_price_from_sensor_state(price_state)
                 
                 if not prices_today:
                     logger.warning("No price data for today")

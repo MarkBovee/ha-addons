@@ -170,6 +170,14 @@ def average_to_hourly(intervals: List[PriceInterval]) -> List[PriceInterval]:
     return hourly_intervals
 
 
+def get_current_interval_price(intervals: List[PriceInterval], now_utc: datetime) -> Optional[float]:
+    """Return the active interval price in EUR/kWh for the supplied UTC timestamp."""
+    for interval in intervals:
+        if interval.start <= now_utc < interval.end:
+            return interval.price_eur_kwh()
+    return None
+
+
 def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[dict]:
     """Fetch prices, apply price components, calculate percentiles.
     
@@ -294,15 +302,11 @@ def fetch_and_process_prices(nordpool: NordPoolApi, config: dict) -> Optional[di
         
         # Find current interval and classify price level
         now_utc = datetime.now(ZoneInfo('UTC'))
-        current_import = None
-        current_export = None
-        
-        for i, interval in enumerate(all_intervals):
-            if interval.start <= now_utc < interval.end:
-                if i < len(import_prices):
-                    current_import = import_prices[i]
-                    current_export = export_prices[i]
-                break
+        current_import = get_current_interval_price(all_intervals, now_utc)
+        current_export = get_current_interval_price([
+            PriceInterval(start=interval.start, end=interval.end, price_eur_mwh=round(export_price * 1000, 4))
+            for interval, export_price in zip(all_intervals, export_prices)
+        ], now_utc)
         
         if current_import is None:
             logger.warning("No current price found for %s", now_utc.isoformat())
