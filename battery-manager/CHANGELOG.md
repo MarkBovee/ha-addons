@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.62 — 2026-05-01
+- **Fix: Discharge log shows correct available energy** — The truncation log now snapshots available energy *after* applying scheduled charges up to the window start, so the "only X kWh available" figure is accurate rather than showing the pre-charge balance.
+
 ## 0.8.61 — 2026-05-01
 - **Fix: Discharge window energy accounting order** — `_filter_supported_discharge_windows` now evaluates windows in chronological order before deducting energy, so a high-price window tomorrow no longer consumes the available kWh budget for an earlier-in-time window today. Previously, with SOC at ~98%, today's 19:00 discharge was truncated to ~42 min because tomorrow's higher-priced window (processed first by price rank) had already reserved the full usable capacity.
 
