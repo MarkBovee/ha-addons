@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.63 — 2026-05-01
+- **Fix: Adaptive discharge survives conservative SOC** — Adaptive price bands now regenerate a fallback discharge window whenever SOC is above `soc.min_soc`, even if it is below `soc.conservative_soc`, so the monitor no longer drops to idle when adaptive discharge should be active.
+
 ## 0.8.62 — 2026-05-01
 - **Fix: Discharge log shows correct available energy** — The truncation log now snapshots available energy *after* applying scheduled charges up to the window start, so the "only X kWh available" figure is accurate rather than showing the pre-charge balance.
 

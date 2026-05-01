@@ -174,9 +174,12 @@ When `price_range == "adaptive"` and a discharge period is active:
 | `soc >= max_soc` | Skip charge windows |
 | `soc < min_soc` | Pause all discharge |
 | `soc <= conservative_soc` during discharge | Switch to adaptive (not hard stop) |
+| `soc <= conservative_soc`, price = adaptive, no active window | Trigger schedule regen to add adaptive fallback window (is_conservative=False for adaptive band) |
 | `soc < sell_buffer_required_soc` | Pause discharge (sell-buffer protection) |
 
 `sell_buffer_required_soc` is recalculated every `generate_schedule` call based on planned discharge hours before the next charge window.
+
+**Conservative SOC and adaptive discharge:** `conservative_soc` blocks full-power scheduled discharge windows but does NOT block adaptive discharge (grid≈0W). `_should_regenerate_live_schedule` uses `is_conservative=False` when checking whether to regen for the adaptive price band, so SOC between `min_soc` and `conservative_soc` still triggers adaptive regen.
 
 ---
 
