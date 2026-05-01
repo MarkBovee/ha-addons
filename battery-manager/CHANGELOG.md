@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.61 — 2026-05-01
+- **Fix: Discharge window energy accounting order** — `_filter_supported_discharge_windows` now evaluates windows in chronological order before deducting energy, so a high-price window tomorrow no longer consumes the available kWh budget for an earlier-in-time window today. Previously, with SOC at ~98%, today's 19:00 discharge was truncated to ~42 min because tomorrow's higher-priced window (processed first by price rank) had already reserved the full usable capacity.
+
 ## 0.8.60 — 2026-04-25
 - **Feature: Passive Solar blocked on negative-price days** — Passive Solar mode is now suppressed when today's import curve contains more than `passive_solar.negative_price_block_hours` hours of negative prices (default: 1.0h). Avoids storing low-value solar energy on days with deeply negative spot prices.
 - **Config: `passive_solar.negative_price_block_hours`** — New option to control the minimum hours of negative prices required to suppress Passive Solar (default `1.0`, range 0–24).

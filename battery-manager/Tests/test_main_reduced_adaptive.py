@@ -398,6 +398,63 @@ def test_discharge_feasibility_respects_target_eod_soc_floor():
     assert feasible[0]["end"] - feasible[0]["start"] == timedelta(minutes=48)
 
 
+def test_discharge_feasibility_price_order_does_not_starve_earlier_time_window():
+    """Regression: windows sorted by price-desc must not deduct tomorrow's discharge energy
+    from today's available balance.  A high-price window tomorrow (rank 1) was consuming
+    the full usable kWh, leaving today's (lower-priced but earlier) window with almost
+    nothing even though today's window starts before tomorrow's charge replenishes the
+    battery."""
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["battery_capacity_kwh"] = 25
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 25
+    config["soc"]["target_eod_soc"] = 20
+    config["power"]["max_discharge_power"] = 8000
+    config["power"]["min_discharge_power"] = 4000
+
+    now = datetime(2026, 5, 1, 15, 0, tzinfo=timezone.utc)
+    # High price tomorrow (rank 1 when sorted by price desc) — starts 26 h from now
+    tomorrow_window = {
+        "start": datetime(2026, 5, 2, 17, 0, tzinfo=timezone.utc),
+        "end": datetime(2026, 5, 2, 21, 0, tzinfo=timezone.utc),
+        "avg_price": 0.356,
+    }
+    # Lower price today (rank 2) — starts 2 h from now
+    today_window = {
+        "start": datetime(2026, 5, 1, 17, 0, tzinfo=timezone.utc),
+        "end": datetime(2026, 5, 1, 21, 0, tzinfo=timezone.utc),
+        "avg_price": 0.335,
+    }
+    # Charge tomorrow morning — replenishes 19.5 kWh but only AFTER today's window
+    tomorrow_charge = [
+        {"start": datetime(2026, 5, 2, 9, 0, tzinfo=timezone.utc).isoformat(), "power": 6500, "duration": 60},
+        {"start": datetime(2026, 5, 2, 10, 0, tzinfo=timezone.utc).isoformat(), "power": 6500, "duration": 60},
+        {"start": datetime(2026, 5, 2, 11, 0, tzinfo=timezone.utc).isoformat(), "power": 6500, "duration": 60},
+    ]
+
+    # Pass windows in price-descending order (as the real caller does)
+    discharge_windows = [tomorrow_window, today_window]
+
+    feasible = bm_main._filter_supported_discharge_windows(
+        discharge_windows,
+        charge_schedule=tomorrow_charge,
+        soc=97.9,
+        config=config,
+        not_before=now,
+        top_x_discharge_count=2,
+        min_scaled_power=4000,
+    )
+
+    # SOC 97.9% with 25kWh capacity, 25% floor => (97.9-25)/100*25 = 18.23 kWh usable.
+    # Today's window starts BEFORE the charge, so it should get the full ~18 kWh.
+    # At 8000W that supports ~136 min — the window must NOT be skipped or reduced to ~42 min.
+    assert len(feasible) == 2
+    today_result = next(w for w in feasible if w["start"] == today_window["start"])
+    duration_today = (today_result["end"] - today_result["start"]).total_seconds() / 60
+    # Expect close to full 240 min (may be truncated slightly due to floor, but well above 42)
+    assert duration_today >= 120, f"Today's window was wrongly truncated to {duration_today:.0f} min"
+
+
 def test_monitor_regenerates_schedule_for_live_adaptive_gap(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["timing"]["schedule_regen_cooldown_seconds"] = 0

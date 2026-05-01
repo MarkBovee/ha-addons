@@ -1062,7 +1062,15 @@ def _filter_supported_discharge_windows(
     charged_before_start_kwh = 0.0
     reserved_before_start_kwh = 0.0
 
-    for rank, window in enumerate(discharge_windows, start=1):
+    # Process windows in chronological order so energy accounting is correct (a later
+    # discharge window cannot reduce the energy available for an earlier one).  The
+    # price-derived rank is retained for power-scaling purposes.
+    ranked_windows = sorted(
+        enumerate(discharge_windows, start=1),
+        key=lambda rw: rw[1].get("start") or not_before,
+    )
+
+    for rank, window in ranked_windows:
         start_dt = window.get("start")
         end_dt = window.get("end")
         if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime):
