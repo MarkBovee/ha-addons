@@ -179,7 +179,7 @@ When `price_range == "adaptive"` and a discharge period is active:
 
 `sell_buffer_required_soc` is recalculated every `generate_schedule` call based on planned discharge hours before the next charge window.
 
-**Conservative SOC and adaptive discharge:** `conservative_soc` blocks full-power scheduled discharge windows but does NOT block adaptive discharge (grid≈0W). `_should_regenerate_live_schedule` uses `is_conservative=False` when checking whether to regen for the adaptive price band, so SOC between `min_soc` and `conservative_soc` still triggers adaptive regen.
+**Conservative SOC and adaptive discharge:** `conservative_soc` blocks full-power scheduled discharge windows but does NOT block adaptive discharge (grid≈0W). `_should_regenerate_live_schedule` uses `is_conservative=False` when checking whether to regen for the adaptive price band, so SOC between `min_soc` and `conservative_soc` still triggers adaptive regen. `generate_schedule()` MUST also downgrade the current live interval from `discharge` to `adaptive` when SOC is already at/below `conservative_soc`, otherwise rolling schedule regeneration will keep republishing a schedule with no active adaptive slot.
 
 ---
 

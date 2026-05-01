@@ -726,6 +726,93 @@ def test_generate_schedule_inserts_current_adaptive_window_when_missing(monkeypa
     assert active_adaptive[0]["start"] == now.isoformat()
 
 
+def test_generate_schedule_downgrades_current_discharge_band_to_adaptive_below_conservative(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["conservative_soc"] = 25
+    config["soc"]["min_soc"] = 5
+    config["heuristics"]["adaptive_price_threshold"] = 0.27
+    config["power"]["min_discharge_power"] = 0
+    config["solar_aware_charging"]["enabled"] = False
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    current_entry = {
+        "start": now.isoformat(),
+        "end": (now + timedelta(hours=1)).isoformat(),
+        "price": 0.30,
+    }
+    future_charge_window = {
+        "start": now + timedelta(hours=12),
+        "end": now + timedelta(hours=13),
+        "avg_price": 0.12,
+    }
+    future_discharge_window = {
+        "start": now + timedelta(hours=20),
+        "end": now + timedelta(hours=21),
+        "avg_price": 0.39,
+    }
+
+    published = []
+
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "find_profitable_discharge_starts", lambda *_args, **_kwargs: set())
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "discharge")
+    monkeypatch.setattr(
+        bm_main,
+        "get_current_price_entry",
+        lambda _curve, _now, _interval: current_entry,
+    )
+    monkeypatch.setattr(
+        bm_main,
+        "find_upcoming_windows",
+        lambda *_args, **_kwargs: {
+            "charge": [future_charge_window],
+            "discharge": [future_discharge_window],
+            "adaptive": [],
+        },
+    )
+    monkeypatch.setattr(bm_main, "_calculate_dynamic_sell_buffer_soc", lambda *_args, **_kwargs: (None, 0.0, None))
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_tomorrow_story", lambda *_args, **_kwargs: "forecast")
+    monkeypatch.setattr(bm_main, "build_windows_display", lambda *_args, **_kwargs: "windows")
+    monkeypatch.setattr(bm_main, "build_combined_schedule_display", lambda *_args, **_kwargs: "combined")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (
+            (23.7, 0.0) if entity_id == config["entities"]["soc_entity"] else (None, None)
+        ),
+    )
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: (
+            setattr(state, "published_schedule", deepcopy(schedule)) if state is not None else None,
+            published.append(schedule),
+            True,
+        )[-1],
+    )
+
+    state = bm_main.RuntimeState(schedule={"charge": [], "discharge": []}, schedule_generated_at=now)
+    schedule = bm_main.generate_schedule(config, ha_api=cast(Any, object()), mqtt_client=None, state=state)
+
+    assert published, "Expected schedule publish"
+    active_adaptive = [
+        period for period in schedule["discharge"]
+        if period["window_type"] == "adaptive" and bm_main._is_period_active(period, now)
+    ]
+    assert active_adaptive, (
+        "Expected current adaptive interval when SOC is below conservative_soc "
+        "but above min_soc and the raw price band is discharge"
+    )
+    assert active_adaptive[0]["start"] == now.isoformat()
+
+
 def test_generate_schedule_uses_planned_schedule_for_entity_display(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["temperature_based_discharge"]["enabled"] = False

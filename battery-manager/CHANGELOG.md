@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.64 — 2026-05-01
+- **Fix: Low-SOC discharge band downgrades to adaptive during schedule generation** — When the current interval lands in the profitable discharge band but SOC is already at or below `soc.conservative_soc`, `generate_schedule()` now downgrades the live interval to adaptive before publishing the schedule. That keeps the current adaptive fallback slot in place instead of republishing an empty active window and idling until the next charge slot.
+
 ## 0.8.63 — 2026-05-01
 - **Fix: Adaptive discharge survives conservative SOC** — Adaptive price bands now regenerate a fallback discharge window whenever SOC is above `soc.min_soc`, even if it is below `soc.conservative_soc`, so the monitor no longer drops to idle when adaptive discharge should be active.
 

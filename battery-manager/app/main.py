@@ -1496,6 +1496,17 @@ def generate_schedule(
             logger.info("⏳ Evening prices higher than overnight; waiting to charge")
             price_range = "adaptive"
 
+    soc = _get_schedule_generation_soc(ha_api, config, now, state)
+    conservative_soc = float(config["soc"].get("conservative_soc", config["soc"].get("min_soc", 5)))
+    effective_price_range = price_range
+    if soc is not None and price_range == "discharge" and soc <= conservative_soc:
+        effective_price_range = "adaptive"
+        logger.info(
+            "⚖️ Current discharge band downgraded to adaptive: SOC %.1f%% <= conservative %.1f%%",
+            soc,
+            conservative_soc,
+        )
+
     if state:
         # Detect new prices (e.g. tomorrow's prices arriving ~14:00)
         new_length = len(import_curve)
@@ -1517,12 +1528,12 @@ def generate_schedule(
     )
 
     reasoning_text = build_today_story(
-        price_range, import_price, export_price,
+        effective_price_range, import_price, export_price,
         load_range, discharge_range, adaptive_range,
         adaptive_price_threshold, now,
     )
     update_entity(mqtt_client, ENTITY_REASONING, reasoning_text,
-                  {"price_range": price_range, "import_price": import_price, "export_price": export_price},
+                  {"price_range": effective_price_range, "import_price": import_price, "export_price": export_price},
                   dry_run=is_dry_run)
 
     tomorrow_load: Optional[PriceRange] = None
@@ -1571,10 +1582,9 @@ def generate_schedule(
             min_scaled_power,
         )
 
-    soc = _get_schedule_generation_soc(ha_api, config, now, state)
     max_soc = config["soc"].get("max_soc", 100)
     skip_charge = soc is not None and not can_charge(soc, max_soc)
-    if skip_charge and price_range == "load":
+    if skip_charge and effective_price_range == "load":
         logger.info("🛑 SOC %.1f%% >= %s%%, skipping charge windows", soc, max_soc)
 
     # Build multi-period schedule from all upcoming price windows
@@ -1992,7 +2002,7 @@ def generate_schedule(
     has_active_discharge_period = any(_is_period_active(period, now) for period in discharge_schedule)
     if (
         adaptive_enabled
-        and price_range == "adaptive"
+        and effective_price_range == "adaptive"
         and not has_active_charge_period
         and not has_active_discharge_period
         and len(discharge_schedule) < MAX_DISCHARGE_PERIODS
@@ -2019,7 +2029,7 @@ def generate_schedule(
             )
 
     if not charge_schedule and not discharge_schedule:
-        if price_range == "passive":
+        if effective_price_range == "passive":
             logger.info("💤 Passive range — price below threshold, battery idle")
         else:
             logger.info("💤 No upcoming charge or discharge windows")
@@ -2039,7 +2049,7 @@ def generate_schedule(
     api_discharge_count = len(api_payload.get("discharge", []))
     logger.info(
         "✅ Multi-period schedule: %s range | internal charge=%d discharge=%d adaptive=%d | api(local-day) charge=%d discharge=%d",
-        price_range,
+        effective_price_range,
         len(schedule["charge"]),
         scheduled_discharge_windows,
         scheduled_adaptive_windows,
