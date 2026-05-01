@@ -1081,8 +1081,6 @@ def _filter_supported_discharge_windows(
         if duration_minutes <= 0:
             continue
 
-        available_before_window_kwh = available_energy_kwh
-
         while charge_index < len(charge_periods) and charge_periods[charge_index][1] <= effective_start:
             charge_start, charge_end, charge_power = charge_periods[charge_index]
             charge_duration = int((charge_end - charge_start).total_seconds() / 60)
@@ -1090,6 +1088,8 @@ def _filter_supported_discharge_windows(
             available_energy_kwh += charge_energy_kwh
             charged_before_start_kwh += charge_energy_kwh
             charge_index += 1
+
+        available_before_window_kwh = available_energy_kwh
 
         planned_power = calculate_rank_scaled_power(
             rank,
