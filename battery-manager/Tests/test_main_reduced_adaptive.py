@@ -1782,3 +1782,95 @@ def test_max_soc_stabilizer_overrides_passive_solar_and_resumes_gap(monkeypatch)
     assert published[-1][0] == passive_gap_schedule
     assert state.max_soc_stabilizer_until is None
     assert state.passive_gap_active is True
+
+
+def test_adaptive_regen_triggers_when_soc_below_conservative(monkeypatch):
+    """Regression: SOC below conservative_soc but above min_soc must still trigger
+    adaptive schedule regeneration when price is in the adaptive band.
+
+    Before the fix _should_regenerate_live_schedule used is_conservative=True, so
+    it returned None (no regen) and the monitor settled on idle instead of starting
+    adaptive discharge.
+    """
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["conservative_soc"] = 25
+    config["soc"]["min_soc"] = 5
+    config["timing"]["schedule_regen_cooldown_seconds"] = 0
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    # No active discharge period in the current schedule
+    state = bm_main.RuntimeState(
+        schedule={"charge": [], "discharge": []},
+        published_schedule={"charge": [], "discharge": []},
+        schedule_generated_at=now - timedelta(minutes=10),
+        last_schedule_publish=now - timedelta(minutes=10),
+    )
+
+    current_entry = {
+        "start": now.isoformat(),
+        "end": (now + timedelta(hours=1)).isoformat(),
+        "price": 0.30,
+    }
+    regenerated_schedule = {
+        "charge": [],
+        "discharge": [
+            {
+                "start": now.isoformat(),
+                "duration": 60,
+                "power": 0,
+                "window_type": "adaptive",
+            }
+        ],
+    }
+    # SOC is 24% — below conservative_soc (25%) but above min_soc (5%)
+    sensor_values = {
+        config["entities"]["soc_entity"]: 24.0,
+        config["entities"]["grid_power_entity"]: 300.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 350.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 12.0,
+    }
+
+    regen_calls = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(
+        bm_main,
+        "get_current_price_entry",
+        lambda _curve, _now, _interval: current_entry,
+    )
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "adaptive")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bm_main, "_publish_schedule", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        bm_main,
+        "generate_schedule",
+        lambda *_args, **_kwargs: (regen_calls.append(True), regenerated_schedule)[1],
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
+    )
+
+    assert regen_calls, (
+        "Expected adaptive schedule regeneration when SOC is below conservative_soc "
+        "but above min_soc during adaptive price band"
+    )

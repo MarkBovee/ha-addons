@@ -688,7 +688,10 @@ def _should_regenerate_live_schedule(
 
     min_soc = float(config["soc"].get("min_soc", 5))
     conservative_soc = float(config["soc"].get("conservative_soc", min_soc))
-    if can_discharge(soc, min_soc, conservative_soc, True):
+    # Use is_conservative=False: adaptive discharge is permitted even below
+    # conservative_soc (it targets grid≈0W, not full scheduled power).
+    # Only hard min_soc should block it.
+    if can_discharge(soc, min_soc, conservative_soc, False):
         return "adaptive"
 
     return None
