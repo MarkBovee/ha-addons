@@ -1913,7 +1913,8 @@ def generate_schedule(
             "forecast_solar_kwh": forecast_solar_kwh,
         })
 
-    discharge_not_before = interval_start
+    now_minute = now.replace(second=0, microsecond=0)
+    discharge_not_before = max(interval_start, now_minute)
     if precharge_until is not None:
         discharge_not_before = max(discharge_not_before, precharge_until)
     if sell_wait_decision:
