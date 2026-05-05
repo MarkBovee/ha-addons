@@ -120,7 +120,6 @@ DEFAULT_CONFIG = {
     "soc": {
         "min_soc": 5,
         "conservative_soc": 40,
-        "target_eod_soc": 20,
         "max_soc": 100,
         "battery_capacity_kwh": 25,
         "sell_buffer_enabled": True,
@@ -326,8 +325,7 @@ def _get_sell_window_reserve_floor_soc(config: Dict[str, Any]) -> float:
     soc_cfg = config.get("soc", {})
     min_soc = float(soc_cfg.get("min_soc", 5))
     conservative_soc = float(soc_cfg.get("conservative_soc", min_soc))
-    target_eod_soc = float(soc_cfg.get("target_eod_soc", min_soc))
-    return min(100.0, max(min_soc, conservative_soc, target_eod_soc))
+    return min(100.0, max(min_soc, conservative_soc))
 
 
 def _get_first_available_entity(ha_api: HomeAssistantApi, entity_ids: List[str]) -> Optional[Dict[str, Any]]:
@@ -1046,7 +1044,6 @@ def _filter_supported_discharge_windows(
     soc_cfg = config["soc"]
     min_soc = float(soc_cfg.get("min_soc", 5))
     conservative_soc = float(soc_cfg.get("conservative_soc", min_soc))
-    target_eod_soc = float(soc_cfg.get("target_eod_soc", min_soc))
     reserve_floor_soc = _get_sell_window_reserve_floor_soc(config)
 
     base_available_energy_kwh = max(0.0, (float(soc) - reserve_floor_soc) / 100.0 * battery_capacity_kwh)
@@ -1114,7 +1111,7 @@ def _filter_supported_discharge_windows(
             partial_window["end"] = effective_start + timedelta(minutes=supported_duration_minutes)
             partial_energy_kwh = _period_energy_kwh(planned_power, supported_duration_minutes)
             logger.info(
-                "✂️ Truncating discharge window %s @€%.3f to %dm: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% reserve floor [min %.1f%%, conservative %.1f%%, target EOD %.1f%%], scheduled charge +%.2fkWh, earlier discharge -%.2fkWh)",
+                "✂️ Truncating discharge window %s @€%.3f to %dm: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% reserve floor [min %.1f%%, conservative %.1f%%], scheduled charge +%.2fkWh, earlier discharge -%.2fkWh)",
                 effective_start.astimezone().strftime("%H:%M"),
                 float(window.get("avg_price", 0.0)),
                 supported_duration_minutes,
@@ -1125,7 +1122,6 @@ def _filter_supported_discharge_windows(
                 reserve_floor_soc,
                 min_soc,
                 conservative_soc,
-                target_eod_soc,
                 charged_before_start_kwh,
                 reserved_before_start_kwh,
             )
@@ -1135,7 +1131,7 @@ def _filter_supported_discharge_windows(
             continue
 
         logger.info(
-            "⛔ Skipping discharge window %s @€%.3f: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% reserve floor [min %.1f%%, conservative %.1f%%, target EOD %.1f%%], scheduled charge +%.2fkWh, earlier discharge -%.2fkWh)",
+            "⛔ Skipping discharge window %s @€%.3f: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% reserve floor [min %.1f%%, conservative %.1f%%], scheduled charge +%.2fkWh, earlier discharge -%.2fkWh)",
             effective_start.astimezone().strftime("%H:%M"),
             float(window.get("avg_price", 0.0)),
             required_energy_kwh,
@@ -1145,7 +1141,6 @@ def _filter_supported_discharge_windows(
             reserve_floor_soc,
             min_soc,
             conservative_soc,
-            target_eod_soc,
             charged_before_start_kwh,
             reserved_before_start_kwh,
         )

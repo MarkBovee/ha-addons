@@ -201,7 +201,6 @@ class TestGenerateScheduleNegativePrice:
         config["adaptive"]["enabled"] = False
         config["soc"]["min_soc"] = 5
         config["soc"]["conservative_soc"] = 20
-        config["soc"]["target_eod_soc"] = 10
         config["soc"]["max_soc"] = 99
         config["soc"]["battery_capacity_kwh"] = 25
         config["soc"]["sell_buffer_enabled"] = False

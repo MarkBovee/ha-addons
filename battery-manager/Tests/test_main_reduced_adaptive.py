@@ -300,7 +300,6 @@ def test_discharge_feasibility_truncates_second_window_to_thirty_minutes():
     config["soc"]["battery_capacity_kwh"] = 20
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 5
-    config["soc"]["target_eod_soc"] = 5
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
 
@@ -339,7 +338,6 @@ def test_discharge_feasibility_truncates_to_one_point_five_hours_on_conservative
     config["soc"]["battery_capacity_kwh"] = 20
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 40
-    config["soc"]["target_eod_soc"] = 20
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_scaled_power"] = 8000
 
@@ -366,12 +364,11 @@ def test_discharge_feasibility_truncates_to_one_point_five_hours_on_conservative
     assert feasible[0]["end"] - feasible[0]["start"] == timedelta(minutes=90)
 
 
-def test_discharge_feasibility_respects_target_eod_soc_floor():
+def test_discharge_feasibility_respects_conservative_soc_floor():
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["battery_capacity_kwh"] = 10
     config["soc"]["min_soc"] = 5
-    config["soc"]["conservative_soc"] = 20
-    config["soc"]["target_eod_soc"] = 60
+    config["soc"]["conservative_soc"] = 60
     config["power"]["max_discharge_power"] = 5000
     config["power"]["min_scaled_power"] = 5000
 
@@ -408,7 +405,6 @@ def test_discharge_feasibility_price_order_does_not_starve_earlier_time_window()
     config["soc"]["battery_capacity_kwh"] = 25
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 25
-    config["soc"]["target_eod_soc"] = 20
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
 
@@ -1182,7 +1178,7 @@ def test_supported_discharge_skip_log_includes_energy_budget_breakdown(caplog):
     assert "needs 15.00kWh" in skip_message
     assert "only 3.00kWh available before start" in skip_message
     assert "SOC 100.0% => 15.00kWh usable above 40.0% reserve floor" in skip_message
-    assert "min 5.0%, conservative 40.0%, target EOD 20.0%" in skip_message
+    assert "min 5.0%, conservative 40.0%" in skip_message
     assert "scheduled charge +10.00kWh" in skip_message
     assert "earlier discharge -22.00kWh" in skip_message
     assert feasible[2]["end"] - feasible[2]["start"] == timedelta(minutes=45)

@@ -14,7 +14,6 @@ export MIN_DISCHARGE_POWER=$(bashio::config 'power.min_discharge_power' '4000')
 
 export MIN_SOC=$(bashio::config 'soc.min_soc' '5')
 export CONSERVATIVE_SOC=$(bashio::config 'soc.conservative_soc' '40')
-export TARGET_EOD_SOC=$(bashio::config 'soc.target_eod_soc' '20')
 
 export TOP_X_CHARGE_HOURS=$(bashio::config 'heuristics.top_x_charge_hours' '3')
 export TOP_X_DISCHARGE_HOURS=$(bashio::config 'heuristics.top_x_discharge_hours' '2')
