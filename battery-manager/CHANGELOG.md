@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.66 — 2026-05-10
+- **Fix: Charge window selection uses exact slot timestamps** — Previously, the price ceiling for the top-X cheapest charge slots was computed as `max(selected prices)`, admitting all hours at or below that price. If the 3rd-cheapest slot was €0.21 but 6 hours were at €0.13, all 7 hours qualified. Now the exact slot timestamps are matched (same approach discharge already used), so only the genuinely cheapest N slots are included as charge windows.
+
 ## 0.8.65 — 2026-05-10
 - **Fix: Charge scheduling spreads across the full cheap window** — The schedule builder now emits one API charge period per consecutive cheap window instead of cherry-picking up to 3 individual 1-hour slots. Previously, `top_x_charge_hours=3` capped scheduling to three 1-hour slots ranked by price, so a 7-hour block of roughly equal cheap prices was either only partially charged (3 of the 7 hours) or skipped if tomorrow's individual slots ranked slightly higher. Now each consecutive cheap window uses a single inverter API slot covering the full window duration, leaving the remaining API slots for subsequent windows (today's block + tomorrow's block both fit, using 2 of the 3 available slots).
 
