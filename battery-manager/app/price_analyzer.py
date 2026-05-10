@@ -234,6 +234,35 @@ def get_current_period_rank(
     return None
 
 
+def find_top_x_charge_starts(
+    import_curve: Sequence[dict],
+    top_x_charge: int,
+) -> Set[str]:
+    """Return exact import-curve start timestamps for the cheapest top-X charge slots.
+
+    Uses the same slot selection as ``calculate_price_ranges`` so that the charge
+    window classification in ``find_upcoming_windows`` is strictly limited to those
+    N slots rather than to all slots at-or-below the Nth price. This prevents a
+    single expensive slot from expanding the price ceiling and pulling in hours that
+    should not be charged (e.g. top-3 with prices [0.13, 0.13, 0.21] would otherwise
+    allow all hours ≤ 0.21 to qualify, even when six cheaper alternatives exist).
+    """
+
+    if not import_curve or top_x_charge <= 0:
+        return set()
+
+    points = _to_price_points(import_curve)
+    selected = _select_top(points, top_x=top_x_charge, reverse=False)
+
+    starts: Set[str] = set()
+    for point in selected:
+        if isinstance(point.value, dict):
+            start = point.value.get("start")
+            if isinstance(start, str) and start:
+                starts.add(start)
+    return starts
+
+
 def find_top_x_charge_periods(prices: Sequence[Union[float, int, dict]], top_x: int) -> List[PricePoint]:
     """Return the cheapest Top X periods for charging.
 

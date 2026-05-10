@@ -523,6 +523,8 @@ def find_upcoming_windows(
     discharge_slot_starts: Optional[Set[str]] = None,
     tomorrow_discharge_slot_starts: Optional[Set[str]] = None,
     adaptive_enabled: bool = True,
+    charge_slot_starts: Optional[Set[str]] = None,
+    tomorrow_charge_slot_starts: Optional[Set[str]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Scan full price curves and find all upcoming charge/discharge/adaptive windows.
 
@@ -589,24 +591,47 @@ def find_upcoming_windows(
             if is_tomorrow and tomorrow_discharge_slot_starts is not None
             else discharge_slot_starts
         )
+        effective_charge_starts = (
+            tomorrow_charge_slot_starts
+            if is_tomorrow and tomorrow_charge_slot_starts is not None
+            else charge_slot_starts
+        )
 
         # Negative import prices always trigger charging regardless of top-X range.
         # The grid is paying to consume; we always want to charge at these prices.
-        is_in_load_range = effective_load and effective_load.min_price <= import_price <= effective_load.max_price
-        if import_price < 0 or is_in_load_range:
+        if import_price < 0:
             charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
-        elif effective_discharge_starts is not None:
-            if start_str in effective_discharge_starts:
+        elif effective_charge_starts is not None:
+            # Exact slot matching: only the N cheapest slots qualify, so an expensive
+            # slot does not expand the price ceiling and pull in cheaper alternatives.
+            if start_str in effective_charge_starts:
+                charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
+            elif effective_discharge_starts is not None:
+                if start_str in effective_discharge_starts:
+                    discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
+            elif effective_discharge and effective_discharge.min_price <= export_price <= effective_discharge.max_price:
                 discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
-        elif effective_discharge and effective_discharge.min_price <= export_price <= effective_discharge.max_price:
-            discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
-        elif (
-            adaptive_enabled
-            and adaptive_price_threshold is not None
-            and import_price >= adaptive_price_threshold
-        ):
-            # Above passive threshold but not in load/discharge — adaptive discharge
-            adaptive_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
+            elif (
+                adaptive_enabled
+                and adaptive_price_threshold is not None
+                and import_price >= adaptive_price_threshold
+            ):
+                adaptive_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
+        else:
+            is_in_load_range = effective_load and effective_load.min_price <= import_price <= effective_load.max_price
+            if is_in_load_range:
+                charge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
+            elif effective_discharge_starts is not None:
+                if start_str in effective_discharge_starts:
+                    discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
+            elif effective_discharge and effective_discharge.min_price <= export_price <= effective_discharge.max_price:
+                discharge_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": export_price})
+            elif (
+                adaptive_enabled
+                and adaptive_price_threshold is not None
+                and import_price >= adaptive_price_threshold
+            ):
+                adaptive_slots.append({"start_dt": start_dt, "end_dt": end_dt, "price": import_price})
 
     return {
         "charge": _group_consecutive_slots(charge_slots),

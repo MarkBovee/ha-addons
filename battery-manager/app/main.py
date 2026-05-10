@@ -28,6 +28,7 @@ from .price_analyzer import (
     calculate_top_x_count,
     detect_interval_minutes,
     find_profitable_discharge_starts,
+    find_top_x_charge_starts,
     get_current_period_rank,
     get_current_price_entry,
 )
@@ -1461,6 +1462,7 @@ def generate_schedule(
         top_x_discharge_count,
         min_profit,
     )
+    today_charge_slot_starts = find_top_x_charge_starts(range_import_curve, top_x_charge_count)
     # If adaptive mode is disabled via config, force adaptive_range to None
     # so we don't display it or schedule adaptive windows
     adaptive_enabled = config.get("adaptive", {}).get("enabled", True)
@@ -1534,6 +1536,7 @@ def generate_schedule(
     tomorrow_load: Optional[PriceRange] = None
     tomorrow_discharge: Optional[PriceRange] = None
     tomorrow_discharge_slot_starts: Optional[set[str]] = None
+    tomorrow_charge_slot_starts: Optional[set[str]] = None
 
     if tomorrow_import:
         tomorrow_export = tomorrow_import
@@ -1552,6 +1555,7 @@ def generate_schedule(
             top_x_discharge_count,
             min_profit,
         )
+        tomorrow_charge_slot_starts = find_top_x_charge_starts(tomorrow_import, top_x_charge_count)
         forecast_text = build_tomorrow_story(
             tomorrow_load, tomorrow_discharge, tomorrow_adaptive, tomorrow_import,
             adaptive_price_threshold=adaptive_price_threshold,
@@ -1593,6 +1597,8 @@ def generate_schedule(
         discharge_slot_starts=today_discharge_slot_starts,
         tomorrow_discharge_slot_starts=tomorrow_discharge_slot_starts,
         adaptive_enabled=adaptive_enabled,
+        charge_slot_starts=today_charge_slot_starts,
+        tomorrow_charge_slot_starts=tomorrow_charge_slot_starts,
     )
 
     sell_wait_diagnostics: Dict[str, Any] = {}
@@ -2138,6 +2144,8 @@ def generate_schedule(
         tomorrow_discharge_range=tomorrow_discharge,
         discharge_slot_starts=today_discharge_slot_starts,
         tomorrow_discharge_slot_starts=tomorrow_discharge_slot_starts,
+        charge_slot_starts=today_charge_slot_starts,
+        tomorrow_charge_slot_starts=tomorrow_charge_slot_starts,
         adaptive_enabled=adaptive_enabled,
     )
 
