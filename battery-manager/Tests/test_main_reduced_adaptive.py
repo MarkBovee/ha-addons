@@ -1261,7 +1261,9 @@ def test_generate_schedule_scales_charge_power_per_slot(monkeypatch):
     schedule = bm_main.generate_schedule(config, ha_api=cast(Any, object()), mqtt_client=None, state=state)
 
     assert published, "Expected schedule publish"
-    assert [period["power"] for period in schedule["charge"]] == [4000, 6000, 8000]
+    assert len(schedule["charge"]) == 1
+    assert schedule["charge"][0]["power"] == 8000
+    assert schedule["charge"][0]["duration"] == 180
 
 
 def test_generate_schedule_reduces_charge_power_with_remaining_solar(monkeypatch):
@@ -1360,8 +1362,9 @@ def test_generate_schedule_reduces_charge_power_with_remaining_solar(monkeypatch
     schedule = bm_main.generate_schedule(config, ha_api=cast(Any, object()), mqtt_client=None, state=state)
 
     assert published, "Expected schedule publish"
-    assert [period["power"] for period in schedule["charge"]] == [1000, 1000, 1000]
-    assert all(period["solar_aware"] is True for period in schedule["charge"])
+    assert len(schedule["charge"]) == 1
+    assert schedule["charge"][0]["power"] == 1000
+    assert schedule["charge"][0]["solar_aware"] is True
 
 
 def test_active_discharge_pauses_when_soc_unavailable(monkeypatch):

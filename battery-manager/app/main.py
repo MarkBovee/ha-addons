@@ -1624,18 +1624,6 @@ def generate_schedule(
         config,
     )
 
-    ranked_charge_slots = sorted(
-        [
-            slot
-            for window in upcoming_windows.get("charge", [])
-            for slot in _expand_charge_window_slots(window)
-        ],
-        key=lambda slot: (float(slot.get("price", 0.0)), slot["start"].isoformat()),
-    )
-    charge_slot_rank_by_start: Dict[str, int] = {}
-    for idx, slot in enumerate(ranked_charge_slots, start=1):
-        charge_slot_rank_by_start[slot["start"].isoformat()] = idx
-
     if state:
         state.sell_buffer_required_soc = buffer_required_soc
         state.sell_buffer_discharge_hours = buffer_discharge_hours
@@ -1723,7 +1711,6 @@ def generate_schedule(
     neg_price_enabled = config.get("negative_price_charging", {}).get("enabled", True)
     if not skip_charge:
         max_charge_power_w = config["power"]["max_charge_power"]
-        max_charge_rank = max(top_x_charge_count, 1)
 
         # --- Pass 1: Negative-price windows (price-proportional power, fill slots first) ---
         # The more negative the price, the harder the inverter charges:
@@ -1787,40 +1774,45 @@ def generate_schedule(
                     min_scaled_power,
                 )
 
-        # --- Pass 2: Regular charge windows (rank-scaled, fill remaining API slots) ---
-        for window in upcoming_windows["charge"]:
-            if neg_price_enabled and float(window.get("avg_price", 0.0)) < 0:
-                continue  # already handled in pass 1
+        # --- Pass 2: Regular charge windows — one record per consecutive window ---
+        # Consecutive cheap hours are merged into a single API period that covers the
+        # whole window, rather than cherry-picking the cheapest N individual slots.
+        # This prevents today's cheap block from being skipped because tomorrow's
+        # slightly-cheaper individual hours were ranked higher.
+        regular_charge_windows = sorted(
+            [
+                w for w in upcoming_windows["charge"]
+                if not (neg_price_enabled and float(w.get("avg_price", 0.0)) < 0)
+            ],
+            key=lambda w: (float(w.get("avg_price", 0.0)), w["start"].isoformat()),
+        )
+        max_window_rank = max(len(regular_charge_windows), 1)
+        for window_rank, window in enumerate(regular_charge_windows, start=1):
             if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
                 break
-            for slot in _expand_charge_window_slots(window):
-                if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
-                    break
-                start_dt = slot["start"]
-                end_dt = slot["end"]
-                if end_dt <= now:
-                    continue
-                effective_start = max(start_dt, interval_start)
-                duration = int((end_dt - effective_start).total_seconds() / 60)
-                if duration <= 0:
-                    continue
-                slot_rank = charge_slot_rank_by_start.get(start_dt.isoformat(), max_charge_rank)
-                slot_rank = max(1, min(slot_rank, max_charge_rank))
-                slot_power = calculate_rank_scaled_power(
-                    slot_rank,
-                    max_charge_rank,
-                    config["power"]["max_charge_power"],
-                    min_scaled_power,
-                )
-                charge_slot_records.append({
-                    "start": effective_start,
-                    "end": end_dt,
-                    "base_power": slot_power,
-                    "duration": duration,
-                    "window_type": "charge",
-                    "price": round(float(slot.get("price", 0.0)), 4),
-                    "is_negative_price": False,
-                })
+            start_dt = window["start"]
+            end_dt = window["end"]
+            if end_dt <= now:
+                continue
+            effective_start = max(start_dt, interval_start)
+            duration = int((end_dt - effective_start).total_seconds() / 60)
+            if duration <= 0:
+                continue
+            window_power = calculate_rank_scaled_power(
+                window_rank,
+                max_window_rank,
+                config["power"]["max_charge_power"],
+                min_scaled_power,
+            )
+            charge_slot_records.append({
+                "start": effective_start,
+                "end": end_dt,
+                "base_power": window_power,
+                "duration": duration,
+                "window_type": "charge",
+                "price": round(float(window.get("avg_price", 0.0)), 4),
+                "is_negative_price": False,
+            })
 
     solar_aware_cfg = config.get("solar_aware_charging", {})
     solar_aware_enabled = bool(solar_aware_cfg.get("enabled", True))
