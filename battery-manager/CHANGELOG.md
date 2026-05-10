@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.66 — 2026-05-10
+## 0.8.70 — 2026-05-10
 - **Fix: Charge window selection uses exact slot timestamps** — Previously, the price ceiling for the top-X cheapest charge slots was computed as `max(selected prices)`, admitting all hours at or below that price. If the 3rd-cheapest slot was €0.21 but 6 hours were at €0.13, all 7 hours qualified. Now the exact slot timestamps are matched (same approach discharge already used), so only the genuinely cheapest N slots are included as charge windows.
 
 ## 0.8.65 — 2026-05-10
