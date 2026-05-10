@@ -115,7 +115,10 @@ Discharge windows are prioritized: profitable sell windows fill slots first, ada
 5. Find upcoming windows (`find_upcoming_windows`) → charge / discharge / adaptive
 6. Apply sell-wait heuristic (defer discharge if better morning window exists)
 7. Calculate dynamic sell-buffer SOC; add pre-charge if needed
-8. Build `charge_schedule`: expand slots, apply solar-aware power reduction
+8. Build `charge_schedule`:
+   - **Pass 1**: Negative-price windows → one API slot per window, power proportional to depth of negative price
+   - **Pass 2**: Regular cheap windows → one API slot per *consecutive window* (not per individual slot); windows ranked by `avg_price` and rank-scaled power applied; this ensures a 7-hour cheap block is covered by a single long period rather than only its 3 cheapest individual hours
+   - Apply solar-aware power reduction across resulting records
 9. Build `discharge_schedule`: rank-scale power, filter by SOC feasibility
 10. Fill remaining API slots with adaptive windows
 11. Add current-interval adaptive fallback if price is adaptive and no active period

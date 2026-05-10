@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.65 — 2026-05-10
+- **Fix: Charge scheduling spreads across the full cheap window** — The schedule builder now emits one API charge period per consecutive cheap window instead of cherry-picking up to 3 individual 1-hour slots. Previously, `top_x_charge_hours=3` capped scheduling to three 1-hour slots ranked by price, so a 7-hour block of roughly equal cheap prices was either only partially charged (3 of the 7 hours) or skipped if tomorrow's individual slots ranked slightly higher. Now each consecutive cheap window uses a single inverter API slot covering the full window duration, leaving the remaining API slots for subsequent windows (today's block + tomorrow's block both fit, using 2 of the 3 available slots).
+
 ## 0.8.64 — 2026-05-01
 - **Fix: Low-SOC discharge band downgrades to adaptive during schedule generation** — When the current interval lands in the profitable discharge band but SOC is already at or below `soc.conservative_soc`, `generate_schedule()` now downgrades the live interval to adaptive before publishing the schedule. That keeps the current adaptive fallback slot in place instead of republishing an empty active window and idling until the next charge slot.
 
