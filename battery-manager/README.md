@@ -62,7 +62,7 @@ Key options (defaults in config.yaml):
 - **soc.sell_buffer_rounding_step_pct**: round calculated sell-buffer SOC to nearest step (default 10%)
 - **soc.sell_buffer_activation_hours_before_sell**: only activate sell-buffer/precharge this many hours before first planned sell window (default 3)
 - **heuristics.top_x_charge_hours**: cheapest periods to charge
-- **heuristics.top_x_discharge_hours**: most expensive periods to discharge
+- **heuristics.top_x_discharge_hours**: hard maximum number of most expensive periods to discharge
 - **passive_solar.enabled**: enable 0W charge gap on excess solar (suppressed during active sell windows; the built-in passive-gap fallback stays allowed)
 - **passive_solar.entry_threshold**: grid export threshold to enter passive mode (W, default 1000)
 - **passive_solar.exit_threshold**: grid import threshold to exit passive mode (W, default 200)
@@ -76,7 +76,7 @@ Key options (defaults in config.yaml):
 - **heuristics.sell_wait_morning_start_hour**: local-hour start (inclusive) for preferred deferred sell window
 - **heuristics.sell_wait_morning_end_hour**: local-hour end (exclusive) for preferred deferred sell window
 - **temperature_based_discharge.enabled**: enable temperature mapping
-- **temperature_based_discharge.thresholds**: temperature → discharge hours mapping; `discharge_hours` may be fractional (for example `1.5` or `2.5`)
+- **temperature_based_discharge.thresholds**: temperature → discharge hours mapping; `discharge_hours` may be fractional (for example `1.5` or `2.5`) and can reduce profitable discharge selection below `heuristics.top_x_discharge_hours`, but never expand it above that configured cap
 - **ev_charger.enabled**: enable EV charger integration
 - **ev_charger.charging_threshold**: EV charging threshold (W)
 - **ev_charger.entity_id**: EV charger power sensor

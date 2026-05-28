@@ -329,6 +329,25 @@ def _get_sell_window_reserve_floor_soc(config: Dict[str, Any]) -> float:
     return min(100.0, max(min_soc, conservative_soc))
 
 
+def _get_effective_discharge_hours(
+    config: Dict[str, Any],
+    temperature: Optional[float],
+) -> tuple[float, Optional[float]]:
+    """Return effective profitable discharge hours, capped by the configured top-X."""
+
+    configured_hours = float(config["heuristics"].get("top_x_discharge_hours", 0))
+    if not config["temperature_based_discharge"].get("enabled", False):
+        return configured_hours, None
+
+    temperature_hours = float(
+        get_discharge_hours(
+            temperature,
+            config["temperature_based_discharge"]["thresholds"],
+        )
+    )
+    return min(configured_hours, temperature_hours), temperature_hours
+
+
 def _get_first_available_entity(ha_api: HomeAssistantApi, entity_ids: List[str]) -> Optional[Dict[str, Any]]:
     for entity_id in entity_ids:
         state = _get_entity_state(ha_api, entity_id)
@@ -1422,7 +1441,8 @@ def generate_schedule(
     interval_start, interval_end = _interval_window(now, interval_minutes)
 
     top_x_charge_hours = config["heuristics"]["top_x_charge_hours"]
-    top_x_discharge_hours = config["heuristics"]["top_x_discharge_hours"]
+    configured_discharge_hours = float(config["heuristics"]["top_x_discharge_hours"])
+    top_x_discharge_hours = configured_discharge_hours
     min_profit = config["heuristics"].get("min_profit_threshold", 0.1)
     overnight_threshold = config["heuristics"].get("overnight_wait_threshold", 0.02)
 
@@ -1433,11 +1453,16 @@ def generate_schedule(
         if temperature is None and state and not state.warned_missing_temperature:
             logger.warning("⚠️ Temperature sensor unavailable, using default discharge hours")
             state.warned_missing_temperature = True
-        top_x_discharge_hours = get_discharge_hours(
+        top_x_discharge_hours, temperature_discharge_hours = _get_effective_discharge_hours(
+            config,
             temperature,
-            config["temperature_based_discharge"]["thresholds"],
         )
-        logger.info("  Effective discharge hours from temperature: %.2f", top_x_discharge_hours)
+        logger.info(
+            "  Temperature discharge hours: %.2f | configured cap: %.2f | effective: %.2f",
+            temperature_discharge_hours,
+            configured_discharge_hours,
+            top_x_discharge_hours,
+        )
 
     top_x_charge_count = calculate_top_x_count(top_x_charge_hours, interval_minutes)
     top_x_discharge_count = calculate_discharge_top_x_count(top_x_discharge_hours, interval_minutes)
@@ -2351,12 +2376,7 @@ def monitor_and_adjust_active_period(
     # Always fetch temperature for status logging and potential heuristics
     temperature = _get_sensor_float(ha_api, config["entities"]["temperature_entity"])
 
-    top_x_discharge_hours = config["heuristics"]["top_x_discharge_hours"]
-    if config["temperature_based_discharge"]["enabled"]:
-        top_x_discharge_hours = get_discharge_hours(
-            temperature,
-            config["temperature_based_discharge"]["thresholds"],
-        )
+    top_x_discharge_hours, _ = _get_effective_discharge_hours(config, temperature)
     top_x_discharge_count = calculate_discharge_top_x_count(top_x_discharge_hours, interval_minutes)
 
     min_profit = config["heuristics"].get("min_profit_threshold", 0.1)

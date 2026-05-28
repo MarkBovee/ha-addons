@@ -451,6 +451,137 @@ def test_discharge_feasibility_price_order_does_not_starve_earlier_time_window()
     assert duration_today >= 120, f"Today's window was wrongly truncated to {duration_today:.0f} min"
 
 
+def test_generate_schedule_uses_exact_top_discharge_hours_when_soc_supports_them(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["dry_run"] = True
+    config["adaptive"]["enabled"] = False
+    config["negative_price_charging"]["enabled"] = False
+    config["solar_aware_charging"]["enabled"] = False
+    config["passive_solar"]["enabled"] = False
+    config["temperature_based_discharge"]["enabled"] = False
+    config["soc"]["battery_capacity_kwh"] = 25
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 30
+    config["soc"]["sell_buffer_enabled"] = False
+    config["power"]["max_discharge_power"] = 8000
+    config["power"]["min_discharge_power"] = 4000
+    config["power"]["min_scaled_power"] = 4000
+    config["heuristics"]["top_x_charge_hours"] = 1
+    config["heuristics"]["top_x_discharge_hours"] = 2
+    config["heuristics"]["min_profit_threshold"] = 0.10
+    config["heuristics"]["sell_wait_for_better_morning_enabled"] = False
+    config["heuristics"]["adaptive_price_threshold"] = 1.0
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    curve_start = now + timedelta(hours=1)
+
+    import_prices = [0.20, 0.21, 0.22, 0.23, 0.24, 0.25]
+    export_prices = [0.30, 0.31, 0.41, 0.58, 0.57, 0.32]
+
+    import_curve = [
+        {
+            "start": (curve_start + timedelta(hours=index)).isoformat(),
+            "end": (curve_start + timedelta(hours=index + 1)).isoformat(),
+            "price": price,
+        }
+        for index, price in enumerate(import_prices)
+    ]
+    export_curve = [
+        {
+            "start": (curve_start + timedelta(hours=index)).isoformat(),
+            "end": (curve_start + timedelta(hours=index + 1)).isoformat(),
+            "price": price,
+        }
+        for index, price in enumerate(export_prices)
+    ]
+
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _e: import_curve)
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _e: export_curve)
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, _e: 12.0)
+    monkeypatch.setattr(bm_main, "_get_schedule_generation_soc", lambda *_a, **_kw: 99.0)
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_a, **_kw: None)
+
+    schedule = bm_main.generate_schedule(config, cast(Any, object()), None)
+
+    discharge = schedule.get("discharge", [])
+    assert len(discharge) == 1
+
+    expected_start = curve_start + timedelta(hours=3)
+    assert discharge[0]["start"] == expected_start.isoformat()
+    assert discharge[0]["duration"] == 120
+    assert discharge[0]["window_type"] == "discharge"
+
+
+def test_generate_schedule_caps_temperature_discharge_hours_at_configured_top_x(monkeypatch):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["dry_run"] = True
+    config["adaptive"]["enabled"] = False
+    config["negative_price_charging"]["enabled"] = False
+    config["solar_aware_charging"]["enabled"] = False
+    config["passive_solar"]["enabled"] = False
+    config["soc"]["battery_capacity_kwh"] = 25
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 30
+    config["soc"]["sell_buffer_enabled"] = False
+    config["power"]["max_discharge_power"] = 8000
+    config["power"]["min_discharge_power"] = 4000
+    config["power"]["min_scaled_power"] = 4000
+    config["heuristics"]["top_x_charge_hours"] = 1
+    config["heuristics"]["top_x_discharge_hours"] = 2
+    config["heuristics"]["min_profit_threshold"] = 0.10
+    config["heuristics"]["sell_wait_for_better_morning_enabled"] = False
+    config["heuristics"]["adaptive_price_threshold"] = 1.0
+    config["temperature_based_discharge"]["enabled"] = True
+    config["temperature_based_discharge"]["thresholds"] = [
+        {"temp_max": 10, "discharge_hours": 1},
+        {"temp_max": 999, "discharge_hours": 3},
+    ]
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    curve_start = now + timedelta(hours=1)
+
+    import_prices = [0.20, 0.21, 0.22, 0.23, 0.24, 0.25]
+    export_prices = [0.30, 0.31, 0.41, 0.58, 0.57, 0.32]
+
+    import_curve = [
+        {
+            "start": (curve_start + timedelta(hours=index)).isoformat(),
+            "end": (curve_start + timedelta(hours=index + 1)).isoformat(),
+            "price": price,
+        }
+        for index, price in enumerate(import_prices)
+    ]
+    export_curve = [
+        {
+            "start": (curve_start + timedelta(hours=index)).isoformat(),
+            "end": (curve_start + timedelta(hours=index + 1)).isoformat(),
+            "price": price,
+        }
+        for index, price in enumerate(export_prices)
+    ]
+
+    def _sensor_value(_ha, entity_id):
+        if entity_id == config["entities"]["temperature_entity"]:
+            return 20.0
+        return 12.0
+
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _e: import_curve)
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _e: export_curve)
+    monkeypatch.setattr(bm_main, "_get_sensor_float", _sensor_value)
+    monkeypatch.setattr(bm_main, "_get_schedule_generation_soc", lambda *_a, **_kw: 99.0)
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_a, **_kw: None)
+
+    schedule = bm_main.generate_schedule(config, cast(Any, object()), None)
+
+    discharge = schedule.get("discharge", [])
+    assert len(discharge) == 1
+
+    expected_start = curve_start + timedelta(hours=3)
+    assert discharge[0]["start"] == expected_start.isoformat()
+    assert discharge[0]["duration"] == 120
+    assert discharge[0]["window_type"] == "discharge"
+
+
 def test_monitor_regenerates_schedule_for_live_adaptive_gap(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["timing"]["schedule_regen_cooldown_seconds"] = 0

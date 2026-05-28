@@ -109,7 +109,7 @@ Discharge windows are prioritized: profitable sell windows fill slots first, ada
 ## Window Selection Pipeline (`generate_schedule`)
 
 1. Detect interval granularity (`detect_interval_minutes`)
-2. Calculate temperature-adjusted discharge hours
+2. Calculate temperature-adjusted discharge hours, capped by `heuristics.top_x_discharge_hours`
 3. Split curve by date (today / tomorrow)
 4. Calculate price ranges per day (`calculate_price_ranges`)
 5. Find upcoming windows (`find_upcoming_windows`) → charge / discharge / adaptive
@@ -213,7 +213,7 @@ When `price_range == "adaptive"` and a discharge period is active:
 | `power` | `max_charge_power`, `max_discharge_power`, `min_discharge_power`, `min_scaled_power` |
 | `soc` | `min_soc`, `conservative_soc`, `target_eod_soc`, `max_soc`, `battery_capacity_kwh`, sell-buffer params |
 | `heuristics` | `adaptive_price_threshold`, `top_x_charge_hours`, `top_x_discharge_hours`, `min_profit_threshold`, sell-wait params |
-| `temperature_based_discharge` | thresholds list: `temp_max` → `discharge_hours` |
+| `temperature_based_discharge` | thresholds list: `temp_max` → `discharge_hours`; may reduce profitable discharge hours below `heuristics.top_x_discharge_hours` but must not expand above that cap |
 | `passive_solar` | `enabled`, `entry_threshold`, `exit_threshold`, `negative_price_block_hours` |
 | `solar_aware_charging` | `enabled`, `forecast_safety_factor`, `min_charge_power` |
 | `negative_price_charging` | `enabled` |

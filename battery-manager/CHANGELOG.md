@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.71 — 2026-05-28
+- **Fix: Temperature discharge hours no longer expand sell selection above `top_x_discharge_hours`** — Warm-temperature thresholds can still reduce profitable discharge duration, but they now respect `heuristics.top_x_discharge_hours` as a hard maximum. This keeps schedule generation on the configured top sell hours (for example the best 2 evening hours) instead of stretching into earlier, lower-priced windows.
+
 ## 0.8.70 — 2026-05-10
 - **Fix: Charge window selection uses exact slot timestamps** — Previously, the price ceiling for the top-X cheapest charge slots was computed as `max(selected prices)`, admitting all hours at or below that price. If the 3rd-cheapest slot was €0.21 but 6 hours were at €0.13, all 7 hours qualified. Now the exact slot timestamps are matched (same approach discharge already used), so only the genuinely cheapest N slots are included as charge windows.
 
