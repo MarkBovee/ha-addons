@@ -2,6 +2,11 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.3.2] - 2026-05-29
+
+### Fixed
+- Prevented MQTT command callbacks from blocking the main Modbus polling loop, so live `battery_api_*` readings keep updating after schedule commands.
+
 ## [0.3.1] - 2026-05-29
 
 ### Fixed
