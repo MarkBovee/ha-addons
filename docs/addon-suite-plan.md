@@ -72,5 +72,4 @@ When implementing new add-ons:
 
 ## Related Documentation
 
-- [Repository Configuration](../repository.json) – Add-on registry
-
+- [Repository Configuration](../repository.yaml) – Home Assistant add-on registry

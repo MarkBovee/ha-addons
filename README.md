@@ -8,7 +8,8 @@ This repository contains multiple Home Assistant addons, each in its own subdire
 
 ```
 ha-addons/
-├── repository.json           # Repository metadata
+├── repository.yaml           # Home Assistant repository metadata
+├── repository.json           # Legacy repository metadata
 ├── README.md                 # This file
 ├── LICENSE                   # MIT License
 ├── run_addon.py              # Universal addon runner for local development
@@ -166,4 +167,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 For issues or questions, please open an issue on the [GitHub repository](https://github.com/MarkBovee/ha-addons).
-
