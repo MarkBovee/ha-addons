@@ -2,7 +2,7 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
-## [1.0.0] - 2026-05-29
+## [0.3.0] - 2026-05-29
 
 ### Changed
 - Relaxed the external schedule contract to accept up to 7 charge and 7 discharge periods.

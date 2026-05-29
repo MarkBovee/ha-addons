@@ -8,8 +8,7 @@ This repository contains multiple Home Assistant addons, each in its own subdire
 
 ```
 ha-addons/
-├── repository.yaml           # Home Assistant repository metadata
-├── repository.json           # Legacy repository metadata
+├── repository.json           # Repository metadata
 ├── README.md                 # This file
 ├── LICENSE                   # MIT License
 ├── run_addon.py              # Universal addon runner for local development
