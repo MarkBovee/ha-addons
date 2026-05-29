@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import threading
 import types
 from unittest.mock import MagicMock, patch
 
@@ -19,6 +20,7 @@ from app.main import BatteryApiAddon, _effective_poll_interval_seconds, validate
 from app.main import load_config
 from app.backends import ApiBatteryBackend, BackendContext, build_backend, ModbusEntityDiscovery, ModbusHaBatteryBackend
 from app.models import BatteryChargeType, ChargingPeriod
+from shared.ha_mqtt_discovery import MqttDiscovery
 
 
 def test_discharge_duration_clipped_at_end_of_day():
@@ -407,3 +409,28 @@ def test_wait_for_schedule_polls_until_match():
 
     assert actual == expected_schedule
     assert refresh_entities.call_count == 2
+
+
+def test_mqtt_command_callback_runs_off_network_thread():
+    discovery = object.__new__(MqttDiscovery)
+    discovery.addon_id = "battery_api"
+
+    callback_started = threading.Event()
+    callback_release = threading.Event()
+    callback_thread_name = []
+
+    def blocking_callback(payload):
+        callback_thread_name.append(threading.current_thread().name)
+        callback_started.set()
+        callback_release.wait(timeout=2)
+
+    discovery._command_callbacks = {"battery_api/text/schedule/set": blocking_callback}
+    message = types.SimpleNamespace(topic="battery_api/text/schedule/set", payload=b"{}")
+
+    discovery._on_message(None, None, message)
+
+    assert callback_started.wait(timeout=0.5)
+    assert callback_thread_name
+    assert callback_thread_name[0] != threading.current_thread().name
+
+    callback_release.set()

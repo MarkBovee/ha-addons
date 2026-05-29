@@ -776,17 +776,28 @@ class MqttDiscovery:
         self._command_callbacks[topic] = callback
         self._client.subscribe(topic, qos=1)
         logger.debug("Subscribed to command topic: %s", topic)
-    
+
+    def _run_command_callback(self, callback: callable, topic: str, payload: str):
+        """Run command callback outside the MQTT network thread."""
+        try:
+            callback(payload)
+        except Exception as e:
+            logger.error("Error handling command on %s: %s", topic, e)
+
     def _on_message(self, client, userdata, message):
         """Handle incoming MQTT messages."""
         topic = message.topic
         payload = message.payload.decode('utf-8')
         
         if hasattr(self, '_command_callbacks') and topic in self._command_callbacks:
-            try:
-                self._command_callbacks[topic](payload)
-            except Exception as e:
-                logger.error("Error handling command on %s: %s", topic, e)
+            callback = self._command_callbacks[topic]
+            thread_name = f"{getattr(self, 'addon_id', 'mqtt')}_cmd"
+            threading.Thread(
+                target=self._run_command_callback,
+                args=(callback, topic, payload),
+                daemon=True,
+                name=thread_name,
+            ).start()
 
     def update_state(self, component: str, object_id: str, state: str, attributes: Optional[Dict[str, Any]] = None) -> bool:
         """Update state for an existing entity.
