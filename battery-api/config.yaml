@@ -25,7 +25,6 @@ options:
   log_level: "info"
   simulation_mode: false
   modbus_inverter_power_w: 8000
-  modbus_entities: {}
   
   # Schedule settings
   schedule_days: "today"  # "today" = only current day, "all" = all days Mon-Sun
@@ -48,7 +47,6 @@ schema:
   log_level: list(debug|info|warning|error)?
   simulation_mode: bool?
   modbus_inverter_power_w: int(1000,30000)?
-  modbus_entities: dict?
   schedule_days: list(today|all)?
   # Advanced: MQTT settings (optional - auto-detects core-mosquitto by default)
   mqtt_host: str?
