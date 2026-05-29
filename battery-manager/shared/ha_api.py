@@ -239,6 +239,33 @@ class HomeAssistantApi:
         except Exception as e:
             logger.error("Exception getting state for %s: %s", entity_id, e)
             return None
+
+    def get_states(self) -> List[Dict]:
+        """Get all entity states from Home Assistant.
+
+        Returns:
+            List of state dictionaries, or empty list on error
+        """
+        try:
+            url = f"{self.base_url}/states"
+            response = requests.get(url, headers=self._headers, timeout=30)
+
+            if response.ok:
+                data = response.json()
+                if isinstance(data, list):
+                    return data
+                logger.warning("Unexpected /states payload type: %s", type(data).__name__)
+                return []
+
+            logger.warning(
+                "Failed to get all states: %d - %s",
+                response.status_code,
+                response.text[:200],
+            )
+            return []
+        except Exception as e:
+            logger.error("Exception getting all states: %s", e)
+            return []
     
     def _get_entity_state_fallback(self, entity_id: str) -> Optional[Dict]:
         """Fallback method to get entity state by fetching all states.
