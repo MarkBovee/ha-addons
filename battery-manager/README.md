@@ -42,6 +42,7 @@ Key options (defaults in config.yaml):
 - **entities.export_price_curve_entity**: export price curve sensor entity
 - **entities.remaining_solar_energy_entity**: remaining solar energy forecast for the rest of today
 - **entities.soc_entity**: battery SOC sensor
+- **entities.battery_api_status_entity**: battery-api provider/capability sensor used to discover active slot limits
 - **entities.grid_power_entity**: grid power sensor (import/export)
 - **entities.solar_power_entity**: solar production sensor
 - **entities.house_load_entity**: house load sensor
@@ -63,6 +64,7 @@ Key options (defaults in config.yaml):
 - **soc.sell_buffer_activation_hours_before_sell**: only activate sell-buffer/precharge this many hours before first planned sell window (default 3)
 - **heuristics.top_x_charge_hours**: cheapest periods to charge
 - **heuristics.top_x_discharge_hours**: hard maximum number of most expensive periods to discharge
+- Battery Manager reads `sensor.battery_api_api_status` capability attributes and adapts schedule slot usage to the active provider instead of assuming a fixed `3/6` contract.
 - **passive_solar.enabled**: enable 0W charge gap on excess solar (suppressed during active sell windows; the built-in passive-gap fallback stays allowed)
 - **passive_solar.entry_threshold**: grid export threshold to enter passive mode (W, default 1000)
 - **passive_solar.exit_threshold**: grid import threshold to exit passive mode (W, default 200)
@@ -109,6 +111,7 @@ All entities use `unique_id` for UI management and carry rich attributes (schedu
 - If morning sell postponement does not trigger, check logs for `Sell-wait skipped:` diagnostics (reason + evaluated thresholds).
 - If discharge pauses unexpectedly, verify SOC sensor freshness against `timing.max_soc_sensor_age_seconds`.
 - If EV charging keeps blocking discharge after Charge Amps updates stop, lower or verify `timing.max_ev_sensor_age_seconds` so stale charger power is ignored faster.
+- If fewer windows than expected are published, inspect `sensor.battery_api_api_status` attributes; Battery Manager now follows `capabilities.max_charge_periods` and `capabilities.max_discharge_periods` from Battery API.
 
 ## Development
 

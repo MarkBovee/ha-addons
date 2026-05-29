@@ -364,3 +364,33 @@ class TestGenerateScheduleNegativePrice:
         neg_windows = [p for p in schedule.get("charge", []) if p.get("window_type") == "negative_price_charge"]
         assert len(neg_windows) == 0, "When disabled, no negative_price_charge windows should appear"
 
+    def test_negative_price_windows_expand_to_provider_slot_limit(self, monkeypatch):
+        prices = [0.22, 0.21, 0.28, -0.30, -0.27, -0.24, -0.21, -0.18, -0.15,
+                  0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28]
+        curve = self._make_future_curve(prices)
+        config = self._make_config()
+
+        class _FakeHaApi:
+            def get_entity_state(self, entity_id):
+                if entity_id == config["entities"]["battery_api_status_entity"]:
+                    return {
+                        "state": "Connected",
+                        "attributes": {
+                            "capabilities": {
+                                "max_charge_periods": 7,
+                                "max_discharge_periods": 7,
+                            }
+                        },
+                    }
+                return None
+
+        monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _e: curve)
+        monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _e: curve)
+        monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, e: 60.0 if "soc" in e else 12.0)
+        monkeypatch.setattr(bm_main, "_get_schedule_generation_soc", lambda *_a, **_kw: 60.0)
+        monkeypatch.setattr(bm_main, "update_entity", lambda *_a, **_kw: None)
+
+        schedule = bm_main.generate_schedule(config, _FakeHaApi(), None)
+
+        neg_windows = [p for p in schedule.get("charge", []) if p.get("window_type") == "negative_price_charge"]
+        assert len(neg_windows) == 6

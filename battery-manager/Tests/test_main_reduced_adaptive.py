@@ -1106,6 +1106,34 @@ def test_generate_schedule_skips_unsupported_future_discharge_without_charge(mon
     assert schedule["discharge"] == []
 
 
+def test_schedule_slot_limits_follow_battery_api_capabilities():
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+
+    class _FakeHaApi:
+        def get_entity_state(self, entity_id):
+            assert entity_id == config["entities"]["battery_api_status_entity"]
+            return {
+                "state": "Connected",
+                "attributes": {
+                    "capabilities": {
+                        "max_charge_periods": 7,
+                        "max_discharge_periods": 7,
+                    }
+                },
+            }
+
+    assert bm_main._get_schedule_slot_limits(_FakeHaApi(), config) == (7, 7)
+
+
+def test_schedule_slot_limits_fallback_without_battery_api_status():
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+
+    assert bm_main._get_schedule_slot_limits(cast(Any, object()), config) == (
+        bm_main.MAX_CHARGE_PERIODS,
+        bm_main.MAX_DISCHARGE_PERIODS,
+    )
+
+
 def test_generate_schedule_keeps_future_discharge_when_charge_supports_it(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["temperature_based_discharge"]["enabled"] = False

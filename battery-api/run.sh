@@ -10,9 +10,11 @@ export SAJ_DEVICE_SERIAL=$(bashio::config 'device_serial_number')
 export SAJ_PLANT_UID=$(bashio::config 'plant_uid')
 
 # Export behavior settings
+export PROVIDER=$(bashio::config 'provider' 'api')
 export POLL_INTERVAL=$(bashio::config 'poll_interval_seconds' '60')
 export LOG_LEVEL=$(bashio::config 'log_level' 'info')
 export SIMULATION_MODE=$(bashio::config 'simulation_mode' 'false')
+export MODBUS_INVERTER_POWER_W=$(bashio::config 'modbus_inverter_power_w' '8000')
 
 # Export MQTT settings for Python app
 # Default: core-mosquitto (HA's built-in MQTT broker)
@@ -28,6 +30,7 @@ if bashio::config.exists 'mqtt_password' && bashio::config.has_value 'mqtt_passw
 fi
 
 bashio::log.info "SAJ Device: ${SAJ_DEVICE_SERIAL}"
+bashio::log.info "Provider: ${PROVIDER}"
 bashio::log.info "Poll interval: ${POLL_INTERVAL}s"
 bashio::log.info "Simulation mode: ${SIMULATION_MODE}"
 bashio::log.info "MQTT: ${MQTT_HOST}:${MQTT_PORT}"

@@ -27,20 +27,36 @@ from shared.ha_mqtt_discovery import (
 )
 
 # Import local modules
-from .saj_api import SajApiClient
-from .models import BatteryChargeType, ChargingPeriod, get_today_weekday_mask
+try:
+    from .models import BatteryChargeType, ChargingPeriod, get_today_weekday_mask
+    from .backends import BackendContext, build_backend
+except ImportError:
+    from models import BatteryChargeType, ChargingPeriod, get_today_weekday_mask
+    from backends import BackendContext, build_backend
 
 # Configure logging
 logger = setup_logging(name=__name__)
 
 # Battery API configuration defaults
 BA_CONFIG_DEFAULTS = {
+    'provider': 'api',
     'poll_interval_seconds': 60,
     'log_level': 'info',
     'simulation_mode': False,
+    'modbus_inverter_power_w': 8000,
+    'modbus_entities': {},
 }
 
-BA_REQUIRED_FIELDS = ['saj_username', 'saj_password', 'device_serial_number', 'plant_uid']
+MAX_SCHEDULE_PERIODS = 7
+
+BA_REQUIRED_FIELDS = []
+
+API_ENV_FALLBACKS = {
+    'saj_username': 'SAJ_USERNAME',
+    'saj_password': 'SAJ_PASSWORD',
+    'device_serial_number': 'SAJ_DEVICE_SERIAL',
+    'plant_uid': 'SAJ_PLANT_UID',
+}
 
 # Example schedule JSON for documentation
 SCHEDULE_EXAMPLE = '''{
@@ -75,13 +91,25 @@ def load_config() -> dict:
         defaults=BA_CONFIG_DEFAULTS,
         required_fields=BA_REQUIRED_FIELDS
     )
+
+    provider = str(config.get('provider', 'api')).lower()
+    if provider == 'api':
+        for field, env_key in API_ENV_FALLBACKS.items():
+            if not config.get(field):
+                env_value = os.getenv(env_key)
+                if env_value:
+                    config[field] = env_value
+        for field in API_ENV_FALLBACKS:
+            if not config.get(field):
+                raise KeyError(f"Required config field missing for provider=api: {field}")
     
     # Log level adjustment
     log_level = config.get('log_level', 'info').upper()
     if log_level in ('DEBUG', 'INFO', 'WARNING', 'ERROR'):
         logging.getLogger().setLevel(getattr(logging, log_level))
     
-    logger.info("Loaded configuration: device=%s, poll=%ds, simulation=%s",
+    logger.info("Loaded configuration: provider=%s, device=%s, poll=%ds, simulation=%s",
+                provider,
                 config.get('device_serial_number', 'unknown')[:8] + "...",
                 config['poll_interval_seconds'],
                 config.get('simulation_mode', False))
@@ -235,8 +263,10 @@ def validate_schedule(json_str: str) -> Dict[str, List[Dict[str, Any]]]:
         charge_list = schedule['charge']
         if not isinstance(charge_list, list):
             raise ScheduleValidationError("'charge' must be an array")
-        if len(charge_list) > 3:
-            raise ScheduleValidationError(f"Maximum 3 charge periods allowed (got {len(charge_list)})")
+        if len(charge_list) > MAX_SCHEDULE_PERIODS:
+            raise ScheduleValidationError(
+                f"Maximum {MAX_SCHEDULE_PERIODS} charge periods allowed (got {len(charge_list)})"
+            )
         for i, period in enumerate(charge_list):
             result['charge'].append(validate_period(period, i, 'charge'))
     
@@ -245,8 +275,10 @@ def validate_schedule(json_str: str) -> Dict[str, List[Dict[str, Any]]]:
         discharge_list = schedule['discharge']
         if not isinstance(discharge_list, list):
             raise ScheduleValidationError("'discharge' must be an array")
-        if len(discharge_list) > 6:
-            raise ScheduleValidationError(f"Maximum 6 discharge periods allowed (got {len(discharge_list)})")
+        if len(discharge_list) > MAX_SCHEDULE_PERIODS:
+            raise ScheduleValidationError(
+                f"Maximum {MAX_SCHEDULE_PERIODS} discharge periods allowed (got {len(discharge_list)})"
+            )
         for i, period in enumerate(discharge_list):
             result['discharge'].append(validate_period(period, i, 'discharge'))
     
@@ -317,19 +349,41 @@ class BatteryApiAddon:
             'plant_name': None,
             'inverter_model': None,
             'inverter_sn': None,
+            'provider': str(config.get('provider', 'api')),
+            'provider_capabilities': {},
+            'export_limit': None,
+            'battery_charge_power_limit': None,
+            'battery_discharge_power_limit': None,
+            'grid_charge_power_limit': None,
+            'grid_discharge_power_limit': None,
+            'battery_on_grid_discharge_depth': None,
+            'battery_off_grid_discharge_depth': None,
         }
-        
-        # Initialize SAJ API client
-        self.saj_client = SajApiClient(
-            username=config['saj_username'],
-            password=config['saj_password'],
-            device_serial=config['device_serial_number'],
-            plant_uid=config['plant_uid'],
+
+        self.backend_context = BackendContext(
+            config=self.config,
+            status=self.status,
             simulation_mode=self.simulation_mode,
+            battery_mode_setting=self.battery_mode_setting,
+            schedule_json=self.schedule_json,
+            validated_schedule=self.validated_schedule,
         )
+        self.backend = build_backend(self.backend_context)
         
         # MQTT Discovery client (initialized in setup)
         self.mqtt: Optional[MqttDiscovery] = None
+
+    def _sync_backend_context(self):
+        """Push mutable addon state into backend context."""
+        self.backend_context.battery_mode_setting = self.battery_mode_setting
+        self.backend_context.schedule_json = self.schedule_json
+        self.backend_context.validated_schedule = self.validated_schedule
+
+    def _sync_from_backend_context(self):
+        """Pull backend-updated state back into addon fields."""
+        self.battery_mode_setting = self.backend_context.battery_mode_setting
+        self.schedule_json = self.backend_context.schedule_json
+        self.validated_schedule = self.backend_context.validated_schedule
     
     def setup(self) -> bool:
         """Set up the add-on (MQTT, entities, etc.)."""
@@ -361,26 +415,18 @@ class BatteryApiAddon:
             logger.warning("MQTT setup failed: %s", e)
             self.mqtt = None
         
-        # Test SAJ API connection
-        if self.simulation_mode:
-            logger.info("SIMULATION MODE: SAJ API calls will be logged but not executed")
-            self.status['api_status'] = 'Simulation'
-            self.status['current_schedule'] = '{"mode": "simulation", "charge": [], "discharge": []}'
-        else:
-            try:
-                if self.saj_client.authenticate():
-                    logger.info("SAJ API authentication successful")
-                    self.status['api_status'] = 'Connected'
-                    # Fetch current schedule once at startup
-                    self._fetch_current_schedule()
-                else:
-                    logger.error("SAJ API authentication failed")
-                    self.status['api_status'] = 'Auth Failed'
-            except Exception as e:
-                logger.error("SAJ API connection error: %s", e)
-                self.status['api_status'] = f'Error: {e}'
-        
-        return True
+        self._sync_backend_context()
+        try:
+            ready = self.backend.setup()
+            self.status['provider_capabilities'] = self.backend.get_capabilities()
+            self._sync_from_backend_context()
+            if ready:
+                logger.info("Backend ready: provider=%s", self.backend.provider_name)
+            return ready
+        except Exception as e:
+            logger.error("Backend setup error: %s", e)
+            self.status['api_status'] = f'Error: {e}'
+            return False
     
     def _cleanup_old_entities(self):
         """Remove old/deprecated MQTT Discovery entities from previous versions.
@@ -423,7 +469,7 @@ class BatteryApiAddon:
         # Battery Mode Setting (select entity for mode control)
         self.mqtt.publish_select(
             SelectConfig(
-                object_id="battery_mode_setting",
+                object_id="battery_mode",
                 name="Battery Mode",
                 options=BATTERY_MODE_OPTIONS,
                 state=self.battery_mode_setting,
@@ -432,6 +478,23 @@ class BatteryApiAddon:
             ),
             command_callback=self._handle_mode_select,
         )
+
+        if self.status.get('provider_capabilities', {}).get('export_limit'):
+            from shared.ha_mqtt_discovery import NumberConfig
+
+            self.mqtt.publish_number(
+                NumberConfig(
+                    object_id="export_limit",
+                    name="Export Limit",
+                    min_value=0,
+                    max_value=1100,
+                    step=100,
+                    state=str(int(self.status.get('export_limit', 0) or 0)),
+                    icon="mdi:transmission-tower-export",
+                    entity_category="config",
+                ),
+                command_callback=self._handle_export_limit_input,
+            )
         
         # ===== Schedule Input Entity =====
         
@@ -537,6 +600,10 @@ class BatteryApiAddon:
                 state=self.status.get('api_status', 'unknown') or "unknown",
                 icon="mdi:api",
                 entity_category="diagnostic",
+                attributes={
+                    'provider': self.status.get('provider'),
+                    'capabilities': self.status.get('provider_capabilities', {}),
+                },
             )
         )
         
@@ -568,26 +635,41 @@ class BatteryApiAddon:
             # Store the setting
             self.battery_mode_setting = mode
             
-            # Apply to inverter
-            api_mode = BATTERY_MODE_API_MAP.get(mode, "self_consumption")
-            
-            if self.simulation_mode:
-                logger.info("SIMULATION: Would set mode to %s", mode)
-                self.status['api_status'] = 'Simulation'
-            else:
-                try:
-                    success = self.saj_client.set_battery_mode(api_mode)
-                    if success:
-                        self.status['api_status'] = 'Connected'
-                        logger.info("Mode set to %s successfully", mode)
-                    else:
-                        self.status['api_status'] = 'Mode Set Failed'
-                        logger.error("Failed to set mode to %s", mode)
-                except Exception as e:
-                    self.status['api_status'] = f'Error: {e}'
-                    logger.error("Mode setting error: %s", e)
+            self._sync_backend_context()
+            try:
+                success = self.backend.set_mode(mode)
+                self._sync_from_backend_context()
+                if success:
+                    self.status['api_status'] = 'Connected' if not self.simulation_mode else 'Simulation'
+                    logger.info("Mode set to %s successfully", mode)
+                else:
+                    self.status['api_status'] = 'Mode Set Failed'
+                    logger.error("Failed to set mode to %s", mode)
+            except Exception as e:
+                self.status['api_status'] = f'Error: {e}'
+                logger.error("Mode setting error: %s", e)
             
             # Update entities
+            self.update_entities()
+
+    def _handle_export_limit_input(self, value: float):
+        """Handle export limit input when provider supports it."""
+        export_limit = int(value)
+        logger.info("Export limit change requested: %s", export_limit)
+
+        with self._api_lock:
+            try:
+                success = self.backend.set_export_limit(export_limit)
+                if success:
+                    self.status['export_limit'] = export_limit
+                    self.status['api_status'] = 'Connected' if not self.simulation_mode else 'Simulation'
+                else:
+                    self.status['api_status'] = 'Export Limit Failed'
+                    logger.error("Failed to set export limit to %s", export_limit)
+            except Exception as e:
+                self.status['api_status'] = f'Error: {e}'
+                logger.error("Export limit setting error: %s", e)
+
             self.update_entities()
 
     def _format_periods_compact(self, validated: dict) -> str:
@@ -668,31 +750,22 @@ class BatteryApiAddon:
             
             if not periods:
                 logger.debug("Clearing schedule (no periods)")
-            
-            # Apply to inverter
-            if self.simulation_mode:
-                logger.info("SIMULATION: Schedule would be applied")
-                self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.status['api_status'] = 'Simulation'
-                # Update local schedule state (simulation)
-                self.status['current_schedule'] = self.schedule_json
-            else:
-                try:
-                    success = self.saj_client.save_schedule(periods)
-                    if success:
-                        self.status['last_applied'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        self.status['api_status'] = 'Connected'
-                        # Update local schedule state - no need to re-fetch from API
-                        self.status['current_schedule'] = self.schedule_json
-                        logger.debug("Schedule applied to inverter")
-                    else:
-                        self.status['api_status'] = 'Apply Failed'
-                        self.status['schedule_status'] = 'Apply failed'
-                        logger.error("Failed to apply schedule")
-                except Exception as e:
-                    self.status['api_status'] = f'Error: {e}'
-                    self.status['schedule_status'] = f'Error: {e}'
-                    logger.error("Schedule application error: %s", e)
+
+            self._sync_backend_context()
+            try:
+                success = self.backend.save_schedule(periods, self.schedule_json)
+                self._sync_from_backend_context()
+                if success:
+                    self.status['api_status'] = 'Connected' if not self.simulation_mode else 'Simulation'
+                    logger.debug("Schedule applied to provider")
+                else:
+                    self.status['api_status'] = 'Apply Failed'
+                    self.status['schedule_status'] = 'Apply failed'
+                    logger.error("Failed to apply schedule")
+            except Exception as e:
+                self.status['api_status'] = f'Error: {e}'
+                self.status['schedule_status'] = f'Error: {e}'
+                logger.error("Schedule application error: %s", e)
             
             # Update sensors
             self.update_entities()
@@ -700,96 +773,21 @@ class BatteryApiAddon:
     def _fetch_current_schedule(self):
         """Fetch current schedule from inverter and sync controls (called on startup and after apply)."""
         try:
-            schedule = self.saj_client.get_schedule()
-            if schedule:
-                self.status['current_schedule'] = json.dumps(schedule)
-                logger.debug("Fetched schedule from inverter: mode=%s, charge=%d, discharge=%d",
-                           schedule.get('mode'), 
-                           len(schedule.get('charge', [])),
-                           len(schedule.get('discharge', [])))
-                
-                # Sync battery mode setting from inverter
-                api_mode = schedule.get('mode')
-                if api_mode and api_mode in API_MODE_TO_SELECT:
-                    self.battery_mode_setting = API_MODE_TO_SELECT[api_mode]
-                
-                # Sync schedule JSON (rebuild from fetched data)
-                schedule_for_input = {
-                    "charge": schedule.get('charge', []),
-                    "discharge": schedule.get('discharge', [])
-                }
-                if schedule_for_input['charge'] or schedule_for_input['discharge']:
-                    self.schedule_json = json.dumps(schedule_for_input, indent=2)
-                    self.validated_schedule = schedule_for_input
-                    charge_count = len(schedule_for_input['charge'])
-                    discharge_count = len(schedule_for_input['discharge'])
-                    self.status['schedule_status'] = f'Synced: {charge_count} charge, {discharge_count} discharge'
-            else:
-                self.status['current_schedule'] = '{}'
-                logger.warning("Failed to fetch current schedule")
+            self._sync_backend_context()
+            self.backend.fetch_current_schedule()
+            self._sync_from_backend_context()
         except Exception as e:
             logger.error("Error fetching current schedule: %s", e)
             self.status['current_schedule'] = '{}'
     
     def poll_status(self):
         """Poll SAJ API for current battery status."""
-        if self.simulation_mode:
-            self.status['battery_soc'] = 75
-            self.status['battery_power'] = 500
-            self.status['battery_direction'] = 1
-            self.status['pv_power'] = 3000
-            self.status['grid_power'] = -200
-            self.status['grid_direction'] = -1
-            self.status['load_power'] = 2500
-            self.status['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            self.status['user_mode'] = 'EMS'
-            self.status['battery_capacity'] = 50
-            self.status['battery_current'] = 2.5
-            self.status['plant_name'] = 'Simulation'
-            self.status['inverter_model'] = 'HS2-8K-T2'
-            self.status['inverter_sn'] = 'SIM123456'
-            logger.debug("SIMULATION: Status poll (SOC=75%%, bat=500W, pv=3000W)")
-            return
-        
         try:
-            # Use lock only for the API call itself
             with self._api_lock:
-                flow_data = self.saj_client.get_energy_flow_data()
-            
-            if flow_data:
-                # Core power values
-                self.status['battery_soc'] = flow_data.get('battery_soc')
-                self.status['battery_power'] = flow_data.get('battery_power')
-                self.status['battery_direction'] = flow_data.get('battery_direction')
-                self.status['pv_power'] = flow_data.get('pv_power')
-                self.status['grid_power'] = flow_data.get('grid_power')
-                self.status['grid_direction'] = flow_data.get('grid_direction')
-                self.status['load_power'] = flow_data.get('load_power')
-                
-                # Extended battery info
-                self.status['battery_capacity'] = flow_data.get('battery_capacity')
-                self.status['battery_current'] = flow_data.get('battery_current')
-                self.status['battery_charge_today'] = flow_data.get('battery_charge_today')
-                self.status['battery_discharge_today'] = flow_data.get('battery_discharge_today')
-                self.status['battery_charge_total'] = flow_data.get('battery_charge_total')
-                self.status['battery_discharge_total'] = flow_data.get('battery_discharge_total')
-                
-                # Extended power info
-                self.status['pv_direction'] = flow_data.get('pv_direction')
-                self.status['solar_power'] = flow_data.get('solar_power')
-                self.status['home_load_power'] = flow_data.get('home_load_power')
-                self.status['backup_load_power'] = flow_data.get('backup_load_power')
-                self.status['input_output_power'] = flow_data.get('input_output_power')
-                self.status['output_direction'] = flow_data.get('output_direction')
-                
-                # Device info
-                self.status['plant_name'] = flow_data.get('plant_name')
-                self.status['inverter_model'] = flow_data.get('inverter_model')
-                self.status['inverter_sn'] = flow_data.get('inverter_sn')
-                
-                self.status['last_update'] = flow_data.get('update_time')
-                self.status['user_mode'] = flow_data.get('user_mode')
-                self.status['api_status'] = 'Connected'
+                self._sync_backend_context()
+                self.backend.poll_status()
+                self.status['provider_capabilities'] = self.backend.get_capabilities()
+                self._sync_from_backend_context()
         except Exception as e:
             logger.error("Status poll failed: %s", e)
             self.status['api_status'] = f'Poll Error: {e}'
@@ -876,6 +874,15 @@ class BatteryApiAddon:
             'battery_discharge_today_energy': self.status.get('battery_discharge_today'),
             'battery_charge_total_energy': self.status.get('battery_charge_total'),
             'battery_discharge_total_energy': self.status.get('battery_discharge_total'),
+            'provider': self.status.get('provider'),
+            'provider_capabilities': self.status.get('provider_capabilities'),
+            'export_limit': self.status.get('export_limit'),
+            'battery_charge_power_limit': self.status.get('battery_charge_power_limit'),
+            'battery_discharge_power_limit': self.status.get('battery_discharge_power_limit'),
+            'grid_charge_power_limit': self.status.get('grid_charge_power_limit'),
+            'grid_discharge_power_limit': self.status.get('grid_discharge_power_limit'),
+            'battery_on_grid_discharge_depth': self.status.get('battery_on_grid_discharge_depth'),
+            'battery_off_grid_discharge_depth': self.status.get('battery_off_grid_discharge_depth'),
             
             # Mode and timing
             'user_mode': self.status.get('user_mode'),
@@ -925,13 +932,25 @@ class BatteryApiAddon:
                                self.status.get('schedule_status') or "No schedule")
         
         self.mqtt.update_state("sensor", "api_status", 
-                               self.status.get('api_status') or "unknown")
+                               self.status.get('api_status') or "unknown",
+                               attributes={
+                                   'provider': self.status.get('provider'),
+                                   'capabilities': self.status.get('provider_capabilities', {}),
+                               })
         
         self.mqtt.update_state("sensor", "last_applied", 
                                self.status.get('last_applied') or "never")
+
+        if self.status.get('provider_capabilities', {}).get('export_limit'):
+            export_limit = self.status.get('export_limit')
+            self.mqtt.update_state(
+                "number",
+                "export_limit",
+                str(int(export_limit)) if export_limit is not None else "0",
+            )
         
         # Update control entities with synced values
-        self.mqtt.update_state("select", "battery_mode_setting", 
+        self.mqtt.update_state("select", "battery_mode",
                                self.battery_mode_setting)
         
         self.mqtt.update_state("text", "schedule",

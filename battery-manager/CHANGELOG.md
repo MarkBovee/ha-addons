@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.72 — 2026-05-29
+- **Feature: Dynamic battery-api slot caps** — Battery Manager now reads `sensor.battery_api_api_status` capability attributes and adapts charge/discharge slot usage to the active Battery API provider instead of assuming a fixed `3/6` contract.
+- **Config: `entities.battery_api_status_entity`** — New optional entity setting for the provider/capability sensor (default `sensor.battery_api_api_status`).
+
 ## 0.8.71 — 2026-05-28
 - **Fix: Temperature discharge hours no longer expand sell selection above `top_x_discharge_hours`** — Warm-temperature thresholds can still reduce profitable discharge duration, but they now respect `heuristics.top_x_discharge_hours` as a hard maximum. This keeps schedule generation on the configured top sell hours (for example the best 2 evening hours) instead of stretching into earlier, lower-priced windows.
 

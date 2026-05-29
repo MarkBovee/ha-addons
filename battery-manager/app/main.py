@@ -82,6 +82,7 @@ DEFAULT_CONFIG = {
         "export_price_curve_entity": "sensor.energy_prices_electricity_export_price",
         "remaining_solar_energy_entity": "sensor.energy_production_today_remaining",
         "soc_entity": "sensor.battery_api_battery_soc",
+        "battery_api_status_entity": "sensor.battery_api_api_status",
         "grid_power_entity": "sensor.power_usage",
         "solar_power_entity": "sensor.battery_api_pv_power",
         "house_load_entity": "sensor.battery_api_load_power",
@@ -218,7 +219,10 @@ def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, An
 
 
 def _get_entity_state(ha_api: HomeAssistantApi, entity_id: str) -> Optional[Dict[str, Any]]:
-    return ha_api.get_entity_state(entity_id)
+    getter = getattr(ha_api, "get_entity_state", None)
+    if getter is None:
+        return None
+    return getter(entity_id)
 
 
 def _get_sensor_float(ha_api: HomeAssistantApi, entity_id: str) -> Optional[float]:
@@ -497,6 +501,29 @@ MAX_CHARGE_PERIODS = 3
 MAX_DISCHARGE_PERIODS = 6
 MAX_SOC_STABILIZER_MINUTES = 5
 MAX_SOC_STABILIZER_HYSTERESIS_PCT = 1.0
+
+
+def _get_schedule_slot_limits(ha_api: HomeAssistantApi, config: Dict[str, Any]) -> tuple[int, int]:
+    """Read provider-advertised slot caps from battery-api, fallback to API-safe defaults."""
+    entity_id = config.get("entities", {}).get("battery_api_status_entity")
+    if not entity_id:
+        return MAX_CHARGE_PERIODS, MAX_DISCHARGE_PERIODS
+
+    state = _get_entity_state(ha_api, entity_id)
+    attributes = state.get("attributes", {}) if state else {}
+    capabilities = attributes.get("capabilities", {}) if isinstance(attributes, dict) else {}
+
+    try:
+        max_charge = int(capabilities.get("max_charge_periods", MAX_CHARGE_PERIODS))
+    except (TypeError, ValueError):
+        max_charge = MAX_CHARGE_PERIODS
+
+    try:
+        max_discharge = int(capabilities.get("max_discharge_periods", MAX_DISCHARGE_PERIODS))
+    except (TypeError, ValueError):
+        max_discharge = MAX_DISCHARGE_PERIODS
+
+    return max(1, max_charge), max(1, max_discharge)
 
 
 def _publish_schedule(
@@ -1436,6 +1463,8 @@ def generate_schedule(
         len(export_curve),
     )
 
+    max_charge_periods, max_discharge_periods = _get_schedule_slot_limits(ha_api, config)
+
     now = datetime.now(timezone.utc)
     interval_minutes = detect_interval_minutes(import_curve)
     interval_start, interval_end = _interval_window(now, interval_minutes)
@@ -1764,10 +1793,10 @@ def generate_schedule(
             for window in upcoming_windows["charge"]:
                 if float(window.get("avg_price", 0.0)) >= 0:
                     continue  # regular price window — handled in pass 2
-                if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
+                if len(charge_slot_records) >= max_charge_periods:
                     break
                 for slot in _expand_charge_window_slots(window):
-                    if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
+                    if len(charge_slot_records) >= max_charge_periods:
                         break
                     start_dt = slot["start"]
                     end_dt = slot["end"]
@@ -1819,7 +1848,7 @@ def generate_schedule(
         )
         max_window_rank = max(len(regular_charge_windows), 1)
         for window_rank, window in enumerate(regular_charge_windows, start=1):
-            if len(charge_slot_records) >= MAX_CHARGE_PERIODS:
+            if len(charge_slot_records) >= max_charge_periods:
                 break
             start_dt = window["start"]
             end_dt = window["end"]
@@ -1970,10 +1999,10 @@ def generate_schedule(
     )
 
     selected_discharge_windows: List[tuple[str, Dict[str, Any]]] = []
-    for window in discharge_windows_sorted[:MAX_DISCHARGE_PERIODS]:
+    for window in discharge_windows_sorted[:max_discharge_periods]:
         selected_discharge_windows.append(("discharge", window))
 
-    remaining_slots = max(0, MAX_DISCHARGE_PERIODS - len(selected_discharge_windows))
+    remaining_slots = max(0, max_discharge_periods - len(selected_discharge_windows))
     for window in adaptive_windows_sorted[:remaining_slots]:
         selected_discharge_windows.append(("adaptive", window))
 
@@ -2024,7 +2053,7 @@ def generate_schedule(
         and effective_price_range == "adaptive"
         and not has_active_charge_period
         and not has_active_discharge_period
-        and len(discharge_schedule) < MAX_DISCHARGE_PERIODS
+        and len(discharge_schedule) < max_discharge_periods
     ):
         fallback_duration = int((interval_end - interval_start).total_seconds() / 60)
         if fallback_duration > 0:
