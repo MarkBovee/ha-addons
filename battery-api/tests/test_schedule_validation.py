@@ -15,7 +15,7 @@ cipher_module.AES = object
 sys.modules.setdefault("Crypto", crypto_module)
 sys.modules.setdefault("Crypto.Cipher", cipher_module)
 
-from app.main import BatteryApiAddon, validate_schedule
+from app.main import BatteryApiAddon, _effective_poll_interval_seconds, validate_schedule
 from app.main import load_config
 from app.backends import ApiBatteryBackend, BackendContext, build_backend, ModbusEntityDiscovery, ModbusHaBatteryBackend
 from app.models import BatteryChargeType, ChargingPeriod
@@ -83,6 +83,24 @@ def test_load_config_allows_modbus_provider_without_api_credentials(tmp_path, mo
 
     assert config["provider"] == "modbus_ha"
     assert config["modbus_inverter_power_w"] == 8000
+
+
+def test_modbus_provider_uses_10s_default_poll_when_left_at_60s():
+    config = {
+        "provider": "modbus_ha",
+        "poll_interval_seconds": 60,
+    }
+
+    assert _effective_poll_interval_seconds(config) == 10
+
+
+def test_modbus_provider_keeps_explicit_poll_override():
+    config = {
+        "provider": "modbus_ha",
+        "poll_interval_seconds": 30,
+    }
+
+    assert _effective_poll_interval_seconds(config) == 30
 
 
 def test_build_backend_uses_modbus_provider():

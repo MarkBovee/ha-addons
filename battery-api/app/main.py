@@ -84,6 +84,8 @@ API_MODE_TO_SELECT = {
     "ai": "AI",
 }
 
+MODBUS_DEFAULT_POLL_INTERVAL_SECONDS = 10
+
 
 def load_config() -> dict:
     """Load Battery API configuration."""
@@ -111,10 +113,19 @@ def load_config() -> dict:
     logger.info("Loaded configuration: provider=%s, device=%s, poll=%ds, simulation=%s",
                 provider,
                 config.get('device_serial_number', 'unknown')[:8] + "...",
-                config['poll_interval_seconds'],
+                _effective_poll_interval_seconds(config),
                 config.get('simulation_mode', False))
     
     return config
+
+
+def _effective_poll_interval_seconds(config: dict) -> int:
+    """Return effective poll interval for current provider."""
+    provider = str(config.get('provider', 'api')).lower()
+    configured = int(config.get('poll_interval_seconds', BA_CONFIG_DEFAULTS['poll_interval_seconds']))
+    if provider == 'modbus_ha' and configured == BA_CONFIG_DEFAULTS['poll_interval_seconds']:
+        return MODBUS_DEFAULT_POLL_INTERVAL_SECONDS
+    return configured
 
 
 class ScheduleValidationError(Exception):
@@ -1014,7 +1025,7 @@ class BatteryApiAddon:
     
     def run(self):
         """Main run loop."""
-        poll_interval = self.config['poll_interval_seconds']
+        poll_interval = _effective_poll_interval_seconds(self.config)
         run_once = get_run_once_mode()
         
         logger.info("Starting main loop (poll every %ds)", poll_interval)
@@ -1032,7 +1043,7 @@ class BatteryApiAddon:
                 grid_power = self.status.get('grid_power', 0)
                 load_power = self.status.get('load_power', 0)
                 
-                logger.info("Poll: SOC=%s%%, Bat=%dW, PV=%dW, Grid=%dW, Load=%dW, Mode=%s, API=%s",
+                logger.info("Poll: SOC=%s%%, Bat=%dW, PV=%dW, Grid=%dW, Load=%dW, Mode=%s, Status=%s",
                            soc if soc is not None else '?',
                            int(bat_power) if bat_power else 0,
                            int(pv_power) if pv_power else 0,

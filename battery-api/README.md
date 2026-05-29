@@ -47,7 +47,7 @@ device_serial_number: "your_device_serial"
 plant_uid: "your_plant_uid"
 
 # Optional settings
-poll_interval_seconds: 60
+poll_interval_seconds: 10
 log_level: "info"           # debug, info, warning, error
 simulation_mode: false      # Set to true to test without affecting inverter
 modbus_inverter_power_w: 8000  # Default Modbus watts->percent reference
