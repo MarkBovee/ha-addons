@@ -26,7 +26,7 @@
 ## 4. Modbus Advanced Controls
 
 - [x] 4.1 Add exposed support for export limit writes and wire it for negative-price export suppression strategies.
-- [ ] 4.2 Add capability-gated support for passive charge and passive discharge controls.
+- [x] 4.2 Add capability-gated support for passive charge and passive discharge controls.
 - [x] 4.3 Add optional diagnostics for power limits, discharge depths, and richer battery telemetry exposed by Modbus.
 - [x] 4.4 Mark unsupported or experimental features such as PV-off and unreliable passive-grid behaviors explicitly in diagnostics and docs.
 

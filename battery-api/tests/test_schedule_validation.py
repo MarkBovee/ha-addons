@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import types
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -15,7 +15,7 @@ cipher_module.AES = object
 sys.modules.setdefault("Crypto", crypto_module)
 sys.modules.setdefault("Crypto.Cipher", cipher_module)
 
-from app.main import validate_schedule
+from app.main import BatteryApiAddon, validate_schedule
 from app.main import load_config
 from app.backends import ApiBatteryBackend, BackendContext, build_backend, ModbusEntityDiscovery, ModbusHaBatteryBackend
 from app.models import BatteryChargeType, ChargingPeriod
@@ -112,6 +112,7 @@ def test_modbus_entity_discovery_prefers_known_live_defaults():
                 {"entity_id": "sensor.saj_total_load_power"},
                 {"entity_id": "number.saj_app_mode_input"},
                 {"entity_id": "number.saj_export_limit_input"},
+                {"entity_id": "number.saj_passive_charge_enable"},
                 {"entity_id": "sensor.saj_charge_time_enable_bitmask"},
                 {"entity_id": "sensor.saj_discharge_time_enable_bitmask"},
                 {"entity_id": "number.saj_charge_time_enable_input"},
@@ -133,10 +134,11 @@ def test_modbus_entity_discovery_prefers_known_live_defaults():
     assert resolved["soc"] == "sensor.saj_battery_energy_percent"
     assert resolved["app_mode_input"] == "number.saj_app_mode_input"
     assert resolved["export_limit"] == "number.saj_export_limit_input"
+    assert resolved["passive_charge_enable"] == "number.saj_passive_charge_enable"
     assert resolved["charge1_power_percent_input"] == "number.saj_charge1_power_percent_input"
 
 
-def test_modbus_capabilities_mark_passive_as_experimental():
+def test_modbus_capabilities_expose_passive_mode_when_mapped():
     context = BackendContext(
         config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
         status={},
@@ -160,7 +162,7 @@ def test_modbus_capabilities_mark_passive_as_experimental():
     capabilities = backend.get_capabilities()
 
     assert capabilities["export_limit"] is True
-    assert capabilities["passive_mode"] is False
+    assert capabilities["passive_mode"] is True
     assert capabilities["passive_mode_mapped"] is True
     assert "passive_mode" in capabilities["experimental_controls"]
     assert "passive_grid_charge_power" in capabilities["experimental_controls"]
@@ -212,6 +214,94 @@ def test_modbus_set_export_limit_verifies_read_back():
     call_service.assert_called_once_with("number", "set_value", "number.saj_export_limit_input", 1100)
     wait_for_int.assert_called_once_with("export_limit", 1100)
     assert context.status["export_limit"] == 1100
+
+
+def test_modbus_set_passive_mode_verifies_read_back():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+    backend.entities = {
+        "passive_charge_enable": "number.saj_passive_charge_enable_input",
+        "switch_passive_charge": "switch.saj_passive_charge_control",
+        "switch_passive_discharge": "switch.saj_passive_discharge_control",
+    }
+
+    with patch.object(backend, "_get_int", return_value=0):
+        with patch.object(backend, "_call_service", return_value=True) as call_service:
+            with patch.object(backend, "_wait_for_int_value", return_value=2) as wait_for_int:
+                assert backend.set_passive_mode("Passive charge") is True
+
+    call_service.assert_called_once_with("switch", "turn_on", "switch.saj_passive_charge_control", None)
+    wait_for_int.assert_called_once_with("passive_charge_enable", 2, attempts=20, delay_seconds=1.0)
+    assert context.status["passive_mode"] == "Passive charge"
+
+
+def test_modbus_set_passive_mode_off_turns_off_active_switch():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+    backend.entities = {
+        "passive_charge_enable": "number.saj_passive_charge_enable_input",
+        "switch_passive_charge": "switch.saj_passive_charge_control",
+        "switch_passive_discharge": "switch.saj_passive_discharge_control",
+    }
+
+    with patch.object(backend, "_get_int", return_value=1):
+        with patch.object(backend, "_call_service", return_value=True) as call_service:
+            with patch.object(backend, "_wait_for_int_value", return_value=0) as wait_for_int:
+                assert backend.set_passive_mode("Off") is True
+
+    call_service.assert_called_once_with("switch", "turn_off", "switch.saj_passive_discharge_control", None)
+    wait_for_int.assert_called_once_with("passive_charge_enable", 0, attempts=20, delay_seconds=1.0)
+    assert context.status["passive_mode"] == "Off"
+
+
+def test_publish_discovery_removes_or_publishes_optional_controls_by_capability():
+    fake_backend = MagicMock()
+
+    with patch("app.main.build_backend", return_value=fake_backend):
+        addon = BatteryApiAddon(
+            {"provider": "modbus_ha", "simulation_mode": True, "poll_interval_seconds": 60},
+            None,
+        )
+
+    addon.mqtt = MagicMock()
+    addon.mqtt.get_published_entities.return_value = []
+
+    addon.status["provider_capabilities"] = {}
+    addon._publish_discovery_configs()
+
+    addon.mqtt.remove_entity.assert_any_call("number", "export_limit")
+    addon.mqtt.remove_entity.assert_any_call("select", "passive_mode")
+
+    addon.mqtt.reset_mock()
+    addon.mqtt.get_published_entities.return_value = []
+
+    addon.status["provider_capabilities"] = {"export_limit": True, "passive_mode": True}
+    addon.status["export_limit"] = 300
+    addon.status["passive_mode"] = "Passive discharge"
+    addon._publish_discovery_configs()
+
+    assert any(
+        call.args[0].object_id == "export_limit"
+        for call in addon.mqtt.publish_number.call_args_list
+    )
+    assert any(
+        call.args[0].object_id == "passive_mode" and call.args[0].state == "Passive discharge"
+        for call in addon.mqtt.publish_select.call_args_list
+    )
 
 
 def test_modbus_save_schedule_waits_for_delayed_read_back():

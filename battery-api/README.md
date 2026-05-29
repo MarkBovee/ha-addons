@@ -78,7 +78,8 @@ mqtt_password: ""
 - For provider `modbus_ha`, the add-on queries Home Assistant directly and prefills known live `saj_*` entities when discovery is unambiguous.
 - The current install uses `8000W` as the default inverter reference for converting requested watts to Modbus slot percentages.
 - Export limit is exposed when `number.saj_export_limit_input` is available.
-- Passive mode mappings can be detected, but they remain experimental and are not advertised as supported in phase 1.
+- Passive charge/discharge control is exposed as an experimental `select.battery_api_passive_mode` only when the mapped Home Assistant passive entities are available.
+- Passive mode stays separate from the base TOU schedule path; schedule writes still use TOU slots, not passive mode.
 - `PV off` is intentionally unsupported until a validated control path exists.
 - Upstream `saj-h2-modbus` should have `fast_enabled=true` for snappier live power telemetry. Schedule slot read-back still depends on explicit `homeassistant.update_entity` refreshes; `ultra_fast_enabled` is not used as schedule verification.
 - Safe cutover stays explicit: clear schedule with `{"charge":[],"discharge":[]}`, confirm fallback `Self-consumption`, then flip provider.
@@ -90,6 +91,7 @@ mqtt_password: ""
 | Entity | Type | Description |
 |--------|------|-------------|
 | `select.battery_api_battery_mode` | Select | Battery mode (Self-consumption, Time-of-use, AI) |
+| `select.battery_api_passive_mode` | Select | Experimental passive charge/discharge control for `modbus_ha` when supported |
 
 ### Status Entities (read-only)
 
@@ -164,7 +166,8 @@ Example `sensor.battery_api_api_status` attributes:
     "max_charge_periods": 7,
     "max_discharge_periods": 7,
     "export_limit": true,
-    "passive_mode": false,
+    "passive_mode": true,
+    "experimental_controls": ["passive_mode", "passive_grid_charge_power"],
     "unsupported_controls": ["pv_off"]
   }
 }
@@ -218,6 +221,7 @@ entities:
 3. Check `sensor.battery_api_api_status` shows "Connected"
 4. Check `sensor.battery_api_api_status` attributes for provider limits and capability flags
 5. Review add-on logs for provider-specific errors and read-back mismatches
+6. If `select.battery_api_passive_mode` is exposed, treat it as experimental control outside the normal TOU schedule flow
 
 ### Modbus Mapping Problems
 

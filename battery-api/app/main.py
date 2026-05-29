@@ -29,10 +29,10 @@ from shared.ha_mqtt_discovery import (
 # Import local modules
 try:
     from .models import BatteryChargeType, ChargingPeriod, get_today_weekday_mask
-    from .backends import BackendContext, build_backend
+    from .backends import BackendContext, PASSIVE_MODE_OPTIONS, build_backend
 except ImportError:
     from models import BatteryChargeType, ChargingPeriod, get_today_weekday_mask
-    from backends import BackendContext, build_backend
+    from backends import BackendContext, PASSIVE_MODE_OPTIONS, build_backend
 
 # Configure logging
 logger = setup_logging(name=__name__)
@@ -352,6 +352,7 @@ class BatteryApiAddon:
             'provider': str(config.get('provider', 'api')),
             'provider_capabilities': {},
             'export_limit': None,
+            'passive_mode': None,
             'battery_charge_power_limit': None,
             'battery_discharge_power_limit': None,
             'grid_charge_power_limit': None,
@@ -420,12 +421,17 @@ class BatteryApiAddon:
             ready = self.backend.setup()
             self.status['provider_capabilities'] = self.backend.get_capabilities()
             self._sync_from_backend_context()
+            if self.mqtt:
+                self._publish_discovery_configs()
+                self.update_entities()
             if ready:
                 logger.info("Backend ready: provider=%s", self.backend.provider_name)
             return ready
         except Exception as e:
             logger.error("Backend setup error: %s", e)
             self.status['api_status'] = f'Error: {e}'
+            if self.mqtt:
+                self.update_entities()
             return False
     
     def _cleanup_old_entities(self):
@@ -479,7 +485,24 @@ class BatteryApiAddon:
             command_callback=self._handle_mode_select,
         )
 
-        if self.status.get('provider_capabilities', {}).get('export_limit'):
+        capabilities = self.status.get('provider_capabilities', {})
+
+        if capabilities.get('passive_mode'):
+            self.mqtt.publish_select(
+                SelectConfig(
+                    object_id="passive_mode",
+                    name="Passive Mode",
+                    options=PASSIVE_MODE_OPTIONS,
+                    state=self.status.get('passive_mode') or PASSIVE_MODE_OPTIONS[0],
+                    icon="mdi:battery-lock-open-outline",
+                    entity_category="config",
+                ),
+                command_callback=self._handle_passive_mode_select,
+            )
+        else:
+            self.mqtt.remove_entity("select", "passive_mode")
+
+        if capabilities.get('export_limit'):
             from shared.ha_mqtt_discovery import NumberConfig
 
             self.mqtt.publish_number(
@@ -495,6 +518,8 @@ class BatteryApiAddon:
                 ),
                 command_callback=self._handle_export_limit_input,
             )
+        else:
+            self.mqtt.remove_entity("number", "export_limit")
         
         # ===== Schedule Input Entity =====
         
@@ -669,6 +694,29 @@ class BatteryApiAddon:
             except Exception as e:
                 self.status['api_status'] = f'Error: {e}'
                 logger.error("Export limit setting error: %s", e)
+
+            self.update_entities()
+
+    def _handle_passive_mode_select(self, mode: str):
+        """Handle passive charge/discharge mode selection when supported."""
+        logger.info("Passive mode change requested: %s", mode)
+
+        if mode not in PASSIVE_MODE_OPTIONS:
+            logger.error("Invalid passive mode: %s (expected one of %s)", mode, PASSIVE_MODE_OPTIONS)
+            return
+
+        with self._api_lock:
+            try:
+                success = self.backend.set_passive_mode(mode)
+                if success:
+                    self.status['passive_mode'] = mode
+                    self.status['api_status'] = 'Connected' if not self.simulation_mode else 'Simulation'
+                else:
+                    self.status['api_status'] = 'Passive Mode Failed'
+                    logger.error("Failed to set passive mode to %s", mode)
+            except Exception as e:
+                self.status['api_status'] = f'Error: {e}'
+                logger.error("Passive mode setting error: %s", e)
 
             self.update_entities()
 
@@ -877,6 +925,7 @@ class BatteryApiAddon:
             'provider': self.status.get('provider'),
             'provider_capabilities': self.status.get('provider_capabilities'),
             'export_limit': self.status.get('export_limit'),
+            'passive_mode': self.status.get('passive_mode'),
             'battery_charge_power_limit': self.status.get('battery_charge_power_limit'),
             'battery_discharge_power_limit': self.status.get('battery_discharge_power_limit'),
             'grid_charge_power_limit': self.status.get('grid_charge_power_limit'),
@@ -947,6 +996,13 @@ class BatteryApiAddon:
                 "number",
                 "export_limit",
                 str(int(export_limit)) if export_limit is not None else "0",
+            )
+
+        if self.status.get('provider_capabilities', {}).get('passive_mode'):
+            self.mqtt.update_state(
+                "select",
+                "passive_mode",
+                self.status.get('passive_mode') or PASSIVE_MODE_OPTIONS[0],
             )
         
         # Update control entities with synced values

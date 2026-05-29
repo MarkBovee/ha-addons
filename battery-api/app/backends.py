@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 MODE_VERIFY_ATTEMPTS = 20
 MODE_VERIFY_DELAY_SECONDS = 1.0
 
+PASSIVE_MODE_OPTIONS = ["Off", "Passive charge", "Passive discharge"]
+PASSIVE_MODE_SELECT_TO_VALUE = {
+    "Off": 0,
+    "Passive discharge": 1,
+    "Passive charge": 2,
+}
+PASSIVE_MODE_VALUE_TO_SELECT = {
+    "0": "Off",
+    "1": "Passive discharge",
+    "2": "Passive charge",
+    0: "Off",
+    1: "Passive discharge",
+    2: "Passive charge",
+}
+
 
 def _load_saj_api_client():
     """Import SAJ cloud client only when API provider is used."""
@@ -100,6 +115,31 @@ DEFAULT_MODBUS_DISCOVERY = {
     "grid_discharge_power_limit_input": "number.saj_grid_max_discharge_power_input",
 }
 
+DISCOVERY_ENTITY_ALIASES = {
+    "passive_charge_enable": [
+        "number.saj_passive_charge_enable_input",
+        "number.saj_passive_charge_enable",
+    ],
+    "passive_grid_charge_power": [
+        "number.saj_passive_grid_charge_power_input",
+        "number.saj_passive_grid_charge_power",
+    ],
+    "passive_grid_discharge_power": [
+        "number.saj_passive_grid_discharge_power_input",
+        "number.saj_passive_grid_discharge_power",
+    ],
+    "passive_battery_charge_power": [
+        "number.saj_passive_battery_charge_power_input",
+        "number.saj_passive_battery_charge_power",
+        "number.saj_passive_bat_charge_power",
+    ],
+    "passive_battery_discharge_power": [
+        "number.saj_passive_battery_discharge_power_input",
+        "number.saj_passive_battery_discharge_power",
+        "number.saj_passive_bat_discharge_power",
+    ],
+}
+
 
 @dataclass
 class BackendContext:
@@ -149,6 +189,10 @@ class BatteryBackend(ABC):
 
     def set_export_limit(self, value: int) -> bool:
         """Optionally support export limit writes."""
+        return False
+
+    def set_passive_mode(self, mode: str) -> bool:
+        """Optionally support passive charge/discharge control."""
         return False
 
     def _set_status(self, **updates: Any) -> None:
@@ -334,8 +378,11 @@ class ModbusEntityDiscovery:
                     logger.warning("Configured Modbus entity missing for %s: %s", key, configured_id)
                 continue
 
-            if default_id in all_ids:
-                resolved[key] = default_id
+            candidates = [default_id, *DISCOVERY_ENTITY_ALIASES.get(key, [])]
+            for candidate_id in candidates:
+                if candidate_id in all_ids:
+                    resolved[key] = candidate_id
+                    break
 
         for slot_type in ("charge", "discharge"):
             for index in range(1, 8):
@@ -420,6 +467,7 @@ class ModbusHaBatteryBackend(BatteryBackend):
                 grid_direction=1,
                 load_power=2500,
                 user_mode="TimeOfUse",
+                passive_mode="Off",
                 last_update=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 inverter_model="HS2-8K-T2",
                 api_status="Simulation",
@@ -443,6 +491,7 @@ class ModbusHaBatteryBackend(BatteryBackend):
             battery_on_grid_discharge_depth=self._get_float("battery_on_grid_discharge_depth"),
             battery_off_grid_discharge_depth=self._get_float("battery_off_grid_discharge_depth"),
             export_limit=self._get_float("export_limit"),
+            passive_mode=self._get_passive_mode(),
             pv_direction=self._get_int("direction_pv"),
             output_direction=self._get_int("direction_output"),
             user_mode=self._get_state_value("app_mode"),
@@ -541,6 +590,8 @@ class ModbusHaBatteryBackend(BatteryBackend):
             experimental_controls.append("passive_mode")
         if "passive_grid_charge_power" in self.entities:
             experimental_controls.append("passive_grid_charge_power")
+        if "passive_grid_discharge_power" in self.entities:
+            experimental_controls.append("passive_grid_discharge_power")
 
         return {
             "provider": "modbus_ha",
@@ -552,7 +603,7 @@ class ModbusHaBatteryBackend(BatteryBackend):
             "max_charge_periods": 7,
             "max_discharge_periods": 7,
             "export_limit": "export_limit" in self.entities,
-            "passive_mode": False,
+            "passive_mode": passive_mode_mapped,
             "passive_mode_mapped": passive_mode_mapped,
             "experimental_controls": experimental_controls,
             "unsupported_controls": ["pv_off"],
@@ -575,11 +626,59 @@ class ModbusHaBatteryBackend(BatteryBackend):
         self._set_status(export_limit=clamped, api_status="Connected")
         return True
 
+    def set_passive_mode(self, mode: str) -> bool:
+        target = PASSIVE_MODE_SELECT_TO_VALUE.get(mode)
+        if target is None:
+            logger.error("Unsupported passive mode: %s", mode)
+            return False
+        if not self.get_capabilities().get("passive_mode"):
+            logger.error("Passive mode control unavailable: missing mapped entities")
+            return False
+        if self.context.simulation_mode:
+            self._set_status(passive_mode=mode, api_status="Simulation")
+            return True
+
+        current = self._get_int("passive_charge_enable")
+        if current == target:
+            self._set_status(passive_mode=mode, api_status="Connected")
+            return True
+
+        if target == 2:
+            self._call_service("switch", "turn_on", self.entities["switch_passive_charge"], None)
+        elif target == 1:
+            self._call_service("switch", "turn_on", self.entities["switch_passive_discharge"], None)
+        else:
+            self._turn_off_passive_mode(current)
+
+        actual = self._wait_for_int_value(
+            "passive_charge_enable",
+            target,
+            attempts=MODE_VERIFY_ATTEMPTS,
+            delay_seconds=MODE_VERIFY_DELAY_SECONDS,
+        )
+        if actual != target:
+            self._set_status(api_status=f"Passive mode verify failed: expected {target}, got {actual}")
+            return False
+
+        self._set_status(
+            passive_mode=PASSIVE_MODE_VALUE_TO_SELECT.get(actual, mode),
+            api_status="Connected",
+        )
+        return True
+
     def _read_schedule_from_ha(self) -> Dict[str, List[Dict[str, Any]]]:
         return {
             "charge": self._read_slots("charge"),
             "discharge": self._read_slots("discharge"),
         }
+
+    def _get_passive_mode(self) -> Optional[str]:
+        if "passive_charge_enable" not in self.entities:
+            return None
+        value = self._get_int("passive_charge_enable")
+        if value is None:
+            return None
+        return PASSIVE_MODE_VALUE_TO_SELECT.get(value, "Off")
 
     def _read_slots(self, slot_type: str) -> List[Dict[str, Any]]:
         count = 7
@@ -771,6 +870,17 @@ class ModbusHaBatteryBackend(BatteryBackend):
         if direction > 0:
             return abs(power)
         return 0.0 if abs(power) < 0.001 else power
+
+    def _turn_off_passive_mode(self, current: Optional[int]) -> None:
+        if current == 2:
+            self._call_service("switch", "turn_off", self.entities["switch_passive_charge"], None)
+            return
+        if current == 1:
+            self._call_service("switch", "turn_off", self.entities["switch_passive_discharge"], None)
+            return
+
+        self._call_service("switch", "turn_off", self.entities["switch_passive_charge"], None)
+        self._call_service("switch", "turn_off", self.entities["switch_passive_discharge"], None)
 
     def _set_number(self, key: str, value: int) -> bool:
         entity_id = self.entities.get(key)

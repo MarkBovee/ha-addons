@@ -2,16 +2,19 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
-## [0.2.20] - 2026-05-29
+## [1.0.0] - 2026-05-29
 
 ### Changed
 - Relaxed the external schedule contract to accept up to 7 charge and 7 discharge periods.
 - Moved provider slot limits into `sensor.battery_api_api_status` capability attributes so downstream schedulers can adapt dynamically.
+- Added capability-gated experimental passive charge/discharge control via `select.battery_api_passive_mode` for supported Modbus installs.
+- Republished MQTT discovery after backend setup so optional provider-specific entities appear reliably.
 
 ### Fixed
 - API provider now rejects schedules above its real 3 charge / 6 discharge hardware limit with a clear apply error instead of contract-level validation.
 - `sensor.battery_api_api_status` now refreshes capability attributes during regular state updates.
 - Modbus mode verification now tolerates slower Home Assistant/entity propagation, which fixed live clear-to-self-consumption and restore flows.
+- Modbus discovery now tolerates passive entity naming variants with and without `_input` suffixes.
 
 ## [0.2.19] - 2026-03-10
 
