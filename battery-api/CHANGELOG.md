@@ -2,6 +2,12 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.3.1] - 2026-05-29
+
+### Fixed
+- Removed an invalid add-on schema type so `Battery API` appears in the Home Assistant Add-on Store again.
+- Modbus provider now polls live status every 10 seconds by default and logs `Status=` instead of the misleading `API=` label.
+
 ## [0.3.0] - 2026-05-29
 
 ### Changed
