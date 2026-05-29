@@ -41,7 +41,7 @@ options:
 schema:
   provider: list(api|modbus_ha)?
   saj_username: str?
-  saj_password: password?
+  saj_password: str?
   device_serial_number: str?
   plant_uid: str?
   poll_interval_seconds: int(10,300)?
@@ -54,4 +54,4 @@ schema:
   mqtt_host: str?
   mqtt_port: int?
   mqtt_user: str?
-  mqtt_password: password?
+  mqtt_password: str?

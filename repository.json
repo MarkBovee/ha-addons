@@ -1,42 +1,5 @@
 {
   "name": "Mark Bovee's Home Assistant Addons",
   "url": "https://github.com/MarkBovee/ha-addons",
-  "maintainer": "Mark Bovee",
-  "addons": [
-    {
-      "name": "Charge Amps - EV Charger Monitor",
-      "slug": "charge_amps_ev_charger_monitor",
-      "description": "Monitor Charge Amps EV charger status and create Home Assistant entities",
-      "version": "1.3.10",
-      "url": "https://github.com/MarkBovee/ha-addons/tree/master/charge-amps-monitor"
-    },
-    {
-      "name": "Energy Prices",
-      "slug": "energy_prices",
-      "description": "Fetch Nord Pool electricity prices and calculate final costs with configurable price components",
-      "version": "1.6.4",
-      "url": "https://github.com/MarkBovee/ha-addons/tree/master/energy-prices"
-    },
-    {
-      "name": "Battery API",
-      "slug": "battery_api",
-      "description": "Control SAJ Electric inverter battery charge/discharge schedules",
-      "version": "1.0.0",
-      "url": "https://github.com/MarkBovee/ha-addons/tree/master/battery-api"
-    },
-    {
-      "name": "Battery Manager",
-      "slug": "battery_manager",
-      "description": "Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status",
-      "version": "0.8.72",
-      "url": "https://github.com/MarkBovee/ha-addons/tree/master/battery-manager"
-    },
-    {
-      "name": "Water Heater Scheduler",
-      "slug": "water_heater_scheduler",
-      "description": "Schedule domestic hot water heating based on electricity prices - optimizes for cost while maintaining comfort and legionella protection",
-      "version": "1.2.12",
-      "url": "https://github.com/MarkBovee/ha-addons/tree/master/water-heater-scheduler"
-    }
-  ]
+  "maintainer": "Mark Bovee"
 }
