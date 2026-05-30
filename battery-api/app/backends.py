@@ -539,8 +539,6 @@ class ModbusHaBatteryBackend(BatteryBackend):
         try:
             self._write_slots("charge", charge)
             self._write_slots("discharge", discharge)
-            self._set_number("charge_time_enable_input", self._build_enable_mask(len(charge)))
-            self._set_number("discharge_time_enable_input", self._build_enable_mask(len(discharge)))
             mode = "Time-of-use" if charge or discharge else "Self-consumption"
             if not self.set_mode(mode):
                 self._set_status(schedule_status="Apply failed: mode write failed")
@@ -567,6 +565,11 @@ class ModbusHaBatteryBackend(BatteryBackend):
             return False
         if self.context.simulation_mode:
             self._set_status(api_status="Simulation")
+            return True
+        current = self._get_int("app_mode")
+        if current == target:
+            self.context.battery_mode_setting = mode
+            self._set_status(api_status="Connected")
             return True
         self._set_number("app_mode_input", target)
         actual = self._wait_for_int_value(
@@ -738,20 +741,48 @@ class ModbusHaBatteryBackend(BatteryBackend):
         return periods
 
     def _write_slots(self, slot_type: str, periods: List[Dict[str, Any]]) -> None:
+        enable_key = "charge_time_enable_input" if slot_type == "charge" else "discharge_time_enable_input"
+        current_enabled_mask = self._get_int(enable_key) or 0
+        desired_enabled_mask = self._build_enable_mask(len(periods))
+
         for index in range(1, 8):
+            current_state = self._get_slot_input_state(slot_type, index, current_enabled_mask)
             if index <= len(periods):
                 period = periods[index - 1]
                 end_time = self._end_time(period["start"], int(period["duration"]))
                 power_percent = self._watts_to_percent(int(period["power"]))
-                self._set_text(f"{slot_type}{index}_start_time_input", period["start"])
-                self._set_text(f"{slot_type}{index}_end_time_input", end_time)
-                self._set_number(f"{slot_type}{index}_power_percent_input", power_percent)
-                self._set_number(f"{slot_type}{index}_day_mask_input", 127)
+                if current_state["start"] != period["start"]:
+                    self._set_text(f"{slot_type}{index}_start_time_input", period["start"])
+                if current_state["end"] != end_time:
+                    self._set_text(f"{slot_type}{index}_end_time_input", end_time)
+                if current_state["power_percent"] != power_percent:
+                    self._set_number(f"{slot_type}{index}_power_percent_input", power_percent)
+                if current_state["day_mask"] != 127:
+                    self._set_number(f"{slot_type}{index}_day_mask_input", 127)
             else:
-                self._set_text(f"{slot_type}{index}_start_time_input", "00:00")
-                self._set_text(f"{slot_type}{index}_end_time_input", "00:00")
-                self._set_number(f"{slot_type}{index}_power_percent_input", 0)
-                self._set_number(f"{slot_type}{index}_day_mask_input", 0)
+                if current_state["start"] != "00:00":
+                    self._set_text(f"{slot_type}{index}_start_time_input", "00:00")
+                if current_state["end"] != "00:00":
+                    self._set_text(f"{slot_type}{index}_end_time_input", "00:00")
+                if current_state["power_percent"] != 0:
+                    self._set_number(f"{slot_type}{index}_power_percent_input", 0)
+                if current_state["day_mask"] != 0:
+                    self._set_number(f"{slot_type}{index}_day_mask_input", 0)
+
+        if current_enabled_mask != desired_enabled_mask:
+            self._set_number(enable_key, desired_enabled_mask)
+
+    def _get_slot_input_state(self, slot_type: str, index: int, enabled_mask: Optional[int] = None) -> Dict[str, Any]:
+        if enabled_mask is None:
+            enable_key = "charge_time_enable_input" if slot_type == "charge" else "discharge_time_enable_input"
+            enabled_mask = self._get_int(enable_key) or 0
+        return {
+            "enabled": bool(enabled_mask & (1 << (index - 1))),
+            "start": self._get_state_value(f"{slot_type}{index}_start_time_input") or "00:00",
+            "end": self._get_state_value(f"{slot_type}{index}_end_time_input") or "00:00",
+            "power_percent": self._get_int(f"{slot_type}{index}_power_percent_input") or 0,
+            "day_mask": self._get_int(f"{slot_type}{index}_day_mask_input") or 0,
+        }
 
     def _schedule_matches(self, actual: Dict[str, List[Dict[str, Any]]], expected: Dict[str, List[Dict[str, Any]]]) -> bool:
         def _normalize(items: List[Dict[str, Any]]) -> List[tuple[str, int, int]]:

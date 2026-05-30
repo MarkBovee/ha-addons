@@ -229,6 +229,8 @@ class MqttDiscovery:
         self._disconnect_warned = False
         self._connection_lock = threading.Lock()
         self._last_reconnect_attempt = 0.0
+        self._last_state_payloads: Dict[str, str] = {}
+        self._last_attributes_payloads: Dict[str, str] = {}
     
     @property
     def device_info(self) -> Dict[str, Any]:
@@ -360,6 +362,8 @@ class MqttDiscovery:
         Note: paho-mqtt 2.x callback has different signature with disconnect_flags.
         """
         self._connected = False
+        self._last_state_payloads.clear()
+        self._last_attributes_payloads.clear()
         reason_value = self._reason_code_value(reason_code)
         reason_text = self._reason_code_text(reason_code)
         if reason_value == 0:
@@ -428,6 +432,8 @@ class MqttDiscovery:
             self._client.disconnect()
             self._client = None
             self._connected = False
+            self._last_state_payloads.clear()
+            self._last_attributes_payloads.clear()
             logger.info("Disconnected from MQTT broker")
     
     def is_connected(self) -> bool:
@@ -814,14 +820,24 @@ class MqttDiscovery:
         Returns:
             True if published successfully
         """
+        cache_key = f"{component}:{object_id}"
+        state_payload = str(state)
+        previous_state = self._last_state_payloads.get(cache_key)
+
         state_topic = self._state_topic(component, object_id)
-        if not self._publish(state_topic, state):
-            return False
+        if previous_state != state_payload:
+            if not self._publish(state_topic, state_payload):
+                return False
+            self._last_state_payloads[cache_key] = state_payload
         
         if attributes:
+            attributes_payload = json.dumps(attributes, sort_keys=True, separators=(",", ":"))
+            previous_attributes = self._last_attributes_payloads.get(cache_key)
             attributes_topic = self._attributes_topic(component, object_id)
-            if not self._publish(attributes_topic, attributes):
-                return False
+            if previous_attributes != attributes_payload:
+                if not self._publish(attributes_topic, attributes):
+                    return False
+                self._last_attributes_payloads[cache_key] = attributes_payload
         
         return True
     
@@ -835,6 +851,9 @@ class MqttDiscovery:
         Returns:
             True if published successfully
         """
+        cache_key = f"{component}:{object_id}"
+        self._last_state_payloads.pop(cache_key, None)
+        self._last_attributes_payloads.pop(cache_key, None)
         discovery_topic = self._discovery_topic(component, object_id)
         return self._publish(discovery_topic, "")
     

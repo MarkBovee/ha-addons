@@ -2,6 +2,13 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.3.4] - 2026-05-30
+
+### Improved
+- Modbus schedule writes now update only changed slot input fields and only rewrite enable masks when slot counts change.
+- Modbus mode writes are skipped when the inverter is already in the requested mode.
+- MQTT state updates now skip unchanged state/attribute publishes to reduce poll-loop chatter.
+
 ## [0.3.3] - 2026-05-30
 
 ### Improved

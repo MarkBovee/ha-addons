@@ -213,6 +213,31 @@ def test_modbus_set_mode_verifies_read_back():
     assert context.battery_mode_setting == "Time-of-use"
 
 
+def test_modbus_set_mode_skips_write_when_already_in_target_mode():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+    backend.entities = {
+        "app_mode_input": "number.saj_app_mode_input",
+        "app_mode": "sensor.saj_app_mode",
+    }
+
+    with patch.object(backend, "_get_int", return_value=1):
+        with patch.object(backend, "_set_number", return_value=True) as set_number:
+            with patch.object(backend, "_wait_for_int_value", return_value=1) as wait_for_int:
+                assert backend.set_mode("Time-of-use") is True
+
+    set_number.assert_not_called()
+    wait_for_int.assert_not_called()
+    assert context.battery_mode_setting == "Time-of-use"
+
+
 def test_modbus_set_export_limit_verifies_read_back():
     context = BackendContext(
         config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
@@ -352,7 +377,7 @@ def test_modbus_save_schedule_verifies_written_inputs_before_returning():
                         assert backend.save_schedule([], json.dumps(expected_schedule)) is True
 
     assert write_slots.call_count == 2
-    assert set_number.call_count == 2
+    assert set_number.call_count == 0
     set_mode.assert_called_once_with("Time-of-use")
     assert json.loads(context.status["current_schedule"]) == expected_schedule
 
@@ -381,6 +406,74 @@ def test_modbus_save_schedule_skips_slow_read_back_mirror_verification():
                         assert backend.save_schedule([], json.dumps(expected_schedule)) is True
 
     verify_inputs.assert_called_once_with(expected_schedule)
+
+
+def test_modbus_write_slots_only_updates_changed_fields_and_mask():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+
+    target_periods = [{"start": "20:00", "duration": 30, "power": 2800}]
+
+    def fake_get_slot_input_state(slot_type, index, enabled_mask=None):
+        if slot_type == "discharge" and index == 1:
+            return {
+                "enabled": True,
+                "start": "20:00",
+                "end": "20:30",
+                "power_percent": 20,
+                "day_mask": 127,
+            }
+        return {
+            "enabled": False,
+            "start": "00:00",
+            "end": "00:00",
+            "power_percent": 0,
+            "day_mask": 0,
+        }
+
+    with patch.object(backend, "_get_int", side_effect=lambda key: 1 if key == "discharge_time_enable_input" else 0):
+        with patch.object(backend, "_get_slot_input_state", side_effect=fake_get_slot_input_state):
+            with patch.object(backend, "_set_text", return_value=True) as set_text:
+                with patch.object(backend, "_set_number", return_value=True) as set_number:
+                    backend._write_slots("discharge", target_periods)
+
+    set_text.assert_not_called()
+    set_number.assert_called_once_with("discharge1_power_percent_input", 35)
+
+
+def test_modbus_write_slots_updates_enable_mask_when_slot_count_changes():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+
+    target_periods = [{"start": "20:00", "duration": 30, "power": 2800}]
+
+    with patch.object(backend, "_get_int", side_effect=lambda key: 0 if key == "discharge_time_enable_input" else 0):
+        with patch.object(backend, "_get_slot_input_state", return_value={
+            "enabled": False,
+            "start": "00:00",
+            "end": "00:00",
+            "power_percent": 0,
+            "day_mask": 0,
+        }):
+            with patch.object(backend, "_set_text", return_value=True):
+                with patch.object(backend, "_set_number", return_value=True) as set_number:
+                    backend._write_slots("discharge", target_periods)
+
+    assert any(call.args == ("discharge_time_enable_input", 1) for call in set_number.call_args_list)
 
 
 def test_api_provider_rejects_schedule_above_cloud_slot_limits():
@@ -460,6 +553,43 @@ def test_mqtt_command_callback_runs_off_network_thread():
     assert callback_thread_name[0] != threading.current_thread().name
 
     callback_release.set()
+
+
+def test_mqtt_update_state_skips_unchanged_publish():
+    discovery = object.__new__(MqttDiscovery)
+    discovery.addon_id = "battery_api"
+    discovery._last_state_payloads = {}
+    discovery._last_attributes_payloads = {}
+    discovery._connected = True
+    discovery._client = object()
+
+    published = []
+
+    def fake_publish(topic, payload, retain=True):
+        published.append((topic, payload, retain))
+        return True
+
+    discovery._publish = fake_publish
+
+    assert discovery.update_state("sensor", "battery_power", "100", {"direction": "Discharging"}) is True
+    assert discovery.update_state("sensor", "battery_power", "100", {"direction": "Discharging"}) is True
+
+    assert len(published) == 2
+    assert published[0][0] == "battery_api/sensor/battery_power/state"
+    assert published[1][0] == "battery_api/sensor/battery_power/attributes"
+
+
+def test_mqtt_disconnect_clears_state_dedupe_cache():
+    discovery = object.__new__(MqttDiscovery)
+    discovery._client = MagicMock()
+    discovery._connected = True
+    discovery._last_state_payloads = {"sensor:battery_power": "100"}
+    discovery._last_attributes_payloads = {"sensor:battery_power": '{"direction":"Discharging"}'}
+
+    discovery.disconnect()
+
+    assert discovery._last_state_payloads == {}
+    assert discovery._last_attributes_payloads == {}
 
 
 def test_modbus_poll_status_uses_single_state_snapshot():
