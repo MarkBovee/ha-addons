@@ -11,6 +11,7 @@ from app.price_analyzer import (
     calculate_discharge_top_x_count,
     calculate_price_ranges,
     calculate_top_x_count,
+    expand_charge_starts_within_price_delta,
     find_profitable_discharge_starts,
 )
 from app.status_reporter import find_upcoming_windows
@@ -148,6 +149,31 @@ class TestDischargeSelectionHelpers:
         assert selected == {
             "2026-03-09T01:00:00+00:00",
             "2026-03-09T02:00:00+00:00",
+        }
+
+    def test_expand_charge_starts_within_price_delta_adds_nearly_equal_slots(self):
+        import_curve = [
+            {"start": "2026-03-09T09:00:00+00:00", "price": 0.13},
+            {"start": "2026-03-09T10:00:00+00:00", "price": 0.13},
+            {"start": "2026-03-09T11:00:00+00:00", "price": 0.14},
+            {"start": "2026-03-09T12:00:00+00:00", "price": 0.14},
+            {"start": "2026-03-09T13:00:00+00:00", "price": 0.15},
+        ]
+
+        expanded = expand_charge_starts_within_price_delta(
+            import_curve,
+            {
+                "2026-03-09T09:00:00+00:00",
+                "2026-03-09T10:00:00+00:00",
+            },
+            max_price_delta=0.01,
+        )
+
+        assert expanded == {
+            "2026-03-09T09:00:00+00:00",
+            "2026-03-09T10:00:00+00:00",
+            "2026-03-09T11:00:00+00:00",
+            "2026-03-09T12:00:00+00:00",
         }
 
     def test_upcoming_windows_respect_exact_discharge_starts(self):

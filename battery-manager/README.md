@@ -1,123 +1,190 @@
 # Battery Manager
 
-Optimize battery charging and discharging using dynamic electricity prices, solar surplus, grid export detection, and EV charging awareness.
+Price-driven battery scheduling add-on for Home Assistant.
 
-## Overview
+It reads price curves, SOC, grid/solar/load telemetry, and optional EV charger state, then publishes schedules to `Battery API` through MQTT.
 
-Battery Manager generates rolling charge/discharge schedules based on price curves from the Energy Prices add-on. It classifies prices into four ranges — **load** (cheapest, charge battery), **discharge** (most expensive, sell), **adaptive** (mid-range, discharge to 0W grid), and **passive** (below threshold, battery idle) — adjusts discharge power in real time, and applies SOC protection, conservative-SOC reduction, solar surplus, and EV charging rules.
+## What It Does
 
-Live adaptive behavior is kept in sync with the current price band between hourly schedule refreshes: when the current interval is still adaptive but the published schedule no longer has an active adaptive slot, Battery Manager regenerates the rolling schedule instead of staying idle until the next hourly refresh. Future explicit discharge windows are checked against fresh current SOC plus any already-planned charge energy, while also preserving the highest configured reserve floor from `soc.min_soc` and `soc.conservative_soc`, so unsupported sell periods are dropped instead of being left to fail later at runtime. If the remaining sell energy is short of a full peak window, Battery Manager can trim the last discharge period to a partial duration so it still stays inside the high-price hours. If the SOC reading is stale or unavailable, Battery Manager skips that pruning step instead of discarding future sell windows from bad telemetry.
+- Builds rolling charge and discharge plan from import/export prices
+- Regenerates schedule on interval and when live adaptive state drifts from published plan
+- Adjusts live discharge behavior during adaptive periods instead of waiting for next hourly plan
+- Applies SOC protection, conservative SOC reduction, sell-buffer logic, solar-aware charging, and EV hold rules
+- Publishes human-readable status and schedule sensors via MQTT Discovery
 
-Conservative-SOC protection only blocks full-power scheduled discharge windows. If the current interval is adaptive, or if schedule generation initially classifies the current interval as `discharge` but SOC is already at or below `soc.conservative_soc`, Battery Manager downgrades that live interval to adaptive and keeps the fallback adaptive window active as long as SOC remains above `soc.min_soc`. That prevents the inverter from dropping to idle while the live control path still wants adaptive discharge toward 0W grid power.
-
-When `solar_aware_charging` is enabled, Battery Manager also reduces today's commanded grid charge power during planned charge windows based on the remaining solar forecast (`sensor.energy_production_today_remaining`). The calculation is rerun on every schedule refresh using the latest SOC and the latest remaining-solar value, so charge power can change hour by hour while still aiming for `soc.max_soc`.
-
-## Prerequisites
+## Dependencies
 
 - Home Assistant Supervisor
-- Mosquitto MQTT broker add-on
-- Energy Prices add-on (price curve sensor)
-- Battery API add-on (MQTT schedule topic)
+- MQTT broker, usually `core-mosquitto`
+- `Energy Prices` add-on
+- `Battery API` add-on
 
-## Installation
+Optional:
 
-1. Install this repository in Home Assistant Add-on Store.
-2. Install **Energy Prices** and **Battery API** add-ons first.
-3. Install **Battery Manager** add-on.
-4. Configure options in the add-on UI.
-5. Start the add-on.
+- `Charge Amps - EV Charger Monitor` for EV-aware discharge pauses
+
+## Install
+
+1. Add this repository to Home Assistant.
+2. Install `Energy Prices` and `Battery API` first.
+3. Install `Battery Manager`.
+4. Configure entities and thresholds.
+5. Start add-on.
+
+## Runtime Model
+
+`Battery Manager` does not talk to inverter directly.
+
+- Reads price curves from `Energy Prices`
+- Reads normalized live telemetry from `Battery API`
+- Reads provider limits from `sensor.battery_api_api_status`
+- Publishes schedule JSON to `battery_api/text/schedule/set`
+
+Because of that, provider switch in `Battery API` should not require dashboard or manager rewiring.
+
+## Core Behavior
+
+### Schedule Generation
+
+- Cheapest periods become charge candidates
+- Most expensive periods become discharge candidates
+- Mid-range profitable periods can become adaptive discharge windows
+- Low-value periods stay passive unless heuristics promote them
+- Future sell windows are pruned when current SOC plus planned charging cannot support them
+
+### Live Adaptive Control
+
+- Current interval is checked between full schedule refreshes
+- If live interval should stay adaptive but published schedule no longer contains matching adaptive window, add-on regenerates schedule instead of going idle
+- Conservative SOC does not hard-stop all live discharge: active adaptive period can downgrade from full discharge to adaptive discharge while respecting reserve floors
+
+### Solar-Aware Charging
+
+When enabled, planned grid charging for today is reduced by remaining solar forecast so battery still targets `soc.max_soc` without overbuying from grid.
+
+### EV-Aware Protection
+
+When EV charging is active above threshold, discharge can be paused to avoid bad battery economics.
 
 ## Configuration
 
-Key options (defaults in config.yaml):
+Defaults live in `battery-manager/config.yaml`.
 
-- **timing.update_interval**: schedule refresh interval (seconds)
-- **timing.monitor_interval**: real-time monitoring interval (seconds)
-- **timing.adaptive_power_grace_seconds**: minimum seconds between adaptive power changes
-- **timing.schedule_regen_cooldown_seconds**: cooldown for rolling schedule regeneration
-- **timing.max_soc_sensor_age_seconds**: maximum accepted SOC sensor age before protective discharge pause and future discharge-feasibility pruning are bypassed (0 disables staleness check)
-- **timing.max_ev_sensor_age_seconds**: maximum accepted EV charger sensor age before Battery Manager ignores EV charging hold state (0 disables staleness check)
-- **dry_run**: log schedules without publishing to MQTT
-- **entities.price_curve_entity**: price curve sensor entity
-- **entities.export_price_curve_entity**: export price curve sensor entity
-- **entities.remaining_solar_energy_entity**: remaining solar energy forecast for the rest of today
-- **entities.soc_entity**: battery SOC sensor
-- **entities.battery_api_status_entity**: battery-api provider/capability sensor used to discover active slot limits
-- **entities.grid_power_entity**: grid power sensor (import/export)
-- **entities.solar_power_entity**: solar production sensor
-- **entities.house_load_entity**: house load sensor
-- **entities.temperature_entity**: outdoor temperature sensor
-- **power.max_charge_power**: maximum charge power (W)
-- **power.max_discharge_power**: maximum discharge power (W)
-- **power.min_discharge_power**: baseline discharge power for adaptive periods (W)
-- **power.min_scaled_power**: minimum scaled power for ranked charge/discharge (W)
-- **solar_aware_charging.enabled**: enable remaining-solar-aware charge power allocation for today's charge slots
-- **solar_aware_charging.forecast_safety_factor**: fraction of the remaining solar forecast that may be trusted for charge planning (default `0.8`)
-- **solar_aware_charging.min_charge_power**: minimum commanded grid charge power for a retained solar-aware charge slot (default `500W`)
-- **soc.min_soc**: hard minimum SOC (%)
-- **soc.conservative_soc**: conservative SOC threshold (%)
-- **soc.max_soc**: max SOC allowed for charging; reaching this value also triggers a 5-minute 50% discharge stabilizer burst to keep SOC near the ceiling
-- **soc.battery_capacity_kwh**: battery usable capacity used for buffer calculation (kWh)
-- **soc.sell_buffer_enabled**: keep dynamic SOC reserve for discharge windows before main charge window
-- **soc.sell_buffer_min_soc**: safety minimum SOC floor for sell-buffer logic (%)
-- **soc.sell_buffer_rounding_step_pct**: round calculated sell-buffer SOC to nearest step (default 10%)
-- **soc.sell_buffer_activation_hours_before_sell**: only activate sell-buffer/precharge this many hours before first planned sell window (default 3)
-- **heuristics.top_x_charge_hours**: cheapest periods to charge
-- **heuristics.top_x_discharge_hours**: hard maximum number of most expensive periods to discharge
-- Battery Manager reads `sensor.battery_api_api_status` capability attributes and adapts schedule slot usage to the active provider instead of assuming a fixed `3/6` contract.
-- **passive_solar.enabled**: enable 0W charge gap on excess solar (suppressed during active sell windows; the built-in passive-gap fallback stays allowed)
-- **passive_solar.entry_threshold**: grid export threshold to enter passive mode (W, default 1000)
-- **passive_solar.exit_threshold**: grid import threshold to exit passive mode (W, default 200)
-- **passive_solar.min_solar_entry_power**: minimum solar generation required to enter passive mode (W, default 200)
-- **heuristics.adaptive_price_threshold**: price at or above which mid-range periods switch from passive idle to adaptive discharge (EUR/kWh)
-- **heuristics.min_profit_threshold**: minimum spread between load and discharge prices (EUR/kWh)
-- **heuristics.overnight_wait_threshold**: evening vs overnight price gap to wait for cheaper charging (EUR/kWh)
-- **heuristics.sell_wait_for_better_morning_enabled**: defer discharge when a better sell window exists within the configured horizon
-- **heuristics.sell_wait_horizon_hours**: look-ahead horizon used to evaluate deferred selling (hours, default 12)
-- **heuristics.sell_wait_min_gain_threshold**: minimum export-price gain needed to defer selling (EUR/kWh)
-- **heuristics.sell_wait_morning_start_hour**: local-hour start (inclusive) for preferred deferred sell window
-- **heuristics.sell_wait_morning_end_hour**: local-hour end (exclusive) for preferred deferred sell window
-- **temperature_based_discharge.enabled**: enable temperature mapping
-- **temperature_based_discharge.thresholds**: temperature → discharge hours mapping; `discharge_hours` may be fractional (for example `1.5` or `2.5`) and can reduce profitable discharge selection below `heuristics.top_x_discharge_hours`, but never expand it above that configured cap
-- **ev_charger.enabled**: enable EV charger integration
-- **ev_charger.charging_threshold**: EV charging threshold (W)
-- **ev_charger.entity_id**: EV charger power sensor
+### Important Options
 
-## MQTT Entities
+| Option | Meaning |
+| --- | --- |
+| `enabled` | Master enable |
+| `dry_run` | Build and log schedules without publishing |
+| `entities.price_curve_entity` | Import price curve sensor |
+| `entities.export_price_curve_entity` | Export price curve sensor |
+| `entities.remaining_solar_energy_entity` | Remaining solar forecast for today |
+| `entities.soc_entity` | SOC sensor, normally `sensor.battery_api_battery_soc` |
+| `entities.battery_api_status_entity` | Capability/provider status sensor |
+| `entities.grid_power_entity` | Grid power sensor |
+| `entities.solar_power_entity` | Solar production sensor |
+| `entities.house_load_entity` | House load sensor |
+| `entities.battery_power_entity` | Battery power sensor |
+| `entities.battery_mode_entity` | Battery mode entity |
+| `entities.temperature_entity` | Outdoor temperature sensor |
+| `timing.update_interval` | Full schedule refresh interval |
+| `timing.monitor_interval` | Live monitor cadence |
+| `timing.adaptive_power_grace_seconds` | Minimum gap between adaptive power changes |
+| `timing.schedule_regen_cooldown_seconds` | Cooldown for rolling regen |
+| `timing.max_soc_sensor_age_seconds` | SOC staleness limit |
+| `timing.max_ev_sensor_age_seconds` | EV sensor staleness limit |
+| `power.max_charge_power` | Charge ceiling |
+| `power.max_discharge_power` | Discharge ceiling |
+| `power.min_discharge_power` | Adaptive baseline |
+| `power.min_scaled_power` | Minimum scaled schedule power |
+| `soc.min_soc` | Hard reserve floor |
+| `soc.conservative_soc` | Softer reserve threshold |
+| `soc.max_soc` | Max target SOC |
+| `soc.battery_capacity_kwh` | Usable capacity for energy math |
+| `soc.sell_buffer_*` | Dynamic reserve before planned sell windows |
+| `solar_aware_charging.*` | Remaining-solar-aware charge reduction |
+| `passive_solar.*` | Excess-solar passive gap logic |
+| `heuristics.*` | Price and ranking heuristics |
+| `heuristics.charge_spread_enabled` | Spread charging over almost-equal cheap hours instead of always charging flat-out |
+| `heuristics.charge_spread_max_price_delta` | Extra cheap-hour tolerance band in EUR/kWh for spread charging |
+| `temperature_based_discharge.*` | Temperature-to-discharge-hour mapping |
+| `ev_charger.*` | EV integration |
+| `negative_price_charging.enabled` | Allow charging logic for negative prices |
 
-The add-on publishes status entities via MQTT Discovery under the **Battery Manager** device:
+### Provider Capabilities
+
+`Battery Manager` no longer assumes fixed `3/6` schedule slots.
+
+It reads `sensor.battery_api_api_status` attributes:
+
+- `capabilities.max_charge_periods`
+- `capabilities.max_discharge_periods`
+
+That lets one strategy work with both SAJ cloud API and Modbus backend.
+
+## MQTT and Published Entities
+
+Published entities use `sensor.battery_manager_*` IDs.
 
 | Entity | Purpose |
-|--------|---------|
-| `sensor.bm_status` | Current operational state (Charging, Discharging, Idle, Paused, Reduced on low SOC) |
-| `sensor.bm_reasoning` | Human-readable explanation of the current schedule decision |
-| `sensor.bm_forecast` | Price forecast summary with temperature context |
-| `sensor.bm_price_ranges` | Active price range classification (load, discharge, adaptive, passive) |
-| `sensor.bm_current_action` | Real-time action description during monitoring |
-| `sensor.bm_charge_schedule` | Next charge period display (e.g. "⚡ 02:00–04:00") |
-| `sensor.bm_discharge_schedule` | Next discharge period display (e.g. "💰 08:00–10:00") |
-| `sensor.bm_schedule` | Full planned schedule as markdown table (charge + discharge periods) |
-| `sensor.bm_mode` | Active operating mode (Normal, Passive Solar) |
-| `sensor.battery_manager_effective_discharge_power` | Current effective discharge power with attributes including `active_window_type` and effective runtime mode |
+| --- | --- |
+| `sensor.battery_manager_status` | Operational state |
+| `sensor.battery_manager_reasoning` | Human-readable rationale |
+| `sensor.battery_manager_forecast` | Price and weather summary |
+| `sensor.battery_manager_price_ranges` | Current price range classification |
+| `sensor.battery_manager_current_action` | Live action summary |
+| `sensor.battery_manager_charge_schedule` | Next charge window |
+| `sensor.battery_manager_discharge_schedule` | Next discharge window |
+| `sensor.battery_manager_schedule` | Main schedule markdown |
+| `sensor.battery_manager_schedule_part_2` | Overflow schedule markdown |
+| `sensor.battery_manager_mode` | Current runtime mode |
+| `sensor.battery_manager_effective_discharge_power` | Effective live discharge power |
 
-All entities use `unique_id` for UI management and carry rich attributes (schedule details, price data, timestamps).
+Schedule output to `Battery API` uses the existing topic:
+
+```text
+battery_api/text/schedule/set
+```
 
 ## Troubleshooting
 
-- If no schedule is published, verify the Energy Prices price curve sensor exists.
-- Ensure the MQTT broker is running and credentials match the add-on configuration.
-- Check add-on logs for missing sensor warnings.
-- If an expected sell window is missing, check the logs for `Skipping discharge window`; Battery Manager now drops discharge periods that current SOC plus planned charging cannot realistically support.
-- If morning sell postponement does not trigger, check logs for `Sell-wait skipped:` diagnostics (reason + evaluated thresholds).
-- If discharge pauses unexpectedly, verify SOC sensor freshness against `timing.max_soc_sensor_age_seconds`.
-- If EV charging keeps blocking discharge after Charge Amps updates stop, lower or verify `timing.max_ev_sensor_age_seconds` so stale charger power is ignored faster.
-- If fewer windows than expected are published, inspect `sensor.battery_api_api_status` attributes; Battery Manager now follows `capabilities.max_charge_periods` and `capabilities.max_discharge_periods` from Battery API.
+### No Schedule Published
 
-## Development
+1. Verify import/export price sensors exist.
+2. Verify MQTT broker is running.
+3. Verify `Battery API` is online.
+4. Check add-on logs for missing entity warnings.
 
-Use the repository runner for local testing:
+### Fewer Charge or Discharge Windows Than Expected
 
-- python run_addon.py --addon battery-manager
-- python run_addon.py --addon battery-manager --once
-- python battery-manager/run_local.py
-- RUN_ONCE=1 python battery-manager/run_local.py
+1. Check `sensor.battery_api_api_status` capability limits.
+2. Check logs for skipped discharge windows due to SOC feasibility.
+3. Check temperature-based discharge hour cap.
+
+### Adaptive Discharge Stops Unexpectedly
+
+1. Check SOC against `soc.min_soc` and `soc.conservative_soc`.
+2. Check EV charging state and staleness limit.
+3. Check current price band still qualifies for adaptive behavior.
+
+### EV Hold Sticks Too Long
+
+Lower `timing.max_ev_sensor_age_seconds` or fix stale EV sensor updates.
+
+### Discharge Windows Disappear
+
+Current versions intentionally prune future sell windows that cannot be supported by current SOC plus already-planned charging.
+
+## Local Development
+
+```bash
+python run_addon.py --addon battery-manager
+python run_addon.py --addon battery-manager --once
+python battery-manager/run_local.py
+RUN_ONCE=1 python battery-manager/run_local.py
+```
+
+## Related Docs
+
+- [../battery-api/README.md](../battery-api/README.md)
+- [../energy-prices/README.md](../energy-prices/README.md)

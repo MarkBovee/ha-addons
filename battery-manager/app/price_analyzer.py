@@ -263,6 +263,59 @@ def find_top_x_charge_starts(
     return starts
 
 
+def expand_charge_starts_within_price_delta(
+    import_curve: Sequence[dict],
+    selected_starts: Set[str],
+    max_price_delta: float,
+) -> Set[str]:
+    """Expand selected charge slots with nearly-equal priced periods.
+
+    Starts from the exact Top-X slot selection and adds extra periods whose import
+    price stays within ``max_price_delta`` of the most expensive already-selected
+    charge slot. This keeps charging inside a tight cheap-price band while allowing
+    longer, lower-power charging windows when many hours are similarly cheap.
+    """
+
+    if not import_curve or not selected_starts:
+        return set(selected_starts)
+
+    try:
+        max_delta = max(0.0, float(max_price_delta))
+    except (TypeError, ValueError):
+        max_delta = 0.0
+
+    if max_delta <= 0:
+        return set(selected_starts)
+
+    selected_prices: List[float] = []
+    for entry in import_curve:
+        start = entry.get("start")
+        if start not in selected_starts:
+            continue
+        try:
+            selected_prices.append(float(entry.get("price", 0.0)))
+        except (TypeError, ValueError):
+            continue
+
+    if not selected_prices:
+        return set(selected_starts)
+
+    price_ceiling = max(selected_prices) + max_delta
+    expanded = set(selected_starts)
+    for entry in import_curve:
+        start = entry.get("start")
+        if not isinstance(start, str) or not start:
+            continue
+        try:
+            price = float(entry.get("price", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if price <= price_ceiling:
+            expanded.add(start)
+
+    return expanded
+
+
 def find_top_x_charge_periods(prices: Sequence[Union[float, int, dict]], top_x: int) -> List[PricePoint]:
     """Return the cheapest Top X periods for charging.
 

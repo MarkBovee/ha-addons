@@ -20,6 +20,64 @@ class SolarAwareChargeAllocation:
     remaining_grid_energy_kwh: float
 
 
+def allocate_charge_powers(
+    slots: List[Dict[str, Any]],
+    target_grid_energy_kwh: float,
+    min_charge_power_w: int,
+) -> Dict[str, int]:
+    """Allocate required grid charge energy across available slots.
+
+    Uses each slot's `base_power` as ceiling and spreads the remaining required
+    grid energy across the remaining slot duration.
+    """
+
+    valid_slots: List[Dict[str, Any]] = []
+    total_hours = 0.0
+    for slot in slots:
+        start_dt = slot.get("start")
+        end_dt = slot.get("end")
+        base_power = slot.get("base_power")
+        if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime):
+            continue
+        if not isinstance(base_power, (int, float)) or base_power <= 0:
+            continue
+        duration_hours = max((end_dt - start_dt).total_seconds() / 3600.0, 0.0)
+        if duration_hours <= 0:
+            continue
+        valid_slots.append(slot)
+        total_hours += duration_hours
+
+    if target_grid_energy_kwh <= 0 or not valid_slots or total_hours <= 0:
+        return {}
+
+    slot_powers: Dict[str, int] = {}
+    remaining_grid_kwh = float(target_grid_energy_kwh)
+    remaining_hours = total_hours
+    min_power = max(0, int(min_charge_power_w))
+
+    for slot in valid_slots:
+        slot_hours = max((slot["end"] - slot["start"]).total_seconds() / 3600.0, 0.0)
+        if slot_hours <= 0:
+            continue
+
+        base_power = int(slot["base_power"])
+        average_power_w = math.ceil((remaining_grid_kwh / max(remaining_hours, slot_hours)) * 1000.0)
+        power_w = min(base_power, max(min_power, average_power_w))
+        if power_w <= 0:
+            remaining_hours = max(0.0, remaining_hours - slot_hours)
+            continue
+
+        slot_key = slot["start"].isoformat()
+        slot_powers[slot_key] = power_w
+        remaining_grid_kwh = max(0.0, remaining_grid_kwh - ((power_w / 1000.0) * slot_hours))
+        remaining_hours = max(0.0, remaining_hours - slot_hours)
+
+        if remaining_grid_kwh <= 0:
+            break
+
+    return slot_powers
+
+
 def parse_remaining_solar_energy_kwh(entity_state: Optional[Dict[str, Any]]) -> Optional[float]:
     """Convert a Home Assistant remaining-solar sensor state to kWh.
 
@@ -117,30 +175,20 @@ def allocate_solar_aware_charge_powers(
     if grid_energy_target_kwh <= 0:
         return SolarAwareChargeAllocation(True, {}, slot_solar_kwh, usable_solar_kwh, 0.0, 0.0)
 
-    slot_powers: Dict[str, int] = {}
-    remaining_grid_kwh = grid_energy_target_kwh
-    remaining_hours = total_hours
-    min_power = max(0, int(min_charge_power_w))
-
+    slot_powers = allocate_charge_powers(
+        valid_slots,
+        target_grid_energy_kwh=grid_energy_target_kwh,
+        min_charge_power_w=min_charge_power_w,
+    )
+    delivered_grid_kwh = 0.0
     for slot in valid_slots:
-        slot_hours = max((slot["end"] - slot["start"]).total_seconds() / 3600.0, 0.0)
-        if slot_hours <= 0:
-            continue
-
-        base_power = int(slot["base_power"])
-        average_power_w = math.ceil((remaining_grid_kwh / max(remaining_hours, slot_hours)) * 1000.0)
-        power_w = min(base_power, max(min_power, average_power_w))
-        if power_w <= 0:
-            remaining_hours = max(0.0, remaining_hours - slot_hours)
-            continue
-
         slot_key = slot["start"].isoformat()
-        slot_powers[slot_key] = power_w
-        remaining_grid_kwh = max(0.0, remaining_grid_kwh - ((power_w / 1000.0) * slot_hours))
-        remaining_hours = max(0.0, remaining_hours - slot_hours)
-
-        if remaining_grid_kwh <= 0:
-            break
+        power_w = slot_powers.get(slot_key)
+        if power_w is None:
+            continue
+        slot_hours = max((slot["end"] - slot["start"]).total_seconds() / 3600.0, 0.0)
+        delivered_grid_kwh += (power_w / 1000.0) * slot_hours
+    remaining_grid_kwh = max(0.0, grid_energy_target_kwh - delivered_grid_kwh)
 
     return SolarAwareChargeAllocation(
         True,

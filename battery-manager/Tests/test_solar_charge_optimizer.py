@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.solar_charge_optimizer import (
+    allocate_charge_powers,
     allocate_solar_aware_charge_powers,
     calculate_charge_deficit_kwh,
     parse_remaining_solar_energy_kwh,
@@ -65,3 +66,19 @@ def test_allocate_solar_aware_charge_powers_can_skip_grid_slots_when_solar_cover
     assert allocation.applied is True
     assert allocation.grid_energy_target_kwh == 0.0
     assert allocation.slot_powers == {}
+
+
+def test_allocate_charge_powers_spreads_target_across_longer_window_set():
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    slots = [
+        {"start": now, "end": now + timedelta(hours=3), "base_power": 8000},
+        {"start": now + timedelta(hours=3), "end": now + timedelta(hours=6), "base_power": 8000},
+    ]
+
+    slot_powers = allocate_charge_powers(
+        slots,
+        target_grid_energy_kwh=24.0,
+        min_charge_power_w=500,
+    )
+
+    assert list(slot_powers.values()) == [4000, 4000]

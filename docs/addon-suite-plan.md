@@ -1,75 +1,55 @@
-# Home Assistant Add-on Suite – Documentation Plan
+# Home Assistant Add-on Suite
 
-## Introduction
+This repo is no longer a speculative add-on roadmap. It is a working add-on suite with a few older design docs still kept for context.
 
-We are extracting the most valuable behaviors from the legacy `NetDaemonApps` project and recreating them as self-contained Home Assistant add-ons. Each add-on will ship with:
+## Current Production Shape
 
-- Fresh Python implementation under its own `app/` directory (no reuse of legacy .NET code).
-- `config.yaml` documenting slug, version, architectures, exposed options, and schema validation.
-- README content that mirrors the functionality summaries provided here.
-- Consistent entity naming with a standard prefix for new sensors and status updates via input_text entities where users rely on dashboards.
+| Area | Add-on | Responsibility |
+| --- | --- | --- |
+| Price data | `Energy Prices` | Import/export price curves and derived classifications |
+| Battery adapter | `Battery API` | Inverter communication, normalized HA entities, schedule apply |
+| Battery strategy | `Battery Manager` | Schedule generation, heuristics, live adaptive control |
+| EV | `Charge Amps - EV Charger Monitor` | Charger monitoring and optional integration with battery logic |
+| Heating | `Water Heater Scheduler` | Price-aware domestic hot water scheduling |
 
-This document captures the functional blueprint we follow when authoring the code, ensuring every add-on exposes clear settings, entity contracts, and diagnostics.
+## Design Rules
 
-## Add-on Suite
+### Stable Contracts
 
-The following add-ons are planned for this repository:
+- External contracts should stay stable even when backend implementation changes.
+- Battery stack example: `Battery Manager` talks to `Battery API`, not directly to provider-specific SAJ controls.
+- Provider capabilities belong in diagnostics and capability attributes, not in hardcoded downstream assumptions.
 
-1. **[Battery Optimizer](battery-optimizer-addon.md)** – AI-based battery scheduling with SAJ inverter integration
-2. **[Appliance Guard](appliance-guard-addon.md)** – Automatically disable high-load appliances during high price periods or away mode
-3. **[Water Heater Scheduler](water-heater-scheduler-addon.md)** – Optimize domestic hot water heating based on electricity prices
-4. **[Vacation Alarm](vacation-alarm-addon.md)** – Automate night-only alarm arming when away
-5. **[Vacation Lighting](vacation-lighting-addon.md)** – Simulate presence with randomized light scheduling
-6. **[Energy Usage Reporter](energy-usage-reporter-addon.md)** – Record and report 15-minute interval energy data
-7. **[Price Helper Service](price-helper-service-addon.md)** – Centralized electricity price fetching and normalization
+### Shared Code
 
-## Documentation Template
+- Root `shared/` is source of truth.
+- Add-on-local `shared/` copies exist for Docker builds.
+- Sync shared code after edits.
 
-Each add-on follows a uniform structure:
+### Home Assistant Entity Stability
 
-1. **Purpose** – What problem it solves and why it exists.
-2. **Key Behaviors** – Event loops, scheduling cadence, and state transitions.
-3. **User Settings** – Options available in `config.yaml` with defaults and types.
-4. **Home Assistant Entities** – Entities read and written, plus any helper sensors we create.
-5. **Diagnostics & Logging** – Status and troubleshooting hooks.
-6. **Future Extensions** – Pre-vetted ideas for follow-up releases.
+- Entity IDs should remain stable across releases.
+- Units, state class, and meaning should not drift silently.
+- Diagnostic detail should go in attributes when possible.
 
-## Shared Conventions
+### Operational Bias
 
-### Naming
+- Prefer small add-ons with narrow responsibility.
+- Prefer explicit clear/apply flows over hidden state mutation.
+- Prefer diagnostics that explain current mode, limits, and failures directly in Home Assistant.
 
-- **Prefix**: Use a consistent entity prefix for all sensors/binary sensors and services created by add-ons in this suite.
-- **Status Entities**: Where we output text (e.g., battery, water heater, appliances, vacation lighting, vacation alarm), ensure `max: 255` and keep messages concise (<200 chars) to avoid truncation.
+## Battery Architecture
 
-### Configuration
+Current battery flow:
 
-- **Options Schema**: Every add-on should expose both `options` defaults and `schema` definitions in `config.yaml` (camelCase option keys, validation via types).
+1. `Energy Prices` publishes import/export curves.
+2. `Battery Manager` reads prices plus live HA telemetry and decides schedule.
+3. `Battery Manager` publishes schedule to `battery_api/text/schedule/set`.
+4. `Battery API` validates and applies schedule through active provider.
+5. Dashboards and automations consume normalized `battery_api_*` and `battery_manager_*` entities.
 
-### Runtime Behavior
+This separation is intentional. It keeps inverter transport concerns out of strategy logic and makes API/Modbus switching low-risk.
 
-- **Graceful Shutdowns**: Each add-on must honor a `shutdown_flag` and stop scheduling loops promptly so Home Assistant Supervisor can stop/restart containers cleanly.
-- **Telemetry**: When emitting sensors, keep units, device classes, and unique IDs stable so dashboards persist across upgrades.
+## Older Docs
 
-### Dependencies
-
-Several add-ons depend on the **Price Helper Service**:
-- Battery Optimizer (AI scheduling)
-- Appliance Guard (curtailment decisions)
-- Water Heater Scheduler (optimal heating windows)
-- Energy Usage Reporter (cost calculations)
-
-## Development Process
-
-When implementing new add-ons:
-
-1. Review the specific add-on documentation for detailed requirements
-2. Follow the established add-on structure (app/ directory, config.yaml, README)
-3. Ensure all required configuration options are documented
-4. Implement comprehensive logging for troubleshooting
-5. Add service endpoints where appropriate for manual control
-6. Test graceful shutdown behavior
-7. Validate entity naming consistency with the suite prefix
-
-## Related Documentation
-
-- [Repository Configuration](../repository.json) – Add-on registry
+Older names like `Battery Optimizer` describe pre-split concepts. They are retained only as historical context and should not be treated as current implementation docs.

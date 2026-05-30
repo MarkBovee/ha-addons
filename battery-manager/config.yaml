@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.72"
+version: "0.8.73"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -71,6 +71,8 @@ options:
     adaptive_price_threshold: 0.25
     top_x_charge_hours: 3
     top_x_discharge_hours: 2
+    charge_spread_enabled: true
+    charge_spread_max_price_delta: 0.02
     min_profit_threshold: 0.1
     overnight_wait_threshold: 0.02
     sell_wait_for_better_morning_enabled: true
@@ -166,6 +168,8 @@ schema:
     adaptive_price_threshold: float(0,5)?
     top_x_charge_hours: int(0,24)
     top_x_discharge_hours: int(0,24)
+    charge_spread_enabled: bool?
+    charge_spread_max_price_delta: float(0,1)?
     min_profit_threshold: float(0,2)
     overnight_wait_threshold: float(0,1)
     sell_wait_for_better_morning_enabled: bool?

@@ -27,6 +27,7 @@ from .price_analyzer import (
     calculate_price_ranges,
     calculate_top_x_count,
     detect_interval_minutes,
+    expand_charge_starts_within_price_delta,
     find_profitable_discharge_starts,
     find_top_x_charge_starts,
     get_current_period_rank,
@@ -34,6 +35,7 @@ from .price_analyzer import (
 )
 from .solar_monitor import SolarMonitor
 from .solar_charge_optimizer import (
+    allocate_charge_powers,
     SolarAwareChargeAllocation,
     allocate_solar_aware_charge_powers,
     calculate_charge_deficit_kwh,
@@ -132,6 +134,8 @@ DEFAULT_CONFIG = {
         "adaptive_price_threshold": 0.26,
         "top_x_charge_hours": 3,
         "top_x_discharge_hours": 2,
+        "charge_spread_enabled": True,
+        "charge_spread_max_price_delta": 0.02,
         "min_profit_threshold": 0.1,
         "overnight_wait_threshold": 0.02,
         "sell_wait_for_better_morning_enabled": True,
@@ -358,6 +362,13 @@ def _get_first_available_entity(ha_api: HomeAssistantApi, entity_ids: List[str])
         if state:
             return state
     return None
+
+
+def _get_min_charge_power(config: Dict[str, Any]) -> int:
+    solar_cfg = config.get("solar_aware_charging", {})
+    if "min_charge_power" in solar_cfg:
+        return max(0, int(solar_cfg.get("min_charge_power", 500)))
+    return max(0, int(config.get("power", {}).get("charging_power_limit", 500)))
 
 
 def _get_price_curve(ha_api: HomeAssistantApi, entity_id: str) -> Optional[List[Dict[str, Any]]]:
@@ -1516,7 +1527,18 @@ def generate_schedule(
         top_x_discharge_count,
         min_profit,
     )
-    today_charge_slot_starts = find_top_x_charge_starts(range_import_curve, top_x_charge_count)
+    today_exact_charge_slot_starts = find_top_x_charge_starts(range_import_curve, top_x_charge_count)
+    today_charge_slot_starts = set(today_exact_charge_slot_starts)
+    charge_spread_cfg = config.get("heuristics", {})
+    charge_spread_enabled = bool(charge_spread_cfg.get("charge_spread_enabled", True))
+    charge_spread_max_price_delta = float(charge_spread_cfg.get("charge_spread_max_price_delta", 0.02) or 0.0)
+    if charge_spread_enabled:
+        today_charge_slot_starts = expand_charge_starts_within_price_delta(
+            range_import_curve,
+            today_charge_slot_starts,
+            charge_spread_max_price_delta,
+        )
+    today_charge_spread_active = len(today_charge_slot_starts) > len(today_exact_charge_slot_starts)
     # If adaptive mode is disabled via config, force adaptive_range to None
     # so we don't display it or schedule adaptive windows
     adaptive_enabled = config.get("adaptive", {}).get("enabled", True)
@@ -1609,7 +1631,14 @@ def generate_schedule(
             top_x_discharge_count,
             min_profit,
         )
-        tomorrow_charge_slot_starts = find_top_x_charge_starts(tomorrow_import, top_x_charge_count)
+        tomorrow_exact_charge_slot_starts = find_top_x_charge_starts(tomorrow_import, top_x_charge_count)
+        tomorrow_charge_slot_starts = set(tomorrow_exact_charge_slot_starts)
+        if charge_spread_enabled:
+            tomorrow_charge_slot_starts = expand_charge_starts_within_price_delta(
+                tomorrow_import,
+                tomorrow_charge_slot_starts,
+                charge_spread_max_price_delta,
+            )
         forecast_text = build_tomorrow_story(
             tomorrow_load, tomorrow_discharge, tomorrow_adaptive, tomorrow_import,
             adaptive_price_threshold=adaptive_price_threshold,
@@ -1754,6 +1783,7 @@ def generate_schedule(
     scheduled_discharge_windows = 0
     scheduled_adaptive_windows = 0
     solar_aware_allocation: Optional[SolarAwareChargeAllocation] = None
+    spread_charge_slot_powers: Optional[Dict[str, int]] = None
     solar_aware_remaining_kwh: Optional[float] = None
     solar_charge_deficit_kwh = 0.0
 
@@ -1876,6 +1906,7 @@ def generate_schedule(
 
     solar_aware_cfg = config.get("solar_aware_charging", {})
     solar_aware_enabled = bool(solar_aware_cfg.get("enabled", True))
+    min_charge_power_w = _get_min_charge_power(config)
     if solar_aware_enabled and charge_slot_records and soc is not None:
         solar_aware_remaining_kwh = _get_remaining_solar_energy_kwh(
             ha_api,
@@ -1909,6 +1940,38 @@ def generate_schedule(
                     solar_aware_remaining_kwh,
                     solar_aware_allocation.usable_solar_kwh,
                     solar_aware_allocation.grid_energy_target_kwh,
+                )
+
+    if (
+        charge_spread_enabled
+        and today_charge_spread_active
+        and solar_aware_allocation is None
+        and charge_slot_records
+        and soc is not None
+    ):
+        today_charge_slot_records = [
+            record
+            for record in charge_slot_records
+            if not record.get("is_negative_price", False)
+            and record["start"].astimezone().date() == now.astimezone().date()
+        ]
+        solar_charge_deficit_kwh = calculate_charge_deficit_kwh(
+            soc,
+            float(max_soc),
+            float(config["soc"].get("battery_capacity_kwh", 25)),
+        )
+        if solar_charge_deficit_kwh > 0 and today_charge_slot_records:
+            spread_charge_slot_powers = allocate_charge_powers(
+                today_charge_slot_records,
+                target_grid_energy_kwh=solar_charge_deficit_kwh,
+                min_charge_power_w=min_charge_power_w,
+            )
+            if spread_charge_slot_powers:
+                logger.info(
+                    "🔋 Charge spread active: deficit %.2fkWh across %d cheap slot(s) within +€%.3f/kWh",
+                    solar_charge_deficit_kwh,
+                    len(spread_charge_slot_powers),
+                    charge_spread_max_price_delta,
                 )
 
     for record in charge_slot_records:
@@ -1948,6 +2011,12 @@ def generate_schedule(
                 continue
             slot_power = solar_aware_allocation.slot_powers[slot_key]
             solar_aware = True
+        elif (
+            spread_charge_slot_powers is not None
+            and slot_start.astimezone().date() == now.astimezone().date()
+            and slot_key in spread_charge_slot_powers
+        ):
+            slot_power = spread_charge_slot_powers[slot_key]
 
         charge_schedule.append({
             "start": slot_start.isoformat(),

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.73 — 2026-05-30
+- **Feature: Spread charging across nearly-equal cheap hours** — Battery Manager can now extend the exact top-X charge slot selection with extra hours when they stay within `heuristics.charge_spread_max_price_delta` of the selected cheap-price band, allowing longer lower-power charging instead of always charging flat-out in the first few cheap hours.
+- **Feature: Energy-based charge power allocation** — regular charge windows can now distribute the required grid-charge energy across the available cheap window duration, while negative-price charging keeps its existing aggressive behavior and solar-aware charging keeps its own allocator.
+- **Config: `heuristics.charge_spread_enabled` / `heuristics.charge_spread_max_price_delta`** — new controls for enabling spread charging and tuning the allowed cheap-price band.
+
 ## 0.8.72 — 2026-05-29
 - **Feature: Dynamic battery-api slot caps** — Battery Manager now reads `sensor.battery_api_api_status` capability attributes and adapts charge/discharge slot usage to the active Battery API provider instead of assuming a fixed `3/6` contract.
 - **Config: `entities.battery_api_status_entity`** — New optional entity setting for the provider/capability sensor (default `sensor.battery_api_api_status`).
