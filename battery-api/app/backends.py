@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 MODE_VERIFY_ATTEMPTS = 20
 MODE_VERIFY_DELAY_SECONDS = 1.0
+SCHEDULE_INPUT_VERIFY_ATTEMPTS = 6
+SCHEDULE_INPUT_VERIFY_DELAY_SECONDS = 0.25
 
 PASSIVE_MODE_OPTIONS = ["Off", "Passive charge", "Passive discharge"]
 PASSIVE_MODE_SELECT_TO_VALUE = {
@@ -432,6 +435,7 @@ class ModbusHaBatteryBackend(BatteryBackend):
         )
         self.entities: Dict[str, str] = {}
         self.inverter_power_reference_w = int(context.config.get("modbus_inverter_power_w", 8000))
+        self._state_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
 
     def setup(self) -> bool:
         if self.context.simulation_mode:
@@ -474,44 +478,46 @@ class ModbusHaBatteryBackend(BatteryBackend):
             )
             return
 
-        self._set_status(
-            battery_soc=self._get_float("soc"),
-            battery_power=self._get_signed_power("battery_power", "direction_battery"),
-            battery_direction=self._get_int("direction_battery"),
-            pv_power=self._get_float("pv_power"),
-            grid_power=self._get_signed_power("grid_power", "direction_grid"),
-            grid_direction=self._get_int("direction_grid"),
-            load_power=self._get_float("load_power"),
-            battery_capacity=self._get_float("battery_capacity"),
-            battery_current=self._get_float("battery_current"),
-            battery_charge_power_limit=self._get_float("battery_charge_power_limit"),
-            battery_discharge_power_limit=self._get_float("battery_discharge_power_limit"),
-            grid_charge_power_limit=self._get_float("grid_charge_power_limit"),
-            grid_discharge_power_limit=self._get_float("grid_discharge_power_limit"),
-            battery_on_grid_discharge_depth=self._get_float("battery_on_grid_discharge_depth"),
-            battery_off_grid_discharge_depth=self._get_float("battery_off_grid_discharge_depth"),
-            export_limit=self._get_float("export_limit"),
-            passive_mode=self._get_passive_mode(),
-            pv_direction=self._get_int("direction_pv"),
-            output_direction=self._get_int("direction_output"),
-            user_mode=self._get_state_value("app_mode"),
-            last_update=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            inverter_model=f"Modbus ({self.inverter_power_reference_w // 1000}kW)",
-            api_status="Connected",
-        )
+        with self._state_snapshot_context():
+            self._set_status(
+                battery_soc=self._get_float("soc"),
+                battery_power=self._get_signed_power("battery_power", "direction_battery"),
+                battery_direction=self._get_int("direction_battery"),
+                pv_power=self._get_float("pv_power"),
+                grid_power=self._get_signed_power("grid_power", "direction_grid"),
+                grid_direction=self._get_int("direction_grid"),
+                load_power=self._get_float("load_power"),
+                battery_capacity=self._get_float("battery_capacity"),
+                battery_current=self._get_float("battery_current"),
+                battery_charge_power_limit=self._get_float("battery_charge_power_limit"),
+                battery_discharge_power_limit=self._get_float("battery_discharge_power_limit"),
+                grid_charge_power_limit=self._get_float("grid_charge_power_limit"),
+                grid_discharge_power_limit=self._get_float("grid_discharge_power_limit"),
+                battery_on_grid_discharge_depth=self._get_float("battery_on_grid_discharge_depth"),
+                battery_off_grid_discharge_depth=self._get_float("battery_off_grid_discharge_depth"),
+                export_limit=self._get_float("export_limit"),
+                passive_mode=self._get_passive_mode(),
+                pv_direction=self._get_int("direction_pv"),
+                output_direction=self._get_int("direction_output"),
+                user_mode=self._get_state_value("app_mode"),
+                last_update=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                inverter_model=f"Modbus ({self.inverter_power_reference_w // 1000}kW)",
+                api_status="Connected",
+            )
 
     def fetch_current_schedule(self) -> None:
-        schedule = self._read_schedule_from_ha()
-        self._set_status(current_schedule=json.dumps(schedule))
-        mode = self._get_state_value("app_mode")
-        if mode in MODE_PROVIDER_TO_SELECT:
-            self.context.battery_mode_setting = MODE_PROVIDER_TO_SELECT[mode]
-        if schedule["charge"] or schedule["discharge"]:
-            self.context.schedule_json = json.dumps(schedule, indent=2)
-            self.context.validated_schedule = schedule
-            self._set_status(
-                schedule_status=f"Synced: {len(schedule['charge'])} charge, {len(schedule['discharge'])} discharge"
-            )
+        with self._state_snapshot_context():
+            schedule = self._read_schedule_from_ha()
+            self._set_status(current_schedule=json.dumps(schedule))
+            mode = self._get_state_value("app_mode")
+            if mode in MODE_PROVIDER_TO_SELECT:
+                self.context.battery_mode_setting = MODE_PROVIDER_TO_SELECT[mode]
+            if schedule["charge"] or schedule["discharge"]:
+                self.context.schedule_json = json.dumps(schedule, indent=2)
+                self.context.validated_schedule = schedule
+                self._set_status(
+                    schedule_status=f"Synced: {len(schedule['charge'])} charge, {len(schedule['discharge'])} discharge"
+                )
 
     def save_schedule(self, periods: List[ChargingPeriod], schedule_json: str) -> bool:
         schedule = self._deserialize_schedule(schedule_json)
@@ -539,14 +545,14 @@ class ModbusHaBatteryBackend(BatteryBackend):
             if not self.set_mode(mode):
                 self._set_status(schedule_status="Apply failed: mode write failed")
                 return False
-            read_back = self._wait_for_schedule(schedule)
+            read_back = self._wait_for_schedule_inputs(schedule)
             if not self._schedule_matches(read_back, schedule):
-                self._set_status(schedule_status="Apply failed: read-back mismatch")
+                self._set_status(schedule_status="Apply failed: command verify mismatch")
                 return False
             self._set_status(
                 last_applied=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 api_status="Connected",
-                current_schedule=json.dumps(read_back),
+                current_schedule=json.dumps(schedule),
             )
             return True
         except Exception as exc:
@@ -672,6 +678,12 @@ class ModbusHaBatteryBackend(BatteryBackend):
             "discharge": self._read_slots("discharge"),
         }
 
+    def _read_schedule_inputs_from_ha(self) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "charge": self._read_slot_inputs("charge"),
+            "discharge": self._read_slot_inputs("discharge"),
+        }
+
     def _get_passive_mode(self) -> Optional[str]:
         if "passive_charge_enable" not in self.entities:
             return None
@@ -690,6 +702,29 @@ class ModbusHaBatteryBackend(BatteryBackend):
             start = self._get_state_value(f"{slot_type}{index}_start_time")
             end = self._get_state_value(f"{slot_type}{index}_end_time")
             percent = self._get_float(f"{slot_type}{index}_power_percent")
+            if not start or not end:
+                continue
+            duration = self._duration_minutes(start, end)
+            periods.append(
+                {
+                    "start": start,
+                    "duration": duration,
+                    "power": self._percent_to_watts(percent or 0),
+                }
+            )
+        return periods
+
+    def _read_slot_inputs(self, slot_type: str) -> List[Dict[str, Any]]:
+        count = 7
+        enable_key = "charge_time_enable_input" if slot_type == "charge" else "discharge_time_enable_input"
+        enabled_mask = self._get_int(enable_key) or 0
+        periods: List[Dict[str, Any]] = []
+        for index in range(1, count + 1):
+            if not enabled_mask & (1 << (index - 1)):
+                continue
+            start = self._get_state_value(f"{slot_type}{index}_start_time_input")
+            end = self._get_state_value(f"{slot_type}{index}_end_time_input")
+            percent = self._get_float(f"{slot_type}{index}_power_percent_input")
             if not start or not end:
                 continue
             duration = self._duration_minutes(start, end)
@@ -752,6 +787,23 @@ class ModbusHaBatteryBackend(BatteryBackend):
                 return actual
         return actual
 
+    def _wait_for_schedule_inputs(
+        self,
+        expected: Dict[str, List[Dict[str, Any]]],
+        attempts: int = SCHEDULE_INPUT_VERIFY_ATTEMPTS,
+        delay_seconds: float = SCHEDULE_INPUT_VERIFY_DELAY_SECONDS,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        actual = self._read_schedule_inputs_from_ha()
+        if self._schedule_matches(actual, expected):
+            return actual
+
+        for _attempt in range(attempts):
+            time.sleep(delay_seconds)
+            actual = self._read_schedule_inputs_from_ha()
+            if self._schedule_matches(actual, expected):
+                return actual
+        return actual
+
     def _deserialize_schedule(self, schedule_json: str) -> Dict[str, List[Dict[str, Any]]]:
         try:
             data = json.loads(schedule_json)
@@ -795,13 +847,35 @@ class ModbusHaBatteryBackend(BatteryBackend):
         entity_id = self.entities.get(key)
         if not entity_id:
             return None
-        state = self.ha_api.get_entity_state(entity_id)
+        state = self._get_state_payload(entity_id)
         if not state:
             return None
         value = state.get("state")
         if value in (None, "unknown", "unavailable"):
             return None
         return str(value)
+
+    def _get_state_payload(self, entity_id: str) -> Optional[Dict[str, Any]]:
+        if self._state_snapshot is not None:
+            return self._state_snapshot.get(entity_id)
+        return self.ha_api.get_entity_state(entity_id)
+
+    @contextmanager
+    def _state_snapshot_context(self):
+        if self._state_snapshot is not None:
+            yield
+            return
+
+        states = self.ha_api.get_states()
+        self._state_snapshot = {
+            state.get("entity_id"): state
+            for state in states
+            if isinstance(state, dict) and state.get("entity_id")
+        }
+        try:
+            yield
+        finally:
+            self._state_snapshot = None
 
     def _get_float(self, key: str) -> Optional[float]:
         value = self._get_state_value(key)

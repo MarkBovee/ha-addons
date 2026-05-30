@@ -2,6 +2,12 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.3.3] - 2026-05-30
+
+### Improved
+- Modbus schedule writes now verify against fast `*_input` entities instead of waiting on slower mirrored read sensors.
+- Modbus polling and schedule sync now reuse a single Home Assistant state snapshot per cycle instead of many per-entity REST calls.
+
 ## [0.3.2] - 2026-05-29
 
 ### Fixed

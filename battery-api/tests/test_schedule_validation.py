@@ -324,7 +324,7 @@ def test_publish_discovery_removes_or_publishes_optional_controls_by_capability(
     )
 
 
-def test_modbus_save_schedule_waits_for_delayed_read_back():
+def test_modbus_save_schedule_verifies_written_inputs_before_returning():
     context = BackendContext(
         config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
         status={},
@@ -347,7 +347,7 @@ def test_modbus_save_schedule_waits_for_delayed_read_back():
     with patch.object(backend, "_write_slots", return_value=None) as write_slots:
         with patch.object(backend, "_set_number", return_value=True) as set_number:
             with patch.object(backend, "set_mode", return_value=True) as set_mode:
-                with patch.object(backend, "_read_schedule_from_ha", side_effect=[stale_schedule, expected_schedule]):
+                with patch.object(backend, "_read_schedule_inputs_from_ha", side_effect=[stale_schedule, expected_schedule]):
                     with patch("app.backends.time.sleep", return_value=None):
                         assert backend.save_schedule([], json.dumps(expected_schedule)) is True
 
@@ -355,6 +355,32 @@ def test_modbus_save_schedule_waits_for_delayed_read_back():
     assert set_number.call_count == 2
     set_mode.assert_called_once_with("Time-of-use")
     assert json.loads(context.status["current_schedule"]) == expected_schedule
+
+
+def test_modbus_save_schedule_skips_slow_read_back_mirror_verification():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+
+    expected_schedule = {
+        "charge": [],
+        "discharge": [{"start": "20:00", "duration": 30, "power": 2800}],
+    }
+
+    with patch.object(backend, "_write_slots", return_value=None):
+        with patch.object(backend, "_set_number", return_value=True):
+            with patch.object(backend, "set_mode", return_value=True):
+                with patch.object(backend, "_wait_for_schedule_inputs", return_value=expected_schedule) as verify_inputs:
+                    with patch.object(backend, "_wait_for_schedule", side_effect=AssertionError("slow read-back should not run")):
+                        assert backend.save_schedule([], json.dumps(expected_schedule)) is True
+
+    verify_inputs.assert_called_once_with(expected_schedule)
 
 
 def test_api_provider_rejects_schedule_above_cloud_slot_limits():
@@ -434,3 +460,72 @@ def test_mqtt_command_callback_runs_off_network_thread():
     assert callback_thread_name[0] != threading.current_thread().name
 
     callback_release.set()
+
+
+def test_modbus_poll_status_uses_single_state_snapshot():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+    backend.entities = {
+        "soc": "sensor.saj_battery_energy_percent",
+        "battery_power": "sensor.saj_battery_power",
+        "direction_battery": "sensor.saj_direction_battery",
+        "pv_power": "sensor.saj_pv_power",
+        "grid_power": "sensor.saj_total_grid_power",
+        "direction_grid": "sensor.saj_direction_grid",
+        "load_power": "sensor.saj_total_load_power",
+        "battery_capacity": "sensor.saj_battery_capacity",
+        "battery_current": "sensor.saj_battery_1_current",
+        "battery_charge_power_limit": "sensor.saj_battery_charge_power_limit",
+        "battery_discharge_power_limit": "sensor.saj_battery_discharge_power_limit",
+        "grid_charge_power_limit": "sensor.saj_grid_charge_power_limit",
+        "grid_discharge_power_limit": "sensor.saj_grid_discharge_power_limit",
+        "battery_on_grid_discharge_depth": "sensor.saj_battery_on_grid_discharge_depth",
+        "battery_off_grid_discharge_depth": "sensor.saj_battery_offgrid_discharge_depth",
+        "export_limit": "number.saj_export_limit_input",
+        "passive_charge_enable": "number.saj_passive_charge_enable_input",
+        "direction_pv": "sensor.saj_direction_pv",
+        "direction_output": "sensor.saj_direction_ouput",
+        "app_mode": "sensor.saj_app_mode",
+    }
+
+    states = [
+        {"entity_id": "sensor.saj_battery_energy_percent", "state": "94.0"},
+        {"entity_id": "sensor.saj_battery_power", "state": "2719"},
+        {"entity_id": "sensor.saj_direction_battery", "state": "1"},
+        {"entity_id": "sensor.saj_pv_power", "state": "15"},
+        {"entity_id": "sensor.saj_total_grid_power", "state": "2925"},
+        {"entity_id": "sensor.saj_direction_grid", "state": "1"},
+        {"entity_id": "sensor.saj_total_load_power", "state": "1650"},
+        {"entity_id": "sensor.saj_battery_capacity", "state": "10.0"},
+        {"entity_id": "sensor.saj_battery_1_current", "state": "5.2"},
+        {"entity_id": "sensor.saj_battery_charge_power_limit", "state": "4000"},
+        {"entity_id": "sensor.saj_battery_discharge_power_limit", "state": "4000"},
+        {"entity_id": "sensor.saj_grid_charge_power_limit", "state": "3000"},
+        {"entity_id": "sensor.saj_grid_discharge_power_limit", "state": "3000"},
+        {"entity_id": "sensor.saj_battery_on_grid_discharge_depth", "state": "15"},
+        {"entity_id": "sensor.saj_battery_offgrid_discharge_depth", "state": "10"},
+        {"entity_id": "number.saj_export_limit_input", "state": "100"},
+        {"entity_id": "number.saj_passive_charge_enable_input", "state": "0"},
+        {"entity_id": "sensor.saj_direction_pv", "state": "1"},
+        {"entity_id": "sensor.saj_direction_ouput", "state": "1"},
+        {"entity_id": "sensor.saj_app_mode", "state": "1"},
+    ]
+
+    backend.ha_api.get_states = MagicMock(return_value=states)
+    backend.ha_api.get_entity_state = MagicMock(side_effect=AssertionError("snapshot should avoid per-entity reads"))
+
+    backend.poll_status()
+
+    backend.ha_api.get_states.assert_called_once()
+    assert context.status["battery_soc"] == 94.0
+    assert context.status["battery_power"] == 2719.0
+    assert context.status["grid_power"] == 2925.0
+    assert context.status["load_power"] == 1650.0
+    assert context.status["user_mode"] == "1"
