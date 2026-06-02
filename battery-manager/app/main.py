@@ -2447,7 +2447,13 @@ def monitor_and_adjust_active_period(
         (period for period in effective_schedule.get("charge", []) if _is_period_active(period, now)),
         None,
     )
-    active_discharge = active_discharge_period is not None
+    active_discharge_power = int(active_discharge_period.get("power", 0) or 0) if active_discharge_period else 0
+    has_active_discharge_window = active_discharge_period is not None
+    active_discharge = not (
+        active_discharge_period
+        and active_discharge_period.get("window_type") == "adaptive"
+        and active_discharge_power <= 0
+    ) and has_active_discharge_window
     active_charge = active_charge_period is not None
     if (
         passive_active
@@ -2560,7 +2566,7 @@ def monitor_and_adjust_active_period(
     regen_price_range = _should_regenerate_live_schedule(
         runtime_price_range,
         active_charge,
-        active_discharge,
+        has_active_discharge_window,
         import_curve,
         soc,
         config,

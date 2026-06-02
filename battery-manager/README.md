@@ -57,6 +57,7 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 - Current interval is checked between full schedule refreshes
 - If live interval should stay adaptive but published schedule no longer contains matching adaptive window, add-on regenerates schedule instead of going idle
 - Conservative SOC does not hard-stop all live discharge: active adaptive period can downgrade from full discharge to adaptive discharge while respecting reserve floors
+- A `0W` adaptive fallback slot is treated as a waiting placeholder, so sell-buffer protection no longer clears later profitable discharge windows before they start
 
 ### Solar-Aware Charging
 

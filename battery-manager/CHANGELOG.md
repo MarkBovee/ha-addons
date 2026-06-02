@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.74 — 2026-06-02
+- **Fix: Zero-power adaptive placeholders no longer clear queued sell windows** — The monitor loop now treats a current `adaptive` fallback slot at `0W` as an idle placeholder instead of an actively discharging window. This prevents sell-buffer pause logic from wiping the published discharge schedule while the add-on is waiting for the next real sell window.
+- **Tests:** Added a regression covering a live `0W` adaptive placeholder with a later profitable discharge window.
+
 ## 0.8.73 — 2026-05-30
 - **Feature: Spread charging across nearly-equal cheap hours** — Battery Manager can now extend the exact top-X charge slot selection with extra hours when they stay within `heuristics.charge_spread_max_price_delta` of the selected cheap-price band, allowing longer lower-power charging instead of always charging flat-out in the first few cheap hours.
 - **Feature: Energy-based charge power allocation** — regular charge windows can now distribute the required grid-charge energy across the available cheap window duration, while negative-price charging keeps its existing aggressive behavior and solar-aware charging keeps its own allocator.
