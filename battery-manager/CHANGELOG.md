@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.75 — 2026-06-09
+- **Fix: Active 0W adaptive window now triggers grid-follow discharge below `conservative_soc`** — When the schedule contained an active adaptive placeholder at 0W power, the adaptive power-control loop was gated behind `active_discharge = False`, causing the battery to sit idle even though an adaptive window was active. Introduced `active_adaptive_placeholder` + `adaptive_placeholder_can_discharge` variables so 0W adaptive windows correctly start grid-following discharge. SOC below `conservative_soc` no longer blocks adaptive (grid≈0W) operation; only `min_soc` acts as a hard floor.
+- **Tests:** Added regression `test_zero_power_adaptive_placeholder_starts_adaptive_discharge_below_conservative_soc`.
+
 ## 0.8.74 — 2026-06-02
 - **Fix: Zero-power adaptive placeholders no longer clear queued sell windows** — The monitor loop now treats a current `adaptive` fallback slot at `0W` as an idle placeholder instead of an actively discharging window. This prevents sell-buffer pause logic from wiping the published discharge schedule while the add-on is waiting for the next real sell window.
 - **Tests:** Added a regression covering a live `0W` adaptive placeholder with a later profitable discharge window.
