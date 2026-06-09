@@ -2299,3 +2299,118 @@ def test_adaptive_regen_triggers_when_soc_below_conservative(monkeypatch):
         "Expected adaptive schedule regeneration when SOC is below conservative_soc "
         "but above min_soc during adaptive price band"
     )
+
+
+def test_zero_power_adaptive_placeholder_starts_adaptive_discharge_below_conservative_soc(monkeypatch):
+    """Regression: active 0W adaptive placeholder must trigger adaptive power control
+    even when SOC is below conservative_soc.
+
+    Before the fix, active_discharge was False for 0W adaptive windows, so the power
+    control block at the bottom of monitor_and_adjust_active_period was never reached
+    and the battery stayed idle despite an active adaptive window.
+    """
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["conservative_soc"] = 40
+    config["soc"]["min_soc"] = 5
+    config["power"]["min_discharge_power"] = 0
+    config["power"]["max_discharge_power"] = 8000
+    config["timing"]["adaptive_power_grace_seconds"] = 60
+
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    state = bm_main.RuntimeState(
+        schedule={
+            "charge": [
+                {
+                    "start": (now + timedelta(hours=2)).isoformat(),
+                    "duration": 240,
+                    "power": 8000,
+                    "window_type": "charge",
+                }
+            ],
+            "discharge": [
+                {
+                    "start": (now - timedelta(minutes=10)).isoformat(),
+                    "duration": 60,
+                    "power": 0,
+                    "window_type": "adaptive",
+                },
+                {
+                    "start": (now + timedelta(hours=10)).isoformat(),
+                    "duration": 120,
+                    "power": 8000,
+                    "window_type": "discharge",
+                },
+            ],
+        },
+        schedule_generated_at=now,
+        sell_buffer_required_soc=5.0,  # Low — does not protect from adaptive discharge
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 17.0,  # Below conservative_soc (40%)
+        config["entities"]["grid_power_entity"]: 200.0,  # Importing 200W
+        config["entities"]["solar_power_entity"]: 300.0,
+        config["entities"]["house_load_entity"]: 400.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 17.0,
+    }
+
+    entity_updates = []
+    published = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "adaptive")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: entity_updates.append((_args, _kwargs)))
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: (
+            setattr(state, "published_schedule", deepcopy(schedule)) if state is not None else None,
+            published.append((deepcopy(schedule), force)),
+            True,
+        )[-1],
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
+    )
+
+    # Should have published a schedule override with adaptive power > 0
+    assert published, (
+        "Expected adaptive power control to publish a schedule for the active 0W adaptive window "
+        "when SOC (17%) is below conservative_soc (40%) but above min_soc (5%)"
+    )
+    active_period = published[-1][0]["discharge"][0]
+    assert active_period["window_type"] == "adaptive"
+    assert active_period["power"] > 0, (
+        f"Expected adaptive power > 0W for grid=200W, got {active_period['power']}W"
+    )
+
+    # Mode entity should be "adaptive"
+    mode_updates = [call for call in entity_updates if call[0][1] == bm_main.ENTITY_MODE]
+    assert mode_updates
+    assert mode_updates[-1][0][2] == "adaptive"
+
+    # Future discharge window must not be cleared
+    assert any(
+        p.get("window_type") == "discharge" and p.get("power") == 8000
+        for p in published[-1][0]["discharge"]
+    ), "Future discharge window must be preserved in the published schedule"

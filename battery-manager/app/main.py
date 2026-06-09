@@ -2454,6 +2454,15 @@ def monitor_and_adjust_active_period(
         and active_discharge_period.get("window_type") == "adaptive"
         and active_discharge_power <= 0
     ) and has_active_discharge_window
+    # True when a scheduled adaptive window is active but still at 0W (placeholder).
+    # Handled separately so it doesn't trigger the pause/clear mechanism for future windows.
+    active_adaptive_placeholder = (
+        has_active_discharge_window
+        and not active_discharge
+        and active_discharge_period is not None
+        and active_discharge_period.get("window_type") == "adaptive"
+    )
+    adaptive_placeholder_can_discharge = False
     active_charge = active_charge_period is not None
     if (
         passive_active
@@ -2628,6 +2637,15 @@ def monitor_and_adjust_active_period(
             reduce_reasons.append(
                 f"SOC <= conservative ({soc:.1f}% <= {conservative_soc:.1f}%), switching to adaptive discharge"
             )
+
+        # Allow adaptive 0W placeholder to start grid-following discharge.
+        # is_conservative=False: adaptive targets grid≈0W, not full scheduled power,
+        # so conservative_soc should not block it (only hard min_soc should).
+        # Sell-buffer protection (effective_min_soc) still applies.
+        adaptive_placeholder_can_discharge = (
+            active_adaptive_placeholder
+            and can_discharge(soc, effective_min_soc, conservative_soc, False)
+        )
 
     stabilizer_active = (
         state.max_soc_stabilizer_until is not None
@@ -2850,6 +2868,8 @@ def monitor_and_adjust_active_period(
         effective_mode = "adaptive"
     elif active_discharge:
         effective_mode = "discharge"
+    elif active_adaptive_placeholder and adaptive_placeholder_can_discharge:
+        effective_mode = "adaptive"
     elif runtime_price_range == "passive":
         effective_mode = "passive"
     else:
@@ -3043,6 +3063,36 @@ def monitor_and_adjust_active_period(
                 soc=soc,
                 grid_power=grid_power,
             )
+        elif active_adaptive_placeholder and adaptive_placeholder_can_discharge:
+            # Adaptive 0W window: publish "starting" status; power control below will
+            # compute the first real target and update the schedule this same cycle.
+            status_msg = build_status_message(
+                runtime_price_range, False, True, None, 0, temperature,
+            )
+            update_entity(mqtt_client, ENTITY_STATUS, status_msg, dry_run=is_dry_run)
+            update_entity(
+                mqtt_client,
+                ENTITY_CURRENT_ACTION,
+                "Adaptive (grid-follow starting)",
+                {
+                    "price_range": runtime_price_range,
+                    "active_window_type": "adaptive",
+                    "discharge_power": 0,
+                    "soc": soc,
+                },
+                dry_run=is_dry_run,
+            )
+            state.last_effective_discharge_power = 0
+            _update_effective_discharge_power(
+                mqtt_client,
+                0,
+                is_dry_run,
+                active_window_type="adaptive",
+                price_range=runtime_price_range,
+                effective_price_range="adaptive",
+                soc=soc,
+                grid_power=grid_power,
+            )
         else:
             status_msg = build_status_message(
                 runtime_price_range, False, False, None, None, temperature,
@@ -3082,7 +3132,7 @@ def monitor_and_adjust_active_period(
                 grid_power=grid_power,
             )
 
-    if active_discharge and not should_pause:
+    if (active_discharge and not should_pause) or (active_adaptive_placeholder and adaptive_placeholder_can_discharge):
         discharge_periods = effective_schedule.get("discharge", [])
         active_period = active_discharge_period
 
