@@ -1081,6 +1081,14 @@ def _sum_discharge_hours_before_main_charge(
     return total_hours
 
 
+# A discharge window is only hard-dropped when the battery is effectively empty
+# for it. A short energy shortfall is not a reason to drop a profitable sell
+# window: the runtime adaptively caps discharge power (grid≈0W) and never drains
+# below the SOC floor, so the pre-check is deliberately non-conservative here.
+MIN_DISCHARGE_TRUNCATE_MINUTES = 15
+MIN_DISCHARGE_ENERGY_KWH = 0.1
+
+
 def _filter_supported_discharge_windows(
     discharge_windows: List[Dict[str, Any]],
     charge_schedule: List[Dict[str, Any]],
@@ -1163,7 +1171,7 @@ def _filter_supported_discharge_windows(
             continue
 
         supported_duration_minutes = int((available_energy_kwh * 1000.0 / float(planned_power)) * 60.0 + 1e-9)
-        if supported_duration_minutes >= 30:
+        if supported_duration_minutes >= MIN_DISCHARGE_TRUNCATE_MINUTES:
             supported_duration_minutes = min(supported_duration_minutes, duration_minutes)
             partial_window = dict(window)
             partial_window["end"] = effective_start + timedelta(minutes=supported_duration_minutes)
@@ -1188,8 +1196,26 @@ def _filter_supported_discharge_windows(
             feasible_windows.append(partial_window)
             continue
 
+        # Not enough energy for a meaningful partial window. Keep the window
+        # anyway and let the runtime adaptively cap discharge power to what the
+        # battery can deliver: a profitable sell window should not be dropped on
+        # a worst-case full-power estimate alone. Only skip when the battery is
+        # effectively empty for this window.
+        if available_before_window_kwh <= MIN_DISCHARGE_ENERGY_KWH:
+            logger.info(
+                "⛔ Skipping discharge window %s @€%.3f: battery effectively empty for this window (needs %.2fkWh, only %.2fkWh available before start)",
+                effective_start.astimezone().strftime("%H:%M"),
+                float(window.get("avg_price", 0.0)),
+                required_energy_kwh,
+                available_before_window_kwh,
+            )
+            continue
+
+        # Reserve only what is actually available so later windows are not
+        # starved; the window itself stays in the plan.
+        actual_energy_kwh = min(required_energy_kwh, available_energy_kwh)
         logger.info(
-            "⛔ Skipping discharge window %s @€%.3f: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% reserve floor [min %.1f%%, conservative %.1f%%], scheduled charge +%.2fkWh, earlier discharge -%.2fkWh)",
+            "♻️ Keeping discharge window %s @€%.3f: needs %.2fkWh, only %.2fkWh available before start (SOC %.1f%% => %.2fkWh usable above %.1f%% reserve floor); runtime will adaptively cap discharge power",
             effective_start.astimezone().strftime("%H:%M"),
             float(window.get("avg_price", 0.0)),
             required_energy_kwh,
@@ -1197,11 +1223,10 @@ def _filter_supported_discharge_windows(
             float(soc),
             base_available_energy_kwh,
             reserve_floor_soc,
-            min_soc,
-            conservative_soc,
-            charged_before_start_kwh,
-            reserved_before_start_kwh,
         )
+        available_energy_kwh = max(0.0, available_energy_kwh - actual_energy_kwh)
+        reserved_before_start_kwh += actual_energy_kwh
+        feasible_windows.append(window)
 
     return feasible_windows
 

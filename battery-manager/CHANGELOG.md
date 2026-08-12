@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.76 — 2026-08-12
+- **Fix: Profitable discharge windows no longer falsely dropped by the SOC pre-check** — `_filter_supported_discharge_windows` skipped a sell window when the worst-case energy budget (all earlier windows at full planned power) fell short, even though the runtime discharges adaptively (grid≈0W) and only enforces `min_soc`. A window is now only hard-dropped when the battery is effectively empty for it (< 0.1 kWh); a shortfall instead keeps the window (reserving only what is actually available). Partial-window truncation threshold lowered from 30 to 15 minutes to align with quarter-hour intervals.
+
 ## 0.8.75 — 2026-06-09
 - **Fix: Active 0W adaptive window now triggers grid-follow discharge below `conservative_soc`** — When the schedule contained an active adaptive placeholder at 0W power, the adaptive power-control loop was gated behind `active_discharge = False`, causing the battery to sit idle even though an adaptive window was active. Introduced `active_adaptive_placeholder` + `adaptive_placeholder_can_discharge` variables so 0W adaptive windows correctly start grid-following discharge. SOC below `conservative_soc` no longer blocks adaptive (grid≈0W) operation; only `min_soc` acts as a hard floor.
 - **Tests:** Added regression `test_zero_power_adaptive_placeholder_starts_adaptive_discharge_below_conservative_soc`.
