@@ -288,15 +288,19 @@ def test_zero_power_adaptive_placeholder_does_not_pause_or_clear_future_discharg
         gap_scheduler=cast(Any, _GapSchedulerStub()),
     )
 
-    assert not published
+    assert published
+    assert any(
+        p.get("window_type") == "discharge" and p.get("power") == 8000
+        for p in published[-1][0]["discharge"]
+    )
 
     mode_updates = [call for call in entity_updates if call[0][1] == bm_main.ENTITY_MODE]
     assert mode_updates
-    assert mode_updates[-1][0][2] == "idle"
+    assert mode_updates[-1][0][2] == "adaptive"
 
     action_updates = [call for call in entity_updates if call[0][1] == bm_main.ENTITY_CURRENT_ACTION]
     assert action_updates
-    assert "Next: Discharge 8000W" in action_updates[-1][0][2]
+    assert "Adaptive" in action_updates[-1][0][2]
 
 
 def test_idle_current_action_shows_next_scheduled_window(monkeypatch):
@@ -2343,7 +2347,7 @@ def test_zero_power_adaptive_placeholder_starts_adaptive_discharge_below_conserv
             ],
         },
         schedule_generated_at=now,
-        sell_buffer_required_soc=5.0,  # Low — does not protect from adaptive discharge
+        sell_buffer_required_soc=30.0,  # Adaptive must ignore dynamic sell-buffer floor
     )
 
     sensor_values = {

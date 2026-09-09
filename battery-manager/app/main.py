@@ -2669,7 +2669,9 @@ def monitor_and_adjust_active_period(
         # Sell-buffer protection (effective_min_soc) still applies.
         adaptive_placeholder_can_discharge = (
             active_adaptive_placeholder
-            and can_discharge(soc, effective_min_soc, conservative_soc, False)
+            # Adaptive discharge follows grid demand and must not consume the
+            # sell-buffer reserve; only the hard minimum SOC is protected.
+            and can_discharge(soc, min_soc, conservative_soc, False)
         )
 
     stabilizer_active = (

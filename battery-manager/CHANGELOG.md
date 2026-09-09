@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.77 — 2026-09-09
+- **Fix: Adaptive discharge no longer blocked by the dynamic sell-buffer floor** — active adaptive grid-following now protects only the hard minimum SOC, so it can regulate grid power toward 0W below `conservative_soc` and the calculated sell-buffer target.
+- **Tests:** Added regression coverage for adaptive discharge with an active sell-buffer target.
+
 ## 0.8.76 — 2026-08-12
 - **Fix: Profitable discharge windows no longer falsely dropped by the SOC pre-check** — `_filter_supported_discharge_windows` skipped a sell window when the worst-case energy budget (all earlier windows at full planned power) fell short, even though the runtime discharges adaptively (grid≈0W) and only enforces `min_soc`. A window is now only hard-dropped when the battery is effectively empty for it (< 0.1 kWh); a shortfall instead keeps the window (reserving only what is actually available). Partial-window truncation threshold lowered from 30 to 15 minutes to align with quarter-hour intervals.
 
