@@ -567,10 +567,14 @@ class ModbusHaBatteryBackend(BatteryBackend):
             self._set_status(api_status="Simulation")
             return True
         current = self._get_int("app_mode")
-        if current == target:
+        input_current = self._get_int("app_mode_input")
+        if current == target and input_current == target:
             self.context.battery_mode_setting = mode
             self._set_status(api_status="Connected")
             return True
+
+        # The SAJ H2 integration can report the live register before its
+        # writable input entity catches up. Always repair that mismatch.
         self._set_number("app_mode_input", target)
         actual = self._wait_for_int_value(
             "app_mode",

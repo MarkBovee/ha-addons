@@ -238,6 +238,30 @@ def test_modbus_set_mode_skips_write_when_already_in_target_mode():
     assert context.battery_mode_setting == "Time-of-use"
 
 
+def test_modbus_set_mode_repairs_stale_input_entity():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+    backend.entities = {
+        "app_mode_input": "number.saj_app_mode_input",
+        "app_mode": "sensor.saj_app_mode",
+    }
+
+    with patch.object(backend, "_get_int", side_effect=lambda key: 1 if key == "app_mode" else 0):
+        with patch.object(backend, "_set_number", return_value=True) as set_number:
+            with patch.object(backend, "_wait_for_int_value", return_value=1) as wait_for_int:
+                assert backend.set_mode("Time-of-use") is True
+
+    set_number.assert_called_once_with("app_mode_input", 1)
+    wait_for_int.assert_called_once_with("app_mode", 1, attempts=20, delay_seconds=1.0)
+
+
 def test_modbus_set_export_limit_verifies_read_back():
     context = BackendContext(
         config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},

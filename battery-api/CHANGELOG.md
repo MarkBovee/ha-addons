@@ -2,6 +2,12 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## [0.3.5] - 2026-09-09
+
+### Fixed
+- Modbus mode writes now repair a stale writable app-mode input when the read-only SAJ mode sensor already reports the target mode.
+- Schedule apply no longer fails after SAJ H2 Modbus integration updates leave `sensor.saj_app_mode` and `number.saj_app_mode_input` temporarily out of sync.
+
 ## [0.3.4] - 2026-05-30
 
 ### Improved
