@@ -244,6 +244,8 @@ class MqttDiscovery:
     
     def _unique_id(self, object_id: str) -> str:
         """Generate unique ID for an entity."""
+        if object_id.startswith(f"{self.addon_id}_"):
+            return object_id
         return f"{self.addon_id}_{object_id}"
     
     def _state_topic(self, component: str, object_id: str) -> str:
@@ -556,7 +558,9 @@ class MqttDiscovery:
             if not self._publish(attributes_topic, config.attributes):
                 return False
         
-        self._published_entities.append(f"{component}.{self.addon_id}_{config.object_id}")
+        self._published_entities.append(
+            f"{component}.{self._object_id_with_prefix(config.object_id)}"
+        )
         logger.debug("Published %s entity: %s (unique_id=%s)", component, config.name, unique_id)
         
         return True

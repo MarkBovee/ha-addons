@@ -134,7 +134,7 @@ def publish_automation_sensors_rest(status: AutomationStatus, ha_api_url: str, h
 
     create_or_update_entity(
         "sensor.ca_next_charge_start",
-        status.next_start or "unknown",
+        _timestamp_state(status.next_start),
         {
             "friendly_name": "Next Charge Start",
             "device_class": "timestamp",
@@ -146,7 +146,7 @@ def publish_automation_sensors_rest(status: AutomationStatus, ha_api_url: str, h
 
     create_or_update_entity(
         "sensor.ca_next_charge_end",
-        status.next_end or "unknown",
+        _timestamp_state(status.next_end),
         {
             "friendly_name": "Next Charge End",
             "device_class": "timestamp",
@@ -180,6 +180,11 @@ def _mqtt_update(
     mqtt_client.update_state(component, object_id, state, attributes)
 
 
+def _timestamp_state(value: Optional[str]) -> str:
+    """Return a valid MQTT timestamp state or unavailable when absent."""
+    return value or "unavailable"
+
+
 def publish_automation_sensors_mqtt(
     mqtt_client: 'MqttDiscovery',
     status: AutomationStatus,
@@ -210,7 +215,7 @@ def publish_automation_sensors_mqtt(
             EntityConfig(
                 object_id="next_start",
                 name="Next Charge Start",
-                state=status.next_start or "unknown",
+                state=_timestamp_state(status.next_start),
                 device_class="timestamp",
             )
         )
@@ -218,7 +223,7 @@ def publish_automation_sensors_mqtt(
             EntityConfig(
                 object_id="next_end",
                 name="Next Charge End",
-                state=status.next_end or "unknown",
+                state=_timestamp_state(status.next_end),
                 device_class="timestamp",
             )
         )
@@ -260,8 +265,8 @@ def publish_automation_sensors_mqtt(
         )
     else:
         _mqtt_update(mqtt_client, "sensor", "schedule_status", status.state, status_attrs)
-        _mqtt_update(mqtt_client, "sensor", "next_start", status.next_start or "unknown")
-        _mqtt_update(mqtt_client, "sensor", "next_end", status.next_end or "unknown")
+        _mqtt_update(mqtt_client, "sensor", "next_start", _timestamp_state(status.next_start))
+        _mqtt_update(mqtt_client, "sensor", "next_end", _timestamp_state(status.next_end))
         _mqtt_update(mqtt_client, "sensor", "schedule_error", status.last_error or "none")
         _mqtt_update(mqtt_client, "sensor", "schedule_source", schedule_source)
         _mqtt_update(mqtt_client, "sensor", "hems_last_command", hems_last_command or "unavailable")
@@ -365,7 +370,7 @@ def create_entities(
     if create_or_update_entity(
         "input_boolean.ca_charger_charging",
         "on" if connector.is_charging else "off",
-        {"friendly_name": "Charger Charging", "icon": "mdi:ev-station"},
+        {"friendly_name": "Charging", "icon": "mdi:ev-station"},
         ha_api_url,
         ha_api_token,
         log_success=verbose,
@@ -376,7 +381,7 @@ def create_entities(
         "input_number.ca_charger_total_consumption_kwh",
         str(connector.total_consumption_kwh),
         {
-            "friendly_name": "Charger Total Consumption",
+            "friendly_name": "Charging Energy",
             "unit_of_measurement": "kWh",
             "icon": "mdi:lightning-bolt",
         },
@@ -390,7 +395,7 @@ def create_entities(
         "input_number.ca_charger_current_power_w",
         str(connector.current_power_w),
         {
-            "friendly_name": "Charger Current Power",
+            "friendly_name": "Charging Power",
             "unit_of_measurement": "W",
             "icon": "mdi:flash",
         },
@@ -415,7 +420,7 @@ def create_entities(
         "sensor.ca_charger_power_kw",
         str(connector.current_power_w / 1000.0),
         {
-            "friendly_name": "Charger Power",
+            "friendly_name": "Charging Power",
             "unit_of_measurement": "kW",
             "device_class": "power",
             "icon": "mdi:flash",
@@ -435,7 +440,7 @@ def create_entities(
             "sensor.ca_charger_voltage",
             str(avg_voltage),
             {
-                "friendly_name": "Charger Voltage",
+                "friendly_name": "Charging Voltage",
                 "unit_of_measurement": "V",
                 "device_class": "voltage",
                 "icon": "mdi:lightning-bolt",
@@ -451,7 +456,7 @@ def create_entities(
             "sensor.ca_charger_current",
             str(avg_current),
             {
-                "friendly_name": "Charger Current",
+                "friendly_name": "Charging Current",
                 "unit_of_measurement": "A",
                 "device_class": "current",
                 "icon": "mdi:current-ac",
@@ -467,7 +472,7 @@ def create_entities(
         "binary_sensor.ca_charger_online",
         "on" if charge_point.is_online else "off",
         {
-            "friendly_name": "Charger Online",
+            "friendly_name": "Online",
             "device_class": "connectivity",
             "icon": "mdi:network",
         },
@@ -480,7 +485,7 @@ def create_entities(
     if create_or_update_entity(
         "binary_sensor.ca_charger_connector_enabled",
         "on" if connector.enabled else "off",
-        {"friendly_name": "Charger Connector Enabled", "icon": "mdi:power"},
+        {"friendly_name": "Connector Enabled", "icon": "mdi:power"},
         ha_api_url,
         ha_api_token,
         log_success=verbose,
@@ -503,7 +508,7 @@ def create_entities(
         if create_or_update_entity(
             "input_text.ca_charger_serial",
             charge_point.serial_number,
-            {"friendly_name": "Charger Serial Number", "icon": "mdi:identifier"},
+            {"friendly_name": "Serial Number", "icon": "mdi:identifier"},
             ha_api_url,
             ha_api_token,
             log_success=verbose,
@@ -515,7 +520,7 @@ def create_entities(
         if create_or_update_entity(
             "sensor.ca_charger_connector_mode",
             connector.mode,
-            {"friendly_name": "Charger Connector Mode", "icon": "mdi:cog"},
+            {"friendly_name": "Connector Mode", "icon": "mdi:cog"},
             ha_api_url,
             ha_api_token,
             log_success=verbose,
@@ -526,7 +531,7 @@ def create_entities(
         if create_or_update_entity(
             "sensor.ca_charger_ocpp_status",
             connector.ocpp_status,
-            {"friendly_name": "Charger OCPP Status", "icon": "mdi:network"},
+            {"friendly_name": "OCPP Status", "icon": "mdi:network"},
             ha_api_url,
             ha_api_token,
             log_success=verbose,
@@ -537,7 +542,7 @@ def create_entities(
         if create_or_update_entity(
             "sensor.ca_charger_error_code",
             connector.error_code,
-            {"friendly_name": "Charger Error Code", "icon": "mdi:alert"},
+            {"friendly_name": "Error Code", "icon": "mdi:alert"},
             ha_api_url,
             ha_api_token,
             log_success=verbose,
@@ -573,7 +578,7 @@ def create_entities_mqtt(
     # Charging binary sensor
     mqtt_client.publish_binary_sensor(EntityConfig(
         object_id="charging",
-        name="Charger Charging",
+        name="Charging",
         state="ON" if connector.is_charging else "OFF",
         device_class="plug",
         icon="mdi:ev-station",
@@ -583,7 +588,7 @@ def create_entities_mqtt(
     # Total consumption sensor
     mqtt_client.publish_sensor(EntityConfig(
         object_id="total_consumption",
-        name="Charger Total Consumption",
+        name="Charging Energy",
         state=str(connector.total_consumption_kwh),
         unit_of_measurement="kWh",
         device_class="energy",
@@ -595,7 +600,7 @@ def create_entities_mqtt(
     # Current power sensor
     mqtt_client.publish_sensor(EntityConfig(
         object_id="current_power",
-        name="Charger Current Power",
+        name="Charging Power",
         state=str(connector.current_power_w),
         unit_of_measurement="W",
         device_class="power",
@@ -607,7 +612,7 @@ def create_entities_mqtt(
     # Power in kW sensor
     mqtt_client.publish_sensor(EntityConfig(
         object_id="power_kw",
-        name="Charger Power",
+        name="Charging Power",
         state=str(connector.current_power_w / 1000.0),
         unit_of_measurement="kW",
         device_class="power",
@@ -628,7 +633,7 @@ def create_entities_mqtt(
     # Online binary sensor
     mqtt_client.publish_binary_sensor(EntityConfig(
         object_id="online",
-        name="Charger Online",
+        name="Online",
         state="ON" if charge_point.is_online else "OFF",
         device_class="connectivity",
         icon="mdi:network",
@@ -638,7 +643,7 @@ def create_entities_mqtt(
     # Connector enabled binary sensor
     mqtt_client.publish_binary_sensor(EntityConfig(
         object_id="connector_enabled",
-        name="Charger Connector Enabled",
+        name="Connector Enabled",
         state="ON" if connector.enabled else "OFF",
         icon="mdi:power",
     ))
@@ -651,7 +656,7 @@ def create_entities_mqtt(
     if avg_voltage > 0:
         mqtt_client.publish_sensor(EntityConfig(
             object_id="voltage",
-            name="Charger Voltage",
+            name="Charging Voltage",
             state=str(round(avg_voltage, 1)),
             unit_of_measurement="V",
             device_class="voltage",
@@ -663,7 +668,7 @@ def create_entities_mqtt(
     if avg_current > 0:
         mqtt_client.publish_sensor(EntityConfig(
             object_id="current",
-            name="Charger Current",
+            name="Charging Current",
             state=str(round(avg_current, 1)),
             unit_of_measurement="A",
             device_class="current",
@@ -686,7 +691,7 @@ def create_entities_mqtt(
     if charge_point.serial_number:
         mqtt_client.publish_sensor(EntityConfig(
             object_id="serial",
-            name="Charger Serial Number",
+            name="Serial Number",
             state=charge_point.serial_number,
             icon="mdi:identifier",
             entity_category="diagnostic",
@@ -696,7 +701,7 @@ def create_entities_mqtt(
     if connector.mode:
         mqtt_client.publish_sensor(EntityConfig(
             object_id="connector_mode",
-            name="Charger Connector Mode",
+            name="Connector Mode",
             state=connector.mode,
             icon="mdi:cog",
             entity_category="diagnostic",
@@ -706,7 +711,7 @@ def create_entities_mqtt(
     if connector.ocpp_status:
         mqtt_client.publish_sensor(EntityConfig(
             object_id="ocpp_status",
-            name="Charger OCPP Status",
+            name="OCPP Status",
             state=connector.ocpp_status,
             icon="mdi:network",
             entity_category="diagnostic",
@@ -716,7 +721,7 @@ def create_entities_mqtt(
     if connector.error_code:
         mqtt_client.publish_sensor(EntityConfig(
             object_id="error_code",
-            name="Charger Error Code",
+            name="Error Code",
             state=connector.error_code,
             icon="mdi:alert",
             entity_category="diagnostic",
@@ -775,7 +780,7 @@ def publish_safe_charger_state_rest(
     create_or_update_entity(
         "input_boolean.ca_charger_charging",
         "off",
-        {"friendly_name": "Charger Charging", "icon": "mdi:ev-station"},
+        {"friendly_name": "Charging", "icon": "mdi:ev-station"},
         ha_api_url,
         ha_api_token,
         log_success=False,
@@ -784,7 +789,7 @@ def publish_safe_charger_state_rest(
         "input_number.ca_charger_current_power_w",
         "0",
         {
-            "friendly_name": "Charger Current Power",
+            "friendly_name": "Charging Power",
             "unit_of_measurement": "W",
             "icon": "mdi:flash",
         },
@@ -796,7 +801,7 @@ def publish_safe_charger_state_rest(
         "sensor.ca_charger_power_kw",
         "0",
         {
-            "friendly_name": "Charger Power",
+            "friendly_name": "Charging Power",
             "unit_of_measurement": "kW",
             "device_class": "power",
             "icon": "mdi:flash",
@@ -809,7 +814,7 @@ def publish_safe_charger_state_rest(
         "sensor.ca_charger_voltage",
         "0",
         {
-            "friendly_name": "Charger Voltage",
+            "friendly_name": "Charging Voltage",
             "unit_of_measurement": "V",
             "device_class": "voltage",
             "icon": "mdi:lightning-bolt",
@@ -822,7 +827,7 @@ def publish_safe_charger_state_rest(
         "sensor.ca_charger_current",
         "0",
         {
-            "friendly_name": "Charger Current",
+            "friendly_name": "Charging Current",
             "unit_of_measurement": "A",
             "device_class": "current",
             "icon": "mdi:current-ac",
@@ -843,7 +848,7 @@ def publish_safe_charger_state_rest(
         "binary_sensor.ca_charger_online",
         "off",
         {
-            "friendly_name": "Charger Online",
+            "friendly_name": "Online",
             "device_class": "connectivity",
             "icon": "mdi:network",
         },
@@ -854,7 +859,7 @@ def publish_safe_charger_state_rest(
     create_or_update_entity(
         "binary_sensor.ca_charger_connector_enabled",
         "off",
-        {"friendly_name": "Charger Connector Enabled", "icon": "mdi:power"},
+        {"friendly_name": "Connector Enabled", "icon": "mdi:power"},
         ha_api_url,
         ha_api_token,
         log_success=False,
@@ -877,14 +882,14 @@ def publish_safe_charger_state_mqtt(
     """Publish a safe offline/auth-error charger state via MQTT Discovery."""
     mqtt_client.publish_binary_sensor(EntityConfig(
         object_id="charging",
-        name="Charger Charging",
+        name="Charging",
         state="OFF",
         device_class="plug",
         icon="mdi:ev-station",
     ))
     mqtt_client.publish_sensor(EntityConfig(
         object_id="current_power",
-        name="Charger Current Power",
+        name="Charging Power",
         state="0",
         unit_of_measurement="W",
         device_class="power",
@@ -893,7 +898,7 @@ def publish_safe_charger_state_mqtt(
     ))
     mqtt_client.publish_sensor(EntityConfig(
         object_id="power_kw",
-        name="Charger Power",
+        name="Charging Power",
         state="0",
         unit_of_measurement="kW",
         device_class="power",
@@ -902,7 +907,7 @@ def publish_safe_charger_state_mqtt(
     ))
     mqtt_client.publish_sensor(EntityConfig(
         object_id="voltage",
-        name="Charger Voltage",
+        name="Charging Voltage",
         state="0",
         unit_of_measurement="V",
         device_class="voltage",
@@ -911,7 +916,7 @@ def publish_safe_charger_state_mqtt(
     ))
     mqtt_client.publish_sensor(EntityConfig(
         object_id="current",
-        name="Charger Current",
+        name="Charging Current",
         state="0",
         unit_of_measurement="A",
         device_class="current",
@@ -926,14 +931,14 @@ def publish_safe_charger_state_mqtt(
     ))
     mqtt_client.publish_binary_sensor(EntityConfig(
         object_id="online",
-        name="Charger Online",
+        name="Online",
         state="OFF",
         device_class="connectivity",
         icon="mdi:network",
     ))
     mqtt_client.publish_binary_sensor(EntityConfig(
         object_id="connector_enabled",
-        name="Charger Connector Enabled",
+        name="Connector Enabled",
         state="OFF",
         icon="mdi:power",
     ))

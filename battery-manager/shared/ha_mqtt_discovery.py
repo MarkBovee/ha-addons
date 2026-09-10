@@ -229,6 +229,8 @@ class MqttDiscovery:
         self._disconnect_warned = False
         self._connection_lock = threading.Lock()
         self._last_reconnect_attempt = 0.0
+        self._last_state_payloads: Dict[str, str] = {}
+        self._last_attributes_payloads: Dict[str, str] = {}
     
     @property
     def device_info(self) -> Dict[str, Any]:
@@ -242,6 +244,8 @@ class MqttDiscovery:
     
     def _unique_id(self, object_id: str) -> str:
         """Generate unique ID for an entity."""
+        if object_id.startswith(f"{self.addon_id}_"):
+            return object_id
         return f"{self.addon_id}_{object_id}"
     
     def _state_topic(self, component: str, object_id: str) -> str:
@@ -360,6 +364,8 @@ class MqttDiscovery:
         Note: paho-mqtt 2.x callback has different signature with disconnect_flags.
         """
         self._connected = False
+        self._last_state_payloads.clear()
+        self._last_attributes_payloads.clear()
         reason_value = self._reason_code_value(reason_code)
         reason_text = self._reason_code_text(reason_code)
         if reason_value == 0:
@@ -428,6 +434,8 @@ class MqttDiscovery:
             self._client.disconnect()
             self._client = None
             self._connected = False
+            self._last_state_payloads.clear()
+            self._last_attributes_payloads.clear()
             logger.info("Disconnected from MQTT broker")
     
     def is_connected(self) -> bool:
@@ -550,7 +558,9 @@ class MqttDiscovery:
             if not self._publish(attributes_topic, config.attributes):
                 return False
         
-        self._published_entities.append(f"{component}.{self.addon_id}_{config.object_id}")
+        self._published_entities.append(
+            f"{component}.{self._object_id_with_prefix(config.object_id)}"
+        )
         logger.debug("Published %s entity: %s (unique_id=%s)", component, config.name, unique_id)
         
         return True
@@ -776,17 +786,28 @@ class MqttDiscovery:
         self._command_callbacks[topic] = callback
         self._client.subscribe(topic, qos=1)
         logger.debug("Subscribed to command topic: %s", topic)
-    
+
+    def _run_command_callback(self, callback: callable, topic: str, payload: str):
+        """Run command callback outside the MQTT network thread."""
+        try:
+            callback(payload)
+        except Exception as e:
+            logger.error("Error handling command on %s: %s", topic, e)
+
     def _on_message(self, client, userdata, message):
         """Handle incoming MQTT messages."""
         topic = message.topic
         payload = message.payload.decode('utf-8')
         
         if hasattr(self, '_command_callbacks') and topic in self._command_callbacks:
-            try:
-                self._command_callbacks[topic](payload)
-            except Exception as e:
-                logger.error("Error handling command on %s: %s", topic, e)
+            callback = self._command_callbacks[topic]
+            thread_name = f"{getattr(self, 'addon_id', 'mqtt')}_cmd"
+            threading.Thread(
+                target=self._run_command_callback,
+                args=(callback, topic, payload),
+                daemon=True,
+                name=thread_name,
+            ).start()
 
     def update_state(self, component: str, object_id: str, state: str, attributes: Optional[Dict[str, Any]] = None) -> bool:
         """Update state for an existing entity.
@@ -803,14 +824,24 @@ class MqttDiscovery:
         Returns:
             True if published successfully
         """
+        cache_key = f"{component}:{object_id}"
+        state_payload = str(state)
+        previous_state = self._last_state_payloads.get(cache_key)
+
         state_topic = self._state_topic(component, object_id)
-        if not self._publish(state_topic, state):
-            return False
+        if previous_state != state_payload:
+            if not self._publish(state_topic, state_payload):
+                return False
+            self._last_state_payloads[cache_key] = state_payload
         
         if attributes:
+            attributes_payload = json.dumps(attributes, sort_keys=True, separators=(",", ":"))
+            previous_attributes = self._last_attributes_payloads.get(cache_key)
             attributes_topic = self._attributes_topic(component, object_id)
-            if not self._publish(attributes_topic, attributes):
-                return False
+            if previous_attributes != attributes_payload:
+                if not self._publish(attributes_topic, attributes):
+                    return False
+                self._last_attributes_payloads[cache_key] = attributes_payload
         
         return True
     
@@ -824,6 +855,9 @@ class MqttDiscovery:
         Returns:
             True if published successfully
         """
+        cache_key = f"{component}:{object_id}"
+        self._last_state_payloads.pop(cache_key, None)
+        self._last_attributes_payloads.pop(cache_key, None)
         discovery_topic = self._discovery_topic(component, object_id)
         return self._publish(discovery_topic, "")
     

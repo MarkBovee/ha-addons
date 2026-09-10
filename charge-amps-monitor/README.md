@@ -1,353 +1,183 @@
-# Charge Amps EV Charger Monitor
+# Charge Amps Monitor
 
-Monitor Charge Amps EV charger status and create Home Assistant entities.
+Charge Amps Monitor is a Home Assistant Supervisor add-on for monitoring Charge Amps EV chargers and integrating their available scheduling capabilities into Home Assistant.
 
-## Overview
+## What It Does
 
-This addon connects to the Charge Amps API (my.charge.space) to monitor your EV charger and automatically creates Home Assistant entities for:
-- Charging status (on/off)
-- Total consumption (kWh)
-- Current power (W)
-- Voltage and current readings
-- Charger online status
-- And more...
+- Monitors Charge Amps charger and connector state.
+- Publishes charging state and online status to Home Assistant.
+- Publishes charging power, current, voltage, and cumulative energy when supplied by the charger.
+- Provides normalized read-only entities introduced in version 2.0.0 and corrected in 2.0.1.
+- Generates and manages price-based charging schedules in standalone mode.
+- Keeps existing REST entities, MQTT Discovery entities, and legacy schedule compatibility available during migration.
+- Runs without HEMS when standalone scheduling is enabled or automation is disabled.
 
-## Features
+Direct charger start, stop, persistent current control, and connector enable/disable are not exposed. The corresponding Charge Amps provider operations and limits have not been verified, so the add-on does not publish fake writable controls.
 
-- **Automatic Entity Creation**: Creates Home Assistant entities on startup
-- **Periodic Updates**: Configurable update interval (default: 1 minute)
-- **Secure Authentication**: Uses Charge Amps API with JWT token management
-- **Comprehensive Monitoring**: Tracks charging status, power, consumption, and more
-- **Price-Aware Scheduling**: Automatically schedules charging during cheapest electricity periods
-- **Standalone & HEMS Modes**: Operate autonomously or integrate with external energy management
-- **UI-Managed Settings**: All configuration through Home Assistant addon UI
+## Home Assistant Integration
 
-## Operation Modes
+The add-on exposes charger information and supported schedule functionality through Home Assistant entities. Monitoring entities are read-only. Schedule generation uses the configured price sensor and add-on settings; it does not provide direct charger start/stop or current commands.
 
-The addon supports two operation modes:
+The target HEMS architecture is:
 
-### Standalone Mode (Default)
-
-In standalone mode, the addon autonomously analyzes electricity prices and schedules charging during the cheapest periods.
-
-**Features:**
-- Reads price data from an energy price sensor (e.g., from energy-prices addon)
-- Selects top X unique price levels for charging (configurable)
-- Price threshold filtering - excludes slots above a maximum price
-- Pushes charging schedules directly to the Charge Amps API
-
-**Configuration:**
-```yaml
-operation_mode: "standalone"
-automation_enabled: true
-price_sensor_entity: "sensor.energy_prices_price_import"
-top_x_charge_count: 16  # Number of unique price levels to include
-price_threshold: 0.25   # Max EUR/kWh - slots above this are excluded
+```text
+HEMS
+  |
+  v
+Home Assistant entities and services
+  |
+  v
+Charge Amps integration
+  |
+  v
+Charge Amps charger
 ```
 
-### HEMS Mode (External Control)
+Future HEMS integrations use Home Assistant entity state, events, and services. They do not use Charge Amps-specific APIs, Python classes, databases, or MQTT topics.
 
-In HEMS (Home Energy Management System) mode, the addon receives charging schedules from an external system via MQTT.
+## Standalone Mode
 
-**Features:**
-- Subscribes to MQTT topics for schedule commands
-- Validates and applies externally-provided schedules
-- Publishes charger status for HEMS consumption
-- Prepares for integration with battery-optimizer or other orchestrators
+Standalone mode is the default. When automation is enabled, the add-on reads price data from the configured Home Assistant price sensor, filters slots above the optional price threshold, selects the configured number of cheapest unique price levels, merges adjacent slots, and writes the resulting weekly schedule to Charge Amps.
 
-**MQTT Topics:**
-- `hems/charge-amps/{connector_id}/schedule/set` - Receive schedule
-- `hems/charge-amps/{connector_id}/schedule/clear` - Clear schedule
-- `hems/charge-amps/{connector_id}/status` - Published status
+The configured maximum current is written into generated schedule periods. It is a schedule parameter, not persistent direct charger current control. Schedule writes are read back and failed or unverifiable operations are reported as errors.
 
-**Configuration:**
-```yaml
-operation_mode: "hems"
-# price_threshold is ignored in HEMS mode
-```
+HEMS is optional. Monitoring and standalone price-based scheduling do not require a future HEMS service.
 
-**Example schedule payload:**
-```json
-{
-  "periods": [
-    {"start": "2025-01-15T02:00:00", "end": "2025-01-15T04:00:00"},
-    {"start": "2025-01-15T14:00:00", "end": "2025-01-15T15:30:00"}
-  ],
-  "expires_at": "2025-01-15T23:59:59",
-  "source_id": "battery-optimizer"
-}
-```
+## HEMS Compatibility
+
+Existing installations may continue to use the legacy schedule compatibility ingress in `hems` mode. It accepts schedule set and clear messages and reports whether the corresponding schedule operation succeeded.
+
+This compatibility ingress is temporary add-on plumbing, not the target HEMS interface. It must not be used as a general HEMS integration contract. The target contract remains Home Assistant entities and services. Existing compatibility topics are:
+
+- `hems/charge-amps/{connector_id}/schedule/set`
+- `hems/charge-amps/{connector_id}/schedule/clear`
+- `hems/charge-amps/{connector_id}/status`
 
 ## Installation
 
-### Method 1: Custom Repository (Recommended)
+### Custom Repository
 
-1. Add this repository to Home Assistant Supervisor:
-   - Go to **Settings** > **Add-ons** > **Add-on Store**
-   - Click the three-dot menu (⋮) in the top right
-   - Select **Repositories**
-   - Add repository URL: `https://github.com/MarkBovee/ha-addons`
-   - Click **Add**
+1. Open **Settings > Add-ons > Add-on Store** in Home Assistant.
+2. Open the three-dot menu and choose **Repositories**.
+3. Add `https://github.com/MarkBovee/ha-addons`.
+4. Install **Charge Amps - EV Charger Monitor**.
+5. Configure the add-on and start it.
 
-2. Install the addon:
-   - The addon should appear in the store
-   - Click **Charge Amps - EV Charger Monitor**
-   - Click **Install**
-   - Configure settings (see Configuration below)
-   - Click **Start**
+### Local Add-on
 
-### Method 2: Local Installation
-
-1. Copy the addon directory to your Home Assistant `/addons` folder:
-   ```bash
-   cp -r charge-amps-monitor /config/addons/
-   ```
-
-2. In Home Assistant:
-   - Go to **Settings** > **Add-ons** > **Add-on Store**
-   - Click **Check for updates**
-   - Find **Charge Amps - EV Charger Monitor** under **Local add-ons**
-   - Click **Install**
-   - Configure and start
+Copy `charge-amps-monitor` to `/config/addons/`, then open the add-on store and select **Check for updates**. Install and configure the local add-on.
 
 ## Configuration
 
-Configure the addon through the Home Assistant UI:
+Configure these options in the Home Assistant add-on UI. Existing option names remain unchanged.
 
-1. Go to **Settings** > **Add-ons** > **Charge Amps - EV Charger Monitor**
-2. Click **Configuration**
-3. Enter your settings:
+| Option | Description |
+| --- | --- |
+| `email` | Charge Amps account email address. |
+| `password` | Charge Amps account password. |
+| `host_name` | Charge Amps account host name. Default: `my.charge.space`. |
+| `base_url` | Charge Amps service base URL. Default: `https://my.charge.space`. |
+| `update_interval` | Minutes between charger status updates. |
+| `operation_mode` | `standalone` for price-based scheduling or `hems` for legacy external schedule compatibility. |
+| `automation_enabled` | Enables standalone price-based schedule generation. Monitoring remains available when disabled. |
+| `price_sensor_entity` | Home Assistant entity containing import prices in EUR/kWh. |
+| `top_x_charge_count` | Number of unique low-price levels selected per day. This is not a raw slot count. |
+| `price_threshold` | Optional maximum price in EUR/kWh. Slots above this value are excluded. |
+| `max_current_per_phase` | Current value written into generated schedule periods. This does not enable direct current control. |
+| `connector_ids` | Comma-separated Charge Amps connector IDs. The current runtime uses the first valid ID. |
+| `mqtt_host` | Optional MQTT broker host for Home Assistant Discovery and legacy compatibility. Default: `core-mosquitto`. |
+| `mqtt_port` | Optional MQTT broker port. Default: `1883`. |
+| `mqtt_user` | Optional MQTT username. |
+| `mqtt_password` | Optional MQTT password. |
 
-### Basic Settings
-   - **Email**: Your Charge Amps account email
-   - **Password**: Your Charge Amps account password
-   - **Host Name**: API hostname (default: `my.charge.space`)
-   - **Base URL**: API base URL (default: `https://my.charge.space`)
-   - **Update Interval**: Update interval in minutes (default: `1`)
+The schedule timezone is detected from Home Assistant automatically. `CHARGER_TIMEZONE` is only a local-development fallback when Home Assistant does not provide a timezone.
 
-### Operation Mode
-   - **Operation Mode**: `standalone` (default) or `hems`
-     - `standalone`: Internal price-based scheduling
-     - `hems`: External schedule control via MQTT
+## Entities
 
-### Standalone Mode Options
-   - **Enable Automation**: Toggle to allow the add-on to schedule charging windows
-   - **Price Sensor Entity**: Home Assistant entity that exposes price per kWh
-   - **Top X Charge Count**: Number of unique price levels to select (default: `16`)
-     - *Note*: This selects price *levels*, not slot count. Multiple slots at the same price = more charging time.
-   - **Price Threshold**: Maximum price in EUR/kWh (default: `0.25`)
-     - Slots above this price are excluded from scheduling
-     - Set to `1.0` to effectively disable threshold filtering
-   - **Max Current Per Phase**: Safety limit for active charging (default `16` amps)
-   - **Connector IDs**: Comma-separated Charge Amps connector IDs to control (default `1`)
+### Normalized Entities
 
-4. Click **Save**
-5. Start the addon
+These additive entities are the preferred capability-oriented interface for future HEMS use. They are read-only unless a future release verifies and implements a provider operation.
 
-## Created Entities
+| Entity | Meaning |
+| --- | --- |
+| `sensor.charge_amps_monitor_state` | Normalized charger status such as `available`, `charging`, `offline`, or `faulted`. |
+| `binary_sensor.charge_amps_monitor_online` | Whether the charger currently reports as online. |
+| `binary_sensor.charge_amps_monitor_charging` | Whether the connector currently reports charging. |
+| `sensor.charge_amps_monitor_power` | Measured charging power in W. |
+| `sensor.charge_amps_monitor_energy` | Cumulative charging energy in kWh. |
+| `sensor.charge_amps_monitor_current` | Measured charging current in A. |
+| `sensor.charge_amps_monitor_voltage` | Measured charging voltage in V. |
+| `sensor.charge_amps_monitor_capabilities` | Diagnostic summary of verified, unsupported, and unknown capabilities. The current result is read-only. |
+| `sensor.charge_amps_monitor_error` | Last provider or integration error. |
 
-The addon creates the following Home Assistant entities (all prefixed with `ca_`):
+Missing measurements are unavailable rather than fabricated as zero. If a provider refresh fails, normalized live measurements are marked unavailable.
 
-### Basic Entities
-- `input_boolean.ca_charger_charging` - Charging status (on/off)
-- `input_number.ca_charger_total_consumption_kwh` - Total consumption
-- `input_number.ca_charger_current_power_w` - Current power
+### Legacy REST Entities
 
-### Sensor Entities
-- `sensor.ca_charger_status` - Charge point status
-- `sensor.ca_charger_power_kw` - Current power in kW
-- `sensor.ca_charger_voltage` - Average voltage
-- `sensor.ca_charger_current` - Average current
-- `sensor.ca_charger_connector_mode` - Connector mode
-- `sensor.ca_charger_ocpp_status` - OCPP status
-- `sensor.ca_charger_error_code` - Error code (if any)
+The REST fallback keeps existing entity IDs for compatibility. These entities are state snapshots; their historical `input_boolean` and `input_number` domains are not supported charger controls.
 
-### Automation Sensors
-- `sensor.ca_schedule_status` - Current schedule state (idle, active, error)
-- `sensor.ca_schedule_source` - Schedule source: `standalone`, `hems`, or `none`
-- `sensor.ca_next_start` - Next scheduled charge start time
-- `sensor.ca_next_end` - Next scheduled charge end time
-- `sensor.ca_schedule_error` - Last scheduling error (if any)
-- `sensor.ca_hems_last_command` - Timestamp of last HEMS command (diagnostic)
+- `input_boolean.ca_charger_charging` - Charging state.
+- `input_number.ca_charger_total_consumption_kwh` - Cumulative charging energy in kWh.
+- `input_number.ca_charger_current_power_w` - Charging power in W.
+- `sensor.ca_charger_status` - Charger status.
+- `sensor.ca_charger_power_kw` - Charging power in kW.
+- `sensor.ca_charger_voltage` - Average charging voltage in V.
+- `sensor.ca_charger_current` - Average charging current in A.
+- `binary_sensor.ca_charger_online` - Online status.
+- `binary_sensor.ca_charger_connector_enabled` - Provider-reported connector enabled state.
+- `input_text.ca_charger_name` - Charger name.
+- `input_text.ca_charger_serial` - Charger serial number.
+- `sensor.ca_charger_connector_mode` - Connector mode diagnostic.
+- `sensor.ca_charger_ocpp_status` - Connector protocol status diagnostic.
+- `sensor.ca_charger_error_code` - Provider error code when present.
+- `sensor.ca_charging_schedule_status` - Schedule state.
+- `sensor.ca_next_charge_start` - Next scheduled charging start.
+- `sensor.ca_next_charge_end` - Next scheduled charging end.
+- `sensor.ca_charging_schedule_error` - Last schedule error.
 
-### Binary Sensors
-- `binary_sensor.ca_charger_online` - Charger online status
-- `binary_sensor.ca_charger_connector_enabled` - Connector enabled state
-- `binary_sensor.ca_price_threshold_active` - Indicates if price threshold excluded any slots
+### MQTT Discovery Entities
 
-### Text Entities
-- `input_text.ca_charger_name` - Charge point name
-- `input_text.ca_charger_serial` - Serial number
+When MQTT Discovery is available, existing `charge_amps_*` entities remain published. Their exact entity registry names are based on the existing `charge_amps` prefix. The normalized entities use the `charge_amps_monitor_*` prefix described above.
 
-## Local Development
+MQTT is an internal publication and compatibility mechanism. It is not the HEMS integration boundary.
 
-### Prerequisites
+### Supported Controls
 
-- Python 3.12+
-- VS Code with Remote Containers extension (optional)
+Version 2.0.1 exposes no direct charger start, stop, persistent current, or connector enable/disable controls. The add-on can manage verified Charge Amps schedules from standalone automation and the legacy compatibility path. A schedule refresh button, when available through MQTT Discovery, refreshes price analysis; it does not directly start or stop the charger.
 
-### Quick Start (Recommended)
+## Limitations
 
-The easiest way to run the addon locally is using the provided debug scripts:
+Direct start, stop, persistent current control, and connector enable/disable are not currently exposed because the corresponding Charge Amps provider operations have not been verified.
 
-1. **Install dependencies:**
-   ```bash
-   cd charge-amps-monitor
-   pip install -r requirements.txt
-   ```
+Provider current limits and phase constraints are also not verified. The add-on does not invent limits, silently clamp requests, or publish writable current entities.
 
-2. **Create a `.env` file:**
-   ```bash
-   cp .env.example .env
-   ```
-   Then edit `.env` and fill in your credentials:
-   - `CHARGER_EMAIL` - Your Charge Amps account email
-   - `CHARGER_PASSWORD` - Your Charge Amps account password
-   - `HA_API_TOKEN` - Your Home Assistant API token (Long-Lived Access Token)
-   - `HA_API_URL` - Home Assistant API URL (default: `http://localhost:8123/api`)
-    - Optional automation overrides:
-       - `CHARGER_AUTOMATION_ENABLED`
-       - `CHARGER_PRICE_SENSOR_ENTITY`
-       - `CHARGER_REQUIRED_MINUTES_PER_DAY`
-       - `CHARGER_EARLIEST_START_HOUR`
-       - `CHARGER_LATEST_END_HOUR`
-       - `CHARGER_MAX_CURRENT_PER_PHASE`
-       - `CHARGER_CONNECTOR_IDS`
-       - `CHARGER_SAFETY_MARGIN_MINUTES`
-
-3. **Run the debug script:**
-   
-   **On Linux/Mac:**
-   ```bash
-   ./run_local.sh
-   ```
-   
-   **On Windows (PowerShell):**
-   ```powershell
-   .\run_local.ps1
-   ```
-   
-   **Or directly with Python:**
-   ```bash
-   python run_local.py
-   ```
-
-The debug script will:
-- Load environment variables from `.env` file (if present)
-- Validate required configuration
-- Display a configuration summary
-- Run the application with proper error handling
-
-### Using Dev Container
-
-1. Open the project in VS Code
-2. When prompted, click **Reopen in Container**
-3. The container will build and install dependencies
-4. Create a `.env` file or set environment variables
-5. Run: `python run_local.py` or `./run_local.sh`
-
-### Manual Testing (Advanced)
-
-If you prefer to set environment variables manually:
-
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Set environment variables:**
-   
-   **On Linux/Mac:**
-   ```bash
-   export CHARGER_EMAIL="your-email@example.com"
-   export CHARGER_PASSWORD="your-password"
-   export CHARGER_HOST_NAME="my.charge.space"
-   export CHARGER_BASE_URL="https://my.charge.space"
-   export CHARGER_UPDATE_INTERVAL="1"
-   export CHARGER_AUTOMATION_ENABLED="false"
-   export CHARGER_PRICE_SENSOR_ENTITY="sensor.energy_prices_electricity_import_price"
-   export CHARGER_REQUIRED_MINUTES_PER_DAY="240"
-   export CHARGER_EARLIEST_START_HOUR="0"
-   export CHARGER_LATEST_END_HOUR="8"
-   export CHARGER_MAX_CURRENT_PER_PHASE="16"
-   export CHARGER_CONNECTOR_IDS="1"
-   export CHARGER_SAFETY_MARGIN_MINUTES="15"
-   export HA_API_TOKEN="your-ha-token"
-   export HA_API_URL="http://localhost:8123/api"
-   ```
-   
-   **On Windows (PowerShell):**
-   ```powershell
-   $env:CHARGER_EMAIL="your-email@example.com"
-   $env:CHARGER_PASSWORD="your-password"
-   $env:CHARGER_HOST_NAME="my.charge.space"
-   $env:CHARGER_BASE_URL="https://my.charge.space"
-   $env:CHARGER_UPDATE_INTERVAL="1"
-   $env:CHARGER_AUTOMATION_ENABLED="false"
-   $env:CHARGER_PRICE_SENSOR_ENTITY="sensor.energy_prices_electricity_import_price"
-   $env:CHARGER_REQUIRED_MINUTES_PER_DAY="240"
-   $env:CHARGER_EARLIEST_START_HOUR="0"
-   $env:CHARGER_LATEST_END_HOUR="8"
-   $env:CHARGER_MAX_CURRENT_PER_PHASE="16"
-   $env:CHARGER_CONNECTOR_IDS="1"
-   $env:CHARGER_SAFETY_MARGIN_MINUTES="15"
-   $env:HA_API_TOKEN="your-ha-token"
-   $env:HA_API_URL="http://localhost:8123/api"
-   ```
-
-3. **Run the application:**
-   ```bash
-   python3 -m app.main
-   ```
-
-## Architecture
-
-```
-charge-amps-monitor/
-├── config.yaml          # Addon metadata and options schema
-├── Dockerfile           # Container definition
-├── run.sh              # Entry script
-├── requirements.txt    # Python dependencies
-├── app/
-│   ├── __init__.py
-│   ├── main.py         # Main application loop
-│   ├── charger_api.py  # Charge Amps API client
-│   └── models.py       # Data models
-└── README.md           # This file
-```
-
-## API Integration
-
-The addon uses the Charge Amps API:
-
-1. **Authentication**: POST to `/api/auth/login` with email, password, hostName
-2. **Get Charge Points**: POST to `/api/users/chargepoints/owned?expand=ocppConfig`
-3. **Token Management**: Automatically refreshes JWT tokens before expiration
+The `battery-manager` configuration references `sensor.charge_amps_monitor_charger_current_power`. Charge Amps Monitor preserves this compatibility entity and its `charge_amps_current_power` unique ID while the normalized entities remain additive.
 
 ## Troubleshooting
 
-### Addon won't start
+- Check add-on logs under **Settings > Add-ons > Charge Amps - EV Charger Monitor > Log**.
+- Verify Charge Amps credentials and network access to `my.charge.space`.
+- Verify the configured price sensor exists and exposes usable EUR/kWh data when standalone automation is enabled.
+- Check that Home Assistant API access is available to the add-on.
+- If normalized measurements are unavailable, inspect the provider refresh error and Charge Amps charger connectivity.
 
-- Check logs: **Settings** > **Add-ons** > **Charge Amps - EV Charger Monitor** > **Log**
-- Verify configuration: Ensure email and password are correct
-- Check network connectivity to Charge Amps API
+## Local Development
 
-### Entities not appearing
+```bash
+cd charge-amps-monitor
+pip install -r requirements.txt
+cp .env.example .env
+python run_local.py
+```
 
-- Wait a few minutes for initial update
-- Check addon logs for errors
-- Verify Home Assistant API token is valid
-- Ensure addon has started successfully
+Run the test suite with:
 
-### Authentication errors
+```bash
+pytest -q tests
+```
 
-- Verify email and password are correct
-- Check that host_name matches your Charge Amps account
-- The add-on now trims surrounding whitespace from `email`, `password`, `host_name`, and `base_url` before login, which helps when secrets or copied values include a trailing space/newline.
-- When the Charge Amps API becomes unavailable or returns authorization errors, the live charging sensors are forced back to a safe `0`/`OFF` state so Home Assistant automations do not keep acting on stale charger power.
-- Review logs for detailed error messages
+The add-on uses Python 3.12+ and Home Assistant Supervisor APIs. The Charge Amps API and MQTT transport are implementation details below the Home Assistant integration boundary.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
-
+This project is licensed under the MIT License. See [LICENSE](../LICENSE).
