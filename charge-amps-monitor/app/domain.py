@@ -152,7 +152,7 @@ def normalize_state(charge_point: ChargePoint, connector: Connector) -> ChargerS
     """Map provider state to a provider-neutral state."""
     if not charge_point.is_online:
         return ChargerState.OFFLINE
-    if connector.error_code:
+    if _provider_reports_fault(charge_point, connector):
         return ChargerState.FAULTED
     if connector.is_charging:
         return ChargerState.CHARGING
@@ -165,6 +165,19 @@ def normalize_state(charge_point: ChargePoint, connector: Connector) -> ChargerS
     return ChargerState.AVAILABLE
 
 
+def _provider_reports_fault(charge_point: ChargePoint, connector: Connector) -> bool:
+    """Return whether provider status contains a real fault indication."""
+    error_code = (connector.error_code or "").strip().casefold()
+    if error_code and error_code not in {"0", "none", "noerror", "no_error", "ok"}:
+        return True
+
+    status_values = {
+        (charge_point.charge_point_status or "").strip().casefold(),
+        (connector.ocpp_status or "").strip().casefold(),
+    }
+    return bool(status_values & {"fault", "faulted", "error"})
+
+
 def charger_from_dtos(charge_point: ChargePoint, connector: Connector) -> Charger:
     """Convert current provider DTOs into normalized charger data."""
     def phase_values(prefix: str) -> list[float]:
@@ -175,7 +188,7 @@ def charger_from_dtos(charge_point: ChargePoint, connector: Connector) -> Charge
                 (f"{prefix}2", getattr(connector, f"{prefix}2")),
                 (f"{prefix}3", getattr(connector, f"{prefix}3")),
             )
-            if not connector.provided_fields or name in connector.provided_fields
+            if not connector.provided_fields or name in connector.provided_fields or value != 0.0
         ]
 
     currents = phase_values("current")

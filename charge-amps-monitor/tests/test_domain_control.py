@@ -86,6 +86,69 @@ def test_provider_dto_mapping_preserves_measurements_and_unknown_controls():
     assert charger.limits.min_current_a is None
 
 
+def test_online_no_error_available_is_not_faulted():
+    charge_point = ChargePoint(
+        id="charger-1",
+        charge_point_status="Online",
+        connectors=[Connector(
+            connector_id=1,
+            error_code="NoError",
+            ocpp_status="Available",
+        )],
+    )
+
+    charger = charger_from_dtos(charge_point, charge_point.connectors[0])
+
+    assert charger.state is ChargerState.AVAILABLE
+
+
+def test_provider_fault_and_offline_states_are_normalized_truthfully():
+    faulted = ChargePoint(
+        id="charger-1",
+        charge_point_status="Online",
+        connectors=[Connector(connector_id=1, error_code="GroundFault")],
+    )
+    offline = ChargePoint(
+        id="charger-1",
+        charge_point_status="Offline",
+        connectors=[Connector(connector_id=1, error_code="NoError")],
+    )
+    charging = ChargePoint(
+        id="charger-1",
+        charge_point_status="Online",
+        connectors=[Connector(connector_id=1, is_charging=True, error_code="NoError")],
+    )
+
+    assert charger_from_dtos(faulted, faulted.connectors[0]).state is ChargerState.FAULTED
+    assert charger_from_dtos(offline, offline.connectors[0]).state is ChargerState.OFFLINE
+    assert charger_from_dtos(charging, charging.connectors[0]).state is ChargerState.CHARGING
+
+
+def test_provider_measurements_map_to_normalized_measurements():
+    charge_point = ChargePoint(
+        id="charger-1",
+        charge_point_status="Online",
+        connectors=[Connector(
+            connector_id=1,
+            current1=11.6,
+            current2=11.6,
+            current3=11.6,
+            voltage1=228.1,
+            voltage2=228.1,
+            voltage3=228.1,
+            total_consumption_kwh=0.0,
+            error_code="NoError",
+        )],
+    )
+
+    measurements = charger_from_dtos(charge_point, charge_point.connectors[0]).measurements
+
+    assert measurements.current_a == 11.6
+    assert measurements.voltage_v == 228.1
+    assert measurements.power_w == 7937.88
+    assert measurements.energy_kwh == 0.0
+
+
 def test_unsupported_current_does_not_call_provider():
     capabilities = ChargerCapabilities(
         current_control=CapabilityState.UNKNOWN,

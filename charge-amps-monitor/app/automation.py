@@ -279,14 +279,22 @@ class ChargingAutomationCoordinator:
                         },
                     )
                 else:
+                    has_price_data = schedule.today_analysis is not None or schedule.tomorrow_analysis is not None
                     self._status = AutomationStatus(
                         state="waiting_for_prices",
-                        message="No price data available",
+                        message=(
+                            "No qualifying charging slots"
+                            if has_price_data
+                            else "No price data available"
+                        ),
                         next_start=None,
                         next_end=None,
-                        last_error="Price sensor has no data",
-                        plan_date=None,
-                        attributes={"automation_enabled": True},
+                        last_error=None if has_price_data else "Price sensor has no data",
+                        plan_date=now_local.date().isoformat() if has_price_data else None,
+                        attributes={
+                            "automation_enabled": True,
+                            "price_data_available": has_price_data,
+                        },
                     )
             except Exception as exc:
                 logger.error("Failed to analyze prices: %s", exc, exc_info=True)
