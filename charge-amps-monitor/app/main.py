@@ -181,8 +181,13 @@ def _mqtt_update(
 
 
 def _timestamp_state(value: Optional[str]) -> str:
-    """Return a valid MQTT timestamp state or unavailable when absent."""
+    """Return a valid REST timestamp state or unavailable when absent."""
     return value or "unavailable"
+
+
+def _mqtt_timestamp_state(value: Optional[str]) -> str:
+    """Return timestamp or the configured unavailable MQTT payload."""
+    return value or "offline"
 
 
 def publish_automation_sensors_mqtt(
@@ -215,16 +220,18 @@ def publish_automation_sensors_mqtt(
             EntityConfig(
                 object_id="next_start",
                 name="Next Charge Start",
-                state=_timestamp_state(status.next_start),
+                state=_mqtt_timestamp_state(status.next_start),
                 device_class="timestamp",
+                payload_not_available="offline",
             )
         )
         mqtt_client.publish_sensor(
             EntityConfig(
                 object_id="next_end",
                 name="Next Charge End",
-                state=_timestamp_state(status.next_end),
+                state=_mqtt_timestamp_state(status.next_end),
                 device_class="timestamp",
+                payload_not_available="offline",
             )
         )
         mqtt_client.publish_sensor(
@@ -265,8 +272,8 @@ def publish_automation_sensors_mqtt(
         )
     else:
         _mqtt_update(mqtt_client, "sensor", "schedule_status", status.state, status_attrs)
-        _mqtt_update(mqtt_client, "sensor", "next_start", _timestamp_state(status.next_start))
-        _mqtt_update(mqtt_client, "sensor", "next_end", _timestamp_state(status.next_end))
+        _mqtt_update(mqtt_client, "sensor", "next_start", _mqtt_timestamp_state(status.next_start))
+        _mqtt_update(mqtt_client, "sensor", "next_end", _mqtt_timestamp_state(status.next_end))
         _mqtt_update(mqtt_client, "sensor", "schedule_error", status.last_error or "none")
         _mqtt_update(mqtt_client, "sensor", "schedule_source", schedule_source)
         _mqtt_update(mqtt_client, "sensor", "hems_last_command", hems_last_command or "unavailable")

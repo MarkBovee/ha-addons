@@ -149,6 +149,27 @@ def test_provider_measurements_map_to_normalized_measurements():
     assert measurements.energy_kwh == 0.0
 
 
+def test_api_connector_measurements_preserve_only_provided_nonzero_phases():
+    connector = Connector.from_dict({
+        "connectorId": 1,
+        "current1": 11.6,
+        "voltage1": 228.1,
+        "totalConsumptionKwh": 0.0,
+        "errorCode": "NoError",
+        "ocppStatus": "Available",
+    })
+    charge_point = ChargePoint(
+        id="charger-1",
+        charge_point_status="Online",
+        connectors=[connector],
+    )
+
+    measurements = charger_from_dtos(charge_point, connector).measurements
+
+    assert measurements.current_a == 11.6
+    assert measurements.voltage_v == 228.1
+
+
 def test_unsupported_current_does_not_call_provider():
     capabilities = ChargerCapabilities(
         current_control=CapabilityState.UNKNOWN,

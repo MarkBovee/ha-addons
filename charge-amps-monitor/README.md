@@ -7,7 +7,7 @@ Charge Amps Monitor is a Home Assistant Supervisor add-on for monitoring Charge 
 - Monitors Charge Amps charger and connector state.
 - Publishes charging state and online status to Home Assistant.
 - Publishes charging power, current, voltage, and cumulative energy when supplied by the charger.
-- Provides normalized read-only entities introduced in version 2.0.0 and corrected in 2.0.1.
+- Provides normalized read-only entities introduced in version 2.0.0 and corrected in version 2.0.2.
 - Generates and manages price-based charging schedules in standalone mode.
 - Keeps existing REST entities, MQTT Discovery entities, and legacy schedule compatibility available during migration.
 - Runs without HEMS when standalone scheduling is enabled or automation is disabled.
@@ -143,7 +143,7 @@ MQTT is an internal publication and compatibility mechanism. It is not the HEMS 
 
 ### Supported Controls
 
-Version 2.0.1 exposes no direct charger start, stop, persistent current, or connector enable/disable controls. The add-on can manage verified Charge Amps schedules from standalone automation and the legacy compatibility path. A schedule refresh button, when available through MQTT Discovery, refreshes price analysis; it does not directly start or stop the charger.
+Version 2.0.2 exposes no direct charger start, stop, persistent current, or connector enable/disable controls. The add-on can manage verified Charge Amps schedules from standalone automation and the legacy compatibility path. A schedule refresh button, when available through MQTT Discovery, refreshes price analysis; it does not directly start or stop the charger.
 
 ## Limitations
 

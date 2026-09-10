@@ -55,11 +55,11 @@ def test_normalized_mqtt_entities_are_additive_and_read_only():
 
     ids = {object_id for _, object_id, _, _ in mqtt.discovery}
     assert {
-        "charge_amps_monitor_state",
-        "charge_amps_monitor_online",
-        "charge_amps_monitor_charging",
-        "charge_amps_monitor_power",
-        "charge_amps_monitor_energy",
+        "monitor_state",
+        "monitor_online",
+        "monitor_charging",
+        "monitor_power",
+        "monitor_energy",
     } <= ids
     assert not any(
         object_id in {"current", "start", "stop", "enabled"}
@@ -67,9 +67,11 @@ def test_normalized_mqtt_entities_are_additive_and_read_only():
     )
 
     names = {object_id: name for _, object_id, _, name in mqtt.discovery}
-    assert names["charge_amps_monitor_state"] == "Charger Status"
-    assert names["charge_amps_monitor_power"] == "Charging Power"
+    assert names["monitor_state"] == "Charger Status"
+    assert names["monitor_power"] == "Charging Power"
     assert all("Charge Amps Monitor Charge Amps Monitor" not in name for name in names.values())
+    charging_config = next(item for item in mqtt.discovery if item[1] == "monitor_charging")
+    assert charging_config[0] == "binary_sensor"
     assert ("sensor", "monitor_state") in mqtt.removed
     assert ("sensor", "charge_amps_monitor_state") in mqtt.removed
 
@@ -113,7 +115,7 @@ def test_missing_measurement_is_published_unavailable():
     ChargerHaAdapter(mqtt).publish_mqtt(charger, discovery=True)
 
     discovery_states = {object_id: state for _, object_id, state, _ in mqtt.discovery}
-    assert discovery_states["charge_amps_monitor_power"] == "unavailable"
+    assert discovery_states["monitor_power"] == "unavailable"
 
 
 def test_normalized_measurements_publish_provider_values():
@@ -137,10 +139,10 @@ def test_normalized_measurements_publish_provider_values():
     ChargerHaAdapter(mqtt).publish_mqtt(charger, discovery=True)
 
     states = {object_id: state for _, object_id, state, _ in mqtt.discovery}
-    assert states["charge_amps_monitor_current"] == "11.6"
-    assert states["charge_amps_monitor_voltage"] == "228.1"
-    assert states["charge_amps_monitor_power"] == "0.0"
-    assert states["charge_amps_monitor_energy"] == "0.0"
+    assert states["monitor_current"] == "11.6"
+    assert states["monitor_voltage"] == "228.1"
+    assert states["monitor_power"] == "0.0"
+    assert states["monitor_energy"] == "0.0"
 
 
 def test_normalized_discovery_preserves_unique_id_contracts():

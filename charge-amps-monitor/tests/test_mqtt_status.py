@@ -33,5 +33,5 @@ def test_missing_next_schedule_uses_unavailable_mqtt_state():
     publish_automation_sensors_mqtt(mqtt, status, discovery=True)
 
     states = dict(mqtt.discovery)
-    assert states["next_start"] == "unavailable"
-    assert states["next_end"] == "unavailable"
+    assert states["next_start"] == "offline"
+    assert states["next_end"] == "offline"

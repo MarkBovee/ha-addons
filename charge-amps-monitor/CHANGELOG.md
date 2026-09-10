@@ -20,6 +20,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `pytest -q tests`: 33 passed.
 - OpenSpec change `professionalize-charge-amps-charger` validates with `--strict`.
 
+## [2.0.2] - 2026-09-10
+
+### Fixed
+- Corrected normalized MQTT object IDs so Home Assistant derives the intended `charge_amps_monitor_*` entity IDs.
+- Removed the unsupported normalized charging binary-sensor device class.
+- Marked empty schedule timestamps unavailable through MQTT discovery instead of publishing parseable invalid timestamp states.
+
 ## [2.0.0] - 2026-09-10
 
 ### Added

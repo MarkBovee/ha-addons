@@ -47,7 +47,7 @@ class ChargerHaAdapter:
             publish_entity(
                 "binary_sensor.charge_amps_monitor_charging",
                 "on" if charger.charging else "off",
-                {"friendly_name": "Charging", "device_class": "charging", "icon": "mdi:ev-station"},
+                {"friendly_name": "Charging", "icon": "mdi:ev-station"},
             )
         self._publish_rest_measurement(
             publish_entity, "power", charger.measurements.power_w, "W", "power"
@@ -93,7 +93,7 @@ class ChargerHaAdapter:
             publish_entity(
                 "binary_sensor.charge_amps_monitor_charging",
                 "unavailable",
-                {"friendly_name": "Charging", "device_class": "charging", "icon": "mdi:ev-station"},
+                {"friendly_name": "Charging", "icon": "mdi:ev-station"},
             )
             for name, unit, device_class in (
                 ("power", "W", "power"),
@@ -125,14 +125,14 @@ class ChargerHaAdapter:
         if not self._mqtt:
             return
         for component, object_id, state in (
-            ("sensor", f"{NORMALIZED_PREFIX}state", "unavailable"),
-            ("binary_sensor", f"{NORMALIZED_PREFIX}online", "unavailable"),
-            ("binary_sensor", f"{NORMALIZED_PREFIX}charging", "unavailable"),
-            ("sensor", f"{NORMALIZED_PREFIX}power", "unavailable"),
-            ("sensor", f"{NORMALIZED_PREFIX}energy", "unavailable"),
-            ("sensor", f"{NORMALIZED_PREFIX}current", "unavailable"),
-            ("sensor", f"{NORMALIZED_PREFIX}voltage", "unavailable"),
-            ("sensor", f"{NORMALIZED_PREFIX}error", error),
+            ("sensor", "monitor_state", "unavailable"),
+            ("binary_sensor", "monitor_online", "unavailable"),
+            ("binary_sensor", "monitor_charging", "unavailable"),
+            ("sensor", "monitor_power", "unavailable"),
+            ("sensor", "monitor_energy", "unavailable"),
+            ("sensor", "monitor_current", "unavailable"),
+            ("sensor", "monitor_voltage", "unavailable"),
+            ("sensor", "monitor_error", error),
         ):
             self._mqtt.update_state(component, object_id, state)
 
@@ -143,30 +143,29 @@ class ChargerHaAdapter:
             self._mqtt.remove_entity(component, object_id)
 
         self._mqtt.publish_sensor(EntityConfig(
-            object_id=f"{NORMALIZED_PREFIX}state",
+            object_id="monitor_state",
             name="Charger Status",
             state=charger.state.value,
             attributes={"raw_state": charger.raw_state or "unknown"},
         ))
 
         self._mqtt.publish_binary_sensor(EntityConfig(
-            object_id=f"{NORMALIZED_PREFIX}online",
+            object_id="monitor_online",
             name="Online",
             state="unavailable" if charger.online is None else "ON" if charger.online else "OFF",
             device_class="connectivity",
         ))
         self._mqtt.publish_binary_sensor(EntityConfig(
-            object_id=f"{NORMALIZED_PREFIX}charging",
+            object_id="monitor_charging",
             name="Charging",
             state="unavailable" if charger.charging is None else "ON" if charger.charging else "OFF",
-            device_class="charging",
         ))
-        self._publish_discovery_measurement(f"{NORMALIZED_PREFIX}power", "Charging Power", charger.measurements.power_w, "W", "power", icon="mdi:flash")
-        self._publish_discovery_measurement(f"{NORMALIZED_PREFIX}energy", "Charging Energy", charger.measurements.energy_kwh, "kWh", "energy", "total_increasing", icon="mdi:lightning-bolt")
-        self._publish_discovery_measurement(f"{NORMALIZED_PREFIX}current", "Charging Current", charger.measurements.current_a, "A", "current", icon="mdi:current-ac")
-        self._publish_discovery_measurement(f"{NORMALIZED_PREFIX}voltage", "Charging Voltage", charger.measurements.voltage_v, "V", "voltage", icon="mdi:lightning-bolt")
+        self._publish_discovery_measurement("monitor_power", "Charging Power", charger.measurements.power_w, "W", "power", icon="mdi:flash")
+        self._publish_discovery_measurement("monitor_energy", "Charging Energy", charger.measurements.energy_kwh, "kWh", "energy", "total_increasing", icon="mdi:lightning-bolt")
+        self._publish_discovery_measurement("monitor_current", "Charging Current", charger.measurements.current_a, "A", "current", icon="mdi:current-ac")
+        self._publish_discovery_measurement("monitor_voltage", "Charging Voltage", charger.measurements.voltage_v, "V", "voltage", icon="mdi:lightning-bolt")
         self._mqtt.publish_sensor(EntityConfig(
-            object_id=f"{NORMALIZED_PREFIX}capabilities",
+            object_id="monitor_capabilities",
             name="Capabilities",
             state=self._capability_state(charger),
             entity_category="diagnostic",
@@ -174,7 +173,7 @@ class ChargerHaAdapter:
             attributes=self._capability_attributes(charger),
         ))
         self._mqtt.publish_sensor(EntityConfig(
-            object_id=f"{NORMALIZED_PREFIX}error",
+            object_id="monitor_error",
             name="Error",
             state=error or "none",
             entity_category="diagnostic",
@@ -203,25 +202,25 @@ class ChargerHaAdapter:
         )
 
     def _update_state(self, charger: Charger, error: Optional[str]) -> None:
-        self._mqtt.update_state("sensor", f"{NORMALIZED_PREFIX}state", charger.state.value)
+        self._mqtt.update_state("sensor", "monitor_state", charger.state.value)
         self._mqtt.update_state(
             "binary_sensor",
-            f"{NORMALIZED_PREFIX}online",
+            "monitor_online",
             "unavailable" if charger.online is None else "ON" if charger.online else "OFF",
         )
         if charger.charging is not None:
-            self._mqtt.update_state("binary_sensor", f"{NORMALIZED_PREFIX}charging", "ON" if charger.charging else "OFF")
-        self._update_measurement(f"{NORMALIZED_PREFIX}power", charger.measurements.power_w)
-        self._update_measurement(f"{NORMALIZED_PREFIX}energy", charger.measurements.energy_kwh)
-        self._update_measurement(f"{NORMALIZED_PREFIX}current", charger.measurements.current_a)
-        self._update_measurement(f"{NORMALIZED_PREFIX}voltage", charger.measurements.voltage_v)
+            self._mqtt.update_state("binary_sensor", "monitor_charging", "ON" if charger.charging else "OFF")
+        self._update_measurement("monitor_power", charger.measurements.power_w)
+        self._update_measurement("monitor_energy", charger.measurements.energy_kwh)
+        self._update_measurement("monitor_current", charger.measurements.current_a)
+        self._update_measurement("monitor_voltage", charger.measurements.voltage_v)
         self._mqtt.update_state(
             "sensor",
-            f"{NORMALIZED_PREFIX}capabilities",
+            "monitor_capabilities",
             self._capability_state(charger),
             self._capability_attributes(charger),
         )
-        self._mqtt.update_state("sensor", f"{NORMALIZED_PREFIX}error", error or "none")
+        self._mqtt.update_state("sensor", "monitor_error", error or "none")
 
     def _publish_discovery_measurement(
         self,

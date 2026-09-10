@@ -66,6 +66,7 @@ class EntityConfig:
         icon: MDI icon (e.g., "mdi:currency-eur")
         entity_category: Entity category ("config", "diagnostic", or None)
         attributes: Additional attributes to include in state
+        payload_not_available: MQTT payload that marks an entity unavailable
         enabled_by_default: Whether entity is enabled by default
     """
     object_id: str
@@ -77,6 +78,7 @@ class EntityConfig:
     icon: Optional[str] = None
     entity_category: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
+    payload_not_available: Optional[str] = None
     enabled_by_default: bool = True
 
 
@@ -535,6 +537,8 @@ class MqttDiscovery:
             discovery_payload["icon"] = config.icon
         if config.entity_category:
             discovery_payload["entity_category"] = config.entity_category
+        if config.payload_not_available is not None:
+            discovery_payload["payload_not_available"] = config.payload_not_available
         if not config.enabled_by_default:
             discovery_payload["enabled_by_default"] = False
         
@@ -548,7 +552,8 @@ class MqttDiscovery:
         if not self._publish(discovery_topic, discovery_payload):
             return False
         
-        # Publish current state
+        # MQTT payload_not_available prevents HA from parsing unavailable
+        # timestamp states as datetime values.
         if not self._publish(state_topic, config.state):
             return False
         
@@ -564,7 +569,7 @@ class MqttDiscovery:
         logger.debug("Published %s entity: %s (unique_id=%s)", component, config.name, unique_id)
         
         return True
-    
+
     def _command_topic(self, component: str, object_id: str) -> str:
         """Get command topic for controllable entities."""
         return f"{self.addon_id}/{component}/{object_id}/set"
