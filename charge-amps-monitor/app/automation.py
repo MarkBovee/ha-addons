@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from shared.ha_api import HomeAssistantApi
 
-from .charger_api import ChargerApi
+from .domain import SchedulePort
 from .price_slot_analyzer import DailyPriceAnalysis, PriceSlot, PriceSlotAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ class ChargingAutomationCoordinator:
 
     def __init__(
         self,
-        charger_api: ChargerApi,
+        charger_api: SchedulePort,
         ha_api: HomeAssistantApi,
         config: AutomationConfig,
         data_path: str = "/data",
@@ -501,7 +501,11 @@ class ChargingAutomationCoordinator:
             timezone_name=self._config.timezone,
         )
         
-        if result:
+        if result is not None:
+            read_back = self._charger_api.get_schedules(charge_point_id)
+            if read_back is None:
+                logger.error("Schedule write succeeded but read-back failed")
+                return False
             schedule_id = result.get("scheduleId")
             logger.info("✅ Schedule pushed successfully (ID: %s)", schedule_id)
             self._last_pushed_periods = periods  # Remember what we pushed

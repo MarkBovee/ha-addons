@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -15,6 +15,10 @@ from .automation import (
     ChargingAutomationCoordinator,
 )
 from .charger_api import ChargerApi
+from .charge_amps_adapter import ChargeAmpsAdapter
+from .control_service import ChargerControlService
+from .domain import charger_from_dtos
+from .ha_adapter import ChargerHaAdapter
 from .hems_manager import HEMSScheduleManager
 from .models import ChargePoint, Connector
 
@@ -32,6 +36,11 @@ except ImportError:
 
 # Configure logging
 logger = setup_logging(name=__name__)
+
+
+def normalized_adapter_state(charge_point: ChargePoint, connector: Connector):
+    """Return a normalized snapshot for the additive Home Assistant adapter."""
+    return charger_from_dtos(charge_point, connector)
 
 # Old entities to clean up on startup (REST API mode only)
 OLD_ENTITIES = [
@@ -944,6 +953,7 @@ def publish_safe_charger_state(
     ha_api_token: str,
     status: str,
     error_code: str,
+    normalized_adapter: Optional[ChargerHaAdapter] = None,
 ) -> None:
     """Publish a safe charger state when live Charge Amps data is unavailable."""
     logger.warning(
@@ -953,13 +963,26 @@ def publish_safe_charger_state(
     )
     if use_mqtt and mqtt_client and MQTT_ENTITY_CONFIG_AVAILABLE:
         publish_safe_charger_state_mqtt(mqtt_client, status, error_code)
+        if normalized_adapter:
+            normalized_adapter.publish_unavailable(error=error_code)
         return
     if ha_api_token:
         publish_safe_charger_state_rest(ha_api_url, ha_api_token, status, error_code)
+        if normalized_adapter:
+            normalized_adapter.publish_unavailable(
+                publish_entity=lambda entity_id, state, attributes: create_or_update_entity(
+                    entity_id, state, attributes, ha_api_url, ha_api_token, log_success=False
+                ),
+                error=error_code,
+            )
 
 
 def update_charger_status(
-    charger_api: ChargerApi, ha_api_url: str, ha_api_token: str, verbose: bool = False
+    charger_api: ChargerApi,
+    ha_api_url: str,
+    ha_api_token: str,
+    verbose: bool = False,
+    normalized_adapter: Optional[ChargerHaAdapter] = None,
 ) -> Optional[str]:
     """Update charger status and Home Assistant entities via REST API.
     
@@ -985,6 +1008,13 @@ def update_charger_status(
         create_entities(
             charge_point, connector, ha_api_url, ha_api_token, verbose=verbose
         )
+        if normalized_adapter:
+            normalized_adapter.publish_rest(
+                normalized_adapter_state(charge_point, connector),
+                lambda entity_id, state, attributes: create_or_update_entity(
+                    entity_id, state, attributes, ha_api_url, ha_api_token, log_success=False
+                ),
+            )
 
         logger.info(
             f"Charger status updated: {charge_point.name} - "
@@ -1001,7 +1031,10 @@ def update_charger_status(
 
 
 def update_charger_status_mqtt(
-    charger_api: ChargerApi, mqtt_client: 'MqttDiscovery', verbose: bool = False
+    charger_api: ChargerApi,
+    mqtt_client: 'MqttDiscovery',
+    verbose: bool = False,
+    normalized_adapter: Optional[ChargerHaAdapter] = None,
 ) -> Optional[str]:
     """Update charger status via MQTT Discovery.
     
@@ -1028,6 +1061,10 @@ def update_charger_status_mqtt(
         else:
             # Subsequent runs: just update states
             update_entities_mqtt(charge_point, connector, mqtt_client)
+        if normalized_adapter:
+            normalized_adapter.publish_mqtt(
+                normalized_adapter_state(charge_point, connector), discovery=verbose
+            )
 
         logger.info(
             f"Charger status updated (MQTT): {charge_point.name} - "
@@ -1151,6 +1188,12 @@ def main():
 
     # Initialize API client
     charger_api = ChargerApi(email, password, host_name, charger_base_url)
+    charger_adapter = ChargeAmpsAdapter(charger_api, connector_id=connector_id)
+    control_service = ChargerControlService(
+        port=charger_adapter,
+        schedule_port=charger_adapter,
+    )
+    normalized_ha_adapter = ChargerHaAdapter(mqtt_client=mqtt_client)
 
     # Authenticate
     if not charger_api.authenticate():
@@ -1162,6 +1205,7 @@ def main():
             ha_api.token,
             status="auth_error",
             error_code="api_403",
+            normalized_adapter=normalized_ha_adapter,
         )
         if mqtt_client:
             mqtt_client.disconnect()
@@ -1170,7 +1214,7 @@ def main():
     logger.info("Successfully authenticated with Charge Amps API")
 
     if ha_api.token:
-        coordinator = ChargingAutomationCoordinator(charger_api, ha_api, automation_config)
+        coordinator = ChargingAutomationCoordinator(control_service, ha_api, automation_config)
     else:
         logger.warning("Home Assistant token not available; automation coordinator disabled")
 
@@ -1200,9 +1244,21 @@ def main():
             if not coordinator or not charge_point_id:
                 logger.error("Cannot apply HEMS schedule: coordinator or charge point not ready")
                 return False
-            # TODO: Push the HEMS schedule directly to the charger
-            # For now, log and return success
-            logger.info("📥 HEMS schedule received with %d periods", len(periods))
+            week_start = datetime.now(timezone.utc) - timedelta(days=datetime.now(timezone.utc).weekday())
+            week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+            result = control_service.upsert_schedule(
+                source="legacy_hems",
+                charge_point_id=charge_point_id,
+                connector_id=automation_config.connector_id,
+                start_of_schedule=week_start.isoformat().replace("+00:00", "Z"),
+                schedule_periods=periods,
+                max_current=float(automation_config.max_current_per_phase),
+                timezone_name=automation_config.timezone,
+            )
+            if result is None:
+                logger.error("Failed to apply legacy HEMS schedule")
+                return False
+            logger.info("Applied legacy HEMS schedule with %d periods", len(periods))
             return True
         
         def on_hems_schedule_cleared() -> bool:
@@ -1210,8 +1266,15 @@ def main():
             if not coordinator or not charge_point_id:
                 logger.error("Cannot clear schedule: coordinator or charge point not ready")
                 return False
-            # TODO: Clear the schedule from the charger
-            logger.info("🗑️ HEMS schedule cleared")
+            success = control_service.delete_schedule(
+                charge_point_id,
+                automation_config.connector_id,
+                source="legacy_hems",
+            )
+            if not success:
+                logger.error("Failed to clear legacy HEMS schedule")
+                return False
+            logger.info("Cleared legacy HEMS schedule")
             return True
         
         hems_manager = HEMSScheduleManager(
@@ -1290,9 +1353,20 @@ def main():
     logger.info("Performing initial charger status update...")
     charge_point_id: Optional[str] = None
     if use_mqtt:
-        charge_point_id = update_charger_status_mqtt(charger_api, mqtt_client, verbose=True)
+        charge_point_id = update_charger_status_mqtt(
+            charger_api,
+            mqtt_client,
+            verbose=True,
+            normalized_adapter=normalized_ha_adapter,
+        )
     else:
-        charge_point_id = update_charger_status(charger_api, ha_api.base_url, ha_api.token, verbose=True)
+        charge_point_id = update_charger_status(
+            charger_api,
+            ha_api.base_url,
+            ha_api.token,
+            verbose=True,
+            normalized_adapter=normalized_ha_adapter,
+        )
     if charge_point_id is None:
         publish_safe_charger_state(
             use_mqtt,
@@ -1301,6 +1375,7 @@ def main():
             ha_api.token,
             status="unavailable",
             error_code="api_unavailable",
+            normalized_adapter=normalized_ha_adapter,
         )
 
     # Run coordinator tick to analyze prices, log schedule, and push to charger
@@ -1331,9 +1406,18 @@ def main():
             try:
                 logger.info("Updating charger status...")
                 if use_mqtt and mqtt_client and mqtt_client.is_connected():
-                    charge_point_id = update_charger_status_mqtt(charger_api, mqtt_client)
+                    charge_point_id = update_charger_status_mqtt(
+                        charger_api,
+                        mqtt_client,
+                        normalized_adapter=normalized_ha_adapter,
+                    )
                 else:
-                    charge_point_id = update_charger_status(charger_api, ha_api.base_url, ha_api.token)
+                    charge_point_id = update_charger_status(
+                        charger_api,
+                        ha_api.base_url,
+                        ha_api.token,
+                        normalized_adapter=normalized_ha_adapter,
+                    )
 
                 if charge_point_id is None:
                     publish_safe_charger_state(
@@ -1343,6 +1427,7 @@ def main():
                         ha_api.token,
                         status="unavailable",
                         error_code="api_unavailable",
+                        normalized_adapter=normalized_ha_adapter,
                     )
 
                 if coordinator:
