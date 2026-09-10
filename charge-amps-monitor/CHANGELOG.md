@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [2.0.0] - 2026-09-10
+
+### Added
+- Added a provider-neutral internal charger domain for normalized state, measurements, capabilities, limits, schedules, and command results.
+- Added internal `ChargerPort`, `ChargeAmpsAdapter`, and `ChargerControlService` boundaries.
+- Added additive `charge_amps_monitor_*` Home Assistant state and diagnostic entities through MQTT Discovery and REST fallback.
+- Added typed provider error classification, bounded read retries, deterministic JWT refresh behavior, schedule read-back, and serialized schedule/control operations.
+- Added characterization, API, domain, control, Home Assistant adapter, HEMS compatibility, and standalone scheduling regression tests.
+
+### Changed
+- Standalone price scheduling now uses the internal schedule boundary and verifies schedule writes with provider read-back.
+- Legacy HEMS schedule topics remain available as compatibility ingress, but failed apply/clear operations are now reported truthfully.
+- Missing measurements and failed provider refreshes publish `unavailable` for normalized entities instead of stale live values.
+- Existing REST entities, MQTT entities, MQTT topics, and cleanup behavior remain available during migration.
+
+### Breaking
+- This is a major architecture release. Future HEMS integrations MUST use Home Assistant entities and services only; they MUST NOT depend on Charge Amps MQTT topics, APIs, Python internals, or databases.
+- Direct start, stop, persistent current control, and connector enable/disable remain unavailable because their Charge Amps provider operations are not verified. No writable entities are published for these capabilities.
+- Validate existing entity references and legacy compatibility behavior on the target Home Assistant installation before rollout.
+
+### Tests
+- `pytest -q tests`: 26 passed.
+- OpenSpec change `professionalize-charge-amps-charger` validates with `--strict`.
+
 ## [1.3.10] - 2026-03-24
 
 ### Fixed

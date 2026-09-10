@@ -1,6 +1,6 @@
 """Data models for Charge Amps API responses."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 
@@ -22,6 +22,7 @@ class Connector:
     ocpp_status: Optional[str] = None
     error_code: Optional[str] = None
     enabled: bool = True
+    provided_fields: frozenset[str] = field(default_factory=frozenset, repr=False)
     
     @property
     def current_power_w(self) -> float:
@@ -47,7 +48,8 @@ class Connector:
             voltage3=float(data.get("voltage3", 0.0)),
             ocpp_status=data.get("ocppStatus"),
             error_code=data.get("errorCode"),
-            enabled=data.get("enabled", True)
+            enabled=data.get("enabled", True),
+            provided_fields=frozenset(data.keys()),
         )
 
 
@@ -95,4 +97,3 @@ class ChargePoint:
             owner_id=data.get("ownerId"),
             connectors=connectors
         )
-

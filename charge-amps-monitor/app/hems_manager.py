@@ -320,11 +320,9 @@ class HEMSScheduleManager:
                 self._last_error = "Failed to apply schedule to charger"
                 self.publish_status("error", ready=True)
         else:
-            # No callback - just store the schedule
-            self._current_schedule = schedule
-            self._last_command_result = "success"
-            self._last_error = None
-            logger.info("📋 HEMS schedule stored (no apply callback): %d periods", len(periods))
+            self._last_command_result = "error"
+            self._last_error = "No schedule apply boundary configured"
+            self.publish_status("error", ready=True)
     
     def _handle_schedule_clear(self, payload: str) -> None:
         """Handle incoming schedule/clear message."""
@@ -344,10 +342,9 @@ class HEMSScheduleManager:
                 self._last_error = "Failed to clear schedule"
                 self.publish_status("error", ready=True)
         else:
-            # No callback - just clear stored schedule
-            self._current_schedule = None
-            self._last_command_result = "cleared"
-            self._last_error = None
+            self._last_command_result = "error"
+            self._last_error = "No schedule clear boundary configured"
+            self.publish_status("error", ready=True)
     
     def _convert_to_charger_periods(self, schedule: HEMSSchedule) -> List[Dict[str, Any]]:
         """Convert HEMS schedule to Charge Amps format.
@@ -484,8 +481,12 @@ class HEMSScheduleManager:
             
             # Clear the schedule
             if self._on_schedule_cleared:
-                self._on_schedule_cleared()
-            
+                if not self._on_schedule_cleared():
+                    self._last_command_result = "error"
+                    self._last_error = "Failed to clear expired schedule"
+                    self.publish_status("error", ready=True)
+                    return False
+
             self._current_schedule = None
             self._last_command_result = "expired"
             self.publish_status("idle", ready=True)

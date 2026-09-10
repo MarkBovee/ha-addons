@@ -1,42 +1,115 @@
 """Charge Amps API client for EV charger monitoring."""
 
+from __future__ import annotations
+
 import base64
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
 
-from .models import ChargePoint, Connector
+from .models import ChargePoint
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_READ_RETRIES = 1
+TOKEN_REFRESH_BUFFER = timedelta(minutes=5)
+
+
+class ChargerApiError(Exception):
+    """Base error for classified Charge Amps provider failures."""
+
+    classification = "provider_error"
+
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class AuthenticationError(ChargerApiError):
+    """Authentication or authorization failed."""
+
+    classification = "authentication_error"
+
+
+class ProviderTimeoutError(ChargerApiError):
+    """A provider request exceeded its timeout."""
+
+    classification = "timeout"
+
+
+class TransientProviderError(ChargerApiError):
+    """A provider failure may succeed after bounded retry/backoff."""
+
+    classification = "transient_provider_error"
+
+
+class PermanentProviderError(ChargerApiError):
+    """A provider rejected a request without a safe retry."""
+
+    classification = "provider_error"
+
+
+class MalformedResponseError(ChargerApiError):
+    """The provider response cannot be parsed or validated."""
+
+    classification = "malformed_response"
+
+
+class UnsupportedOperationError(ChargerApiError):
+    """The requested provider operation is not verified or supported."""
+
+    classification = "unsupported_operation"
+
+
+class ConstraintError(ChargerApiError):
+    """A requested value violates a verified provider constraint."""
+
+    classification = "constraint_error"
+
 
 class ChargerApi:
-    """Client for interacting with the Charge Amps API."""
-    
+    """Client for interacting with the Charge Amps API.
+
+    Public methods retain the add-on's existing ``None``/``False`` failure
+    contract. ``last_error`` exposes the classified failure for adapters and
+    diagnostics without forcing a breaking runtime migration.
+    """
+
     def __init__(
         self,
         email: str,
         password: str,
         host_name: str = "my.charge.space",
-        base_url: str = "https://my.charge.space"
+        base_url: str = "https://my.charge.space",
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        read_retries: int = DEFAULT_READ_RETRIES,
     ):
-        """Initialize the API client."""
         self.email = (email or "").strip()
         self.password = (password or "").strip()
         self.base_url = self._normalize_base_url(base_url)
         self.host_name = self._normalize_host_name(host_name, self.base_url)
+        self.timeout_seconds = timeout_seconds
+        self.read_retries = max(0, read_retries)
         self._auth_token: Optional[str] = None
         self._user_id: Optional[str] = None
         self._token_expiration: datetime = datetime.min.replace(tzinfo=timezone.utc)
         self._session = requests.Session()
         self._session.headers.update({
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/json",
         })
+        self._last_error: Optional[ChargerApiError] = None
+
+    @property
+    def last_error(self) -> Optional[ChargerApiError]:
+        """Return the last classified provider failure, if any."""
+        return self._last_error
 
     def _browser_headers(
         self,
@@ -65,133 +138,198 @@ class ChargerApi:
         if normalized:
             return normalized
         parsed = urlparse(base_url)
-        if parsed.hostname:
-            return parsed.hostname
-        return "my.charge.space"
+        return parsed.hostname or "my.charge.space"
 
     def _auth_headers(self) -> Dict[str, str]:
         if not self._ensure_authenticated():
-            raise RuntimeError("Authentication required")
+            raise AuthenticationError("Authentication required")
         return {"Authorization": f"Bearer {self._auth_token}"}
-    
+
     def authenticate(self) -> bool:
-        """Authenticate with the Charge Amps API and retrieve an access token."""
+        """Authenticate and cache the provider JWT until it needs refresh."""
         try:
             self._auth_token = None
             self._user_id = None
-            login_request = {
-                "email": self.email,
-                "password": self.password,
-                "hostName": self.host_name
-            }
-            login_headers = self._browser_headers("/userapp/login")
-            
+            self._token_expiration = datetime.min.replace(tzinfo=timezone.utc)
             response = self._session.post(
                 f"{self.base_url}/api/auth/login",
-                headers=login_headers,
-                json=login_request,
-                timeout=30
+                headers=self._browser_headers("/userapp/login"),
+                json={
+                    "email": self.email,
+                    "password": self.password,
+                    "hostName": self.host_name,
+                },
+                timeout=self.timeout_seconds,
             )
-            
             if not response.ok:
-                logger.error(
-                    "Authentication failed with status code: %s - %s",
+                raise AuthenticationError(
+                    f"Authentication failed with status {response.status_code}",
                     response.status_code,
-                    response.text[:200],
                 )
-                return False
-            
-            login_response = response.json()
-            
-            if "token" not in login_response or not login_response["token"]:
-                logger.error("Authentication response did not contain a token")
-                return False
-            
-            self._auth_token = login_response["token"]
-            if "user" in login_response and login_response["user"]:
-                self._user_id = login_response["user"].get("id")
-            
-            # Parse JWT to get expiration
-            token_parts = self._auth_token.split('.')
-            if len(token_parts) == 3:
-                try:
-                    payload = self._decode_jwt_payload(token_parts[1])
-                    if payload and "exp" in payload:
-                        self._token_expiration = datetime.fromtimestamp(
-                            payload["exp"], 
-                            tz=timezone.utc
-                        )
-                        logger.info(
-                            f"Authentication successful. Token expires at {self._token_expiration}. "
-                            f"User ID: {self._user_id}"
-                        )
-                except Exception as ex:
-                    logger.warning(f"Could not parse token expiration: {ex}")
-            
+
+            try:
+                login_response = response.json()
+            except (TypeError, ValueError) as exc:
+                raise MalformedResponseError("Authentication response was not JSON") from exc
+
+            token = login_response.get("token") if isinstance(login_response, dict) else None
+            if not token:
+                raise AuthenticationError("Authentication response did not contain a token")
+
+            self._auth_token = token
+            user = login_response.get("user") or {}
+            self._user_id = user.get("id")
+            self._token_expiration = self._parse_token_expiration(token)
+            logger.info(
+                "Authentication successful; token expiry=%s user_id=%s",
+                self._token_expiration.isoformat(),
+                self._user_id,
+            )
+            self._last_error = None
             return True
-            
-        except Exception as ex:
-            logger.error(f"Exception during authentication: {ex}", exc_info=True)
-            return False
-    
-    def _ensure_authenticated(self) -> bool:
-        """Ensure we have a valid authentication token, refreshing if necessary."""
-        # Check if token is still valid (with 5 minute buffer)
-        if self._auth_token:
-            # Add 5 minute buffer to expiration time
-            buffer_time = self._token_expiration - timedelta(minutes=5)
-            if datetime.now(timezone.utc) < buffer_time:
-                return True
-        
-        logger.info("Token expired or missing, re-authenticating...")
-        return self.authenticate()
-    
-    def get_charge_points(self) -> Optional[List[ChargePoint]]:
-        """Get the list of charge points for the authenticated user."""
+        except requests.Timeout as exc:
+            error = ProviderTimeoutError("Authentication request timed out")
+        except requests.RequestException as exc:
+            error = AuthenticationError(f"Authentication request failed: {exc}")
+        except ChargerApiError as exc:
+            error = exc
+        except Exception as exc:
+            error = AuthenticationError(f"Authentication failed: {exc}")
+
+        self._last_error = error
+        self._auth_token = None
+        logger.error("%s: %s", error.classification, error)
+        return False
+
+    @staticmethod
+    def _parse_token_expiration(token: str) -> datetime:
+        token_parts = token.split(".")
+        if len(token_parts) != 3:
+            logger.warning("JWT has no parseable expiry; retaining token until provider rejection")
+            return datetime.max.replace(tzinfo=timezone.utc)
+        payload = ChargerApi._decode_jwt_payload(token_parts[1])
         try:
-            request_headers = self._browser_headers(
-                "/userapp/dashboard",
-                include_auth=True,
-            )
-            response = self._session.post(
-                f"{self.base_url}/api/users/chargepoints/owned?expand=ocppConfig,topChargingLimitation",
-                headers=request_headers,
+            return datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            logger.warning("JWT has no parseable expiry; retaining token until provider rejection")
+            return datetime.max.replace(tzinfo=timezone.utc)
+
+    def _ensure_authenticated(self) -> bool:
+        """Ensure cached token is usable without needless re-authentication."""
+        if self._auth_token:
+            refresh_at = self._token_expiration - TOKEN_REFRESH_BUFFER
+            if datetime.now(timezone.utc) < refresh_at:
+                return True
+        logger.info("Token expired or missing, re-authenticating")
+        return self.authenticate()
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: Dict[str, str],
+        retryable_read: bool = False,
+        **kwargs: Any,
+    ) -> requests.Response:
+        attempts = 1 + (self.read_retries if retryable_read else 0)
+        for attempt in range(attempts):
+            try:
+                request = getattr(self._session, "request", None)
+                if request:
+                    response = request(
+                        method,
+                        f"{self.base_url}{path}",
+                        headers=headers,
+                        timeout=self.timeout_seconds,
+                        **kwargs,
+                    )
+                else:
+                    response = getattr(self._session, method.lower())(
+                        f"{self.base_url}{path}",
+                        headers=headers,
+                        timeout=self.timeout_seconds,
+                        **kwargs,
+                    )
+                if response.ok:
+                    self._last_error = None
+                    return response
+                error = self._error_for_response(response)
+                if isinstance(error, AuthenticationError):
+                    self._auth_token = None
+                if isinstance(error, TransientProviderError) and attempt + 1 < attempts:
+                    time.sleep(0.25 * (2**attempt))
+                    continue
+                raise error
+            except requests.Timeout as exc:
+                error = ProviderTimeoutError(f"{method} {path} timed out")
+                if attempt + 1 < attempts:
+                    time.sleep(0.25 * (2**attempt))
+                    continue
+                raise error from exc
+            except requests.ConnectionError as exc:
+                error = TransientProviderError(f"{method} {path} connection failed")
+                if attempt + 1 < attempts:
+                    time.sleep(0.25 * (2**attempt))
+                    continue
+                raise error from exc
+            except requests.RequestException as exc:
+                raise PermanentProviderError(f"{method} {path} request failed: {exc}") from exc
+        raise TransientProviderError(f"{method} {path} failed after retries")
+
+    @staticmethod
+    def _error_for_response(response: requests.Response) -> ChargerApiError:
+        status = response.status_code
+        if status in (401, 403):
+            return AuthenticationError(f"Provider authorization failed ({status})", status)
+        if status in (408, 429) or status >= 500:
+            return TransientProviderError(f"Provider returned transient status {status}", status)
+        return PermanentProviderError(f"Provider returned status {status}", status)
+
+    @staticmethod
+    def _json_response(response: requests.Response) -> Any:
+        try:
+            return response.json()
+        except (TypeError, ValueError) as exc:
+            raise MalformedResponseError("Provider response was not valid JSON") from exc
+
+    def get_charge_points(self) -> Optional[List[ChargePoint]]:
+        """Get owned charge points using a bounded retry for transient reads."""
+        try:
+            response = self._request(
+                "POST",
+                "/api/users/chargepoints/owned?expand=ocppConfig,topChargingLimitation",
+                headers=self._browser_headers("/userapp/dashboard", include_auth=True),
                 json=[],
-                timeout=30
+                retryable_read=True,
             )
-            
-            if not response.ok:
-                logger.error(f"Failed to get charge points: {response.status_code}")
-                return None
-            
-            charge_points_data = response.json()
-            charge_points = [ChargePoint.from_dict(cp) for cp in charge_points_data]
-            
-            logger.info(f"Successfully retrieved {len(charge_points)} charge point(s)")
+            payload = self._json_response(response)
+            if not isinstance(payload, list):
+                raise MalformedResponseError("Charge point response was not a list")
+            charge_points = [ChargePoint.from_dict(item) for item in payload]
+            logger.info("Successfully retrieved %d charge point(s)", len(charge_points))
             return charge_points
-            
-        except Exception as ex:
-            logger.error(f"Exception while getting charge points: {ex}", exc_info=True)
+        except ChargerApiError as exc:
+            self._last_error = exc
+            logger.error("Failed to get charge points (%s): %s", exc.classification, exc)
             return None
 
     def get_schedules(self, charge_point_id: str) -> Optional[List[Dict[str, Any]]]:
-        """Fetch smart charging schedules for a charge point."""
+        """Fetch smart charging schedules with a bounded retry for reads."""
         try:
-            headers = self._browser_headers(
-                "/userapp/dashboard",
-                include_auth=True,
+            response = self._request(
+                "GET",
+                f"/api/smartChargingSchedules/chargepoint/{charge_point_id}",
+                headers=self._browser_headers("/userapp/dashboard", include_auth=True),
+                retryable_read=True,
             )
-            response = self._session.get(
-                f"{self.base_url}/api/smartChargingSchedules/chargepoint/{charge_point_id}",
-                headers=headers,
-                timeout=30,
-            )
-            if response.ok:
-                return response.json()
-            logger.error("Failed to fetch schedules (%s): %s", response.status_code, response.text[:200])
-            return None
-        except Exception as exc:
-            logger.error("Exception fetching schedules: %s", exc, exc_info=True)
+            payload = self._json_response(response)
+            if not isinstance(payload, list):
+                raise MalformedResponseError("Schedule response was not a list")
+            return payload
+        except ChargerApiError as exc:
+            self._last_error = exc
+            logger.error("Failed to fetch schedules (%s): %s", exc.classification, exc)
             return None
 
     def upsert_schedule(
@@ -204,27 +342,15 @@ class ChargerApi:
         timezone_name: str,
         schedule_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Create or update a smart charging schedule with multiple periods.
-        
-        Args:
-            charge_point_id: The charger ID
-            connector_id: The connector number (usually 1)
-            start_of_schedule: ISO timestamp for the start of the week (Sunday midnight UTC)
-            schedule_periods: List of dicts with 'from' and 'to' as seconds from week start
-            max_current: Maximum current in amps for all periods
-            timezone_name: Timezone name (e.g., "Europe/Amsterdam")
-            schedule_id: Optional existing schedule ID for updates
-        """
-        # Add maxCurrent to each period
+        """Create or update a smart charging schedule without blind retries."""
         periods_with_current = [
             {
-                "from": p["from"],
-                "to": p["to"],
+                "from": period["from"],
+                "to": period["to"],
                 "maxCurrent": float(max_current),
             }
-            for p in schedule_periods
+            for period in schedule_periods
         ]
-        
         payload = {
             "scheduleId": schedule_id,
             "chargePointId": charge_point_id,
@@ -238,73 +364,47 @@ class ChargerApi:
             "timeZone": timezone_name,
             "startOfSchedule": start_of_schedule,
         }
-
         try:
-            headers = self._browser_headers(
-                "/userapp/dashboard",
-                include_auth=True,
-            )
-            response = self._session.put(
-                f"{self.base_url}/api/smartChargingSchedules",
-                headers=headers,
+            response = self._request(
+                "PUT",
+                "/api/smartChargingSchedules",
+                headers=self._browser_headers("/userapp/dashboard", include_auth=True),
                 json=payload,
-                timeout=30,
             )
-            if response.ok:
-                logger.info("Smart charging schedule upserted: %d periods", len(periods_with_current))
-                return response.json()
-            logger.error(
-                "Failed to upsert schedule (%s): %s",
-                response.status_code,
-                response.text[:200],
-            )
-            return None
-        except Exception as exc:
-            logger.error("Exception writing schedule: %s", exc, exc_info=True)
+            result = self._json_response(response)
+            if not isinstance(result, dict):
+                raise MalformedResponseError("Schedule upsert response was not an object")
+            logger.info("Smart charging schedule upserted: %d periods", len(periods_with_current))
+            return result
+        except ChargerApiError as exc:
+            self._last_error = exc
+            logger.error("Failed to upsert schedule (%s): %s", exc.classification, exc)
             return None
 
     def delete_schedule(self, charge_point_id: str, connector_id: int) -> bool:
-        """Delete the automation schedule for the connector."""
+        """Delete the automation schedule without blind retries."""
         try:
-            headers = self._browser_headers(
-                "/userapp/dashboard",
-                include_auth=True,
+            self._request(
+                "DELETE",
+                f"/api/smartChargingSchedules/{charge_point_id}/{connector_id}",
+                headers=self._browser_headers("/userapp/dashboard", include_auth=True),
             )
-            response = self._session.delete(
-                f"{self.base_url}/api/smartChargingSchedules/{charge_point_id}/{connector_id}",
-                headers=headers,
-                timeout=30,
-            )
-            if response.ok:
-                logger.info("Deleted smart charging schedule for connector %s", connector_id)
-                return True
-            logger.error(
-                "Failed to delete schedule (%s): %s",
-                response.status_code,
-                response.text[:200],
-            )
+            logger.info("Deleted smart charging schedule for connector %s", connector_id)
+            return True
+        except ChargerApiError as exc:
+            self._last_error = exc
+            logger.error("Failed to delete schedule (%s): %s", exc.classification, exc)
             return False
-        except Exception as exc:
-            logger.error("Exception deleting schedule: %s", exc, exc_info=True)
-            return False
-    
+
     @staticmethod
     def _decode_jwt_payload(base64_payload: str) -> Optional[dict]:
         """Decode a JWT payload (base64url encoded)."""
         try:
-            # Convert base64url to base64
-            base64_str = base64_payload.replace('-', '+').replace('_', '/')
-            
-            # Add padding if necessary
+            base64_str = base64_payload.replace("-", "+").replace("_", "/")
             padding = len(base64_str) % 4
             if padding:
-                base64_str += '=' * (4 - padding)
-            
-            json_bytes = base64.b64decode(base64_str)
-            json_str = json_bytes.decode('utf-8')
-            
-            return json.loads(json_str)
-        except Exception as ex:
-            logger.warning(f"Failed to decode JWT payload: {ex}")
+                base64_str += "=" * (4 - padding)
+            return json.loads(base64.b64decode(base64_str).decode("utf-8"))
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to decode JWT payload: %s", exc)
             return None
-
