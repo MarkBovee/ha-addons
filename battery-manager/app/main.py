@@ -195,9 +195,12 @@ class RuntimeState:
     last_monitor_status: Optional[str] = None
     sell_buffer_required_soc: Optional[float] = None
     sell_buffer_discharge_hours: float = 0.0
+    sell_buffer_valid_until: Optional[datetime] = None
+    schedule_pause_active: bool = False
     passive_gap_active: bool = False
     reduced_override_active: bool = False
     max_soc_stabilizer_until: Optional[datetime] = None
+    max_soc_stabilizer_restore_pending: bool = False
 
 
 def _load_config() -> Dict[str, Any]:
@@ -744,9 +747,9 @@ def _should_regenerate_live_schedule(
 
     min_soc = float(config["soc"].get("min_soc", 5))
     conservative_soc = float(config["soc"].get("conservative_soc", min_soc))
-    # Use is_conservative=False: adaptive discharge is permitted even below
-    # conservative_soc (it targets grid≈0W, not full scheduled power).
-    # Only hard min_soc should block it.
+    # Use is_conservative=False so the adaptive fallback can be regenerated
+    # below conservative_soc. The dynamic sell-buffer floor is enforced later
+    # by the monitor loop once the regenerated schedule is available.
     if can_discharge(soc, min_soc, conservative_soc, False):
         return "adaptive"
 
@@ -1461,8 +1464,53 @@ def _get_active_period_power(
     return None
 
 
+# Suspend published discharge while the generated plan remains in runtime state.
+def _build_pause_schedule(
+    schedule: Dict[str, Any],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Suspend discharge in the published plan while retaining charge windows."""
+    return {
+        "charge": schedule.get("charge", []),
+        "discharge": [],
+    }
 
 
+# Downgrade restored sell windows before releasing a low-SOC pause.
+def _build_pause_recovery_schedule(
+    schedule: Dict[str, Any],
+    soc: Optional[float],
+    conservative_soc: float,
+    discharge_recovery_after: Optional[datetime],
+) -> Dict[str, List[Dict[str, Any]]]:
+    if soc is None or soc > conservative_soc:
+        return schedule
+
+    discharge: List[Dict[str, Any]] = []
+    for period in schedule.get("discharge", []):
+        bounds = _parse_schedule_period_bounds(period)
+        before_recovery = (
+            discharge_recovery_after is None
+            or bounds is None
+            or bounds[0] < discharge_recovery_after
+        )
+        if period.get("window_type", "discharge") == "discharge" and before_recovery:
+            discharge.append({**period, "power": 0, "window_type": "adaptive"})
+        else:
+            discharge.append(period)
+    return {"charge": schedule.get("charge", []), "discharge": discharge}
+
+
+# Return the pre-charge SOC reserve only while its schedule window is pending.
+def _get_active_sell_buffer_soc(state: RuntimeState, now: datetime) -> Optional[float]:
+    """Return the buffer target only until its associated main charge starts."""
+    if state.sell_buffer_valid_until is not None and now >= state.sell_buffer_valid_until:
+        return None
+    return state.sell_buffer_required_soc
+
+
+
+
+# Build and publish the full rolling plan, retaining an active safety pause.
 def generate_schedule(
     config: Dict[str, Any],
     ha_api: HomeAssistantApi,
@@ -1485,6 +1533,8 @@ def generate_schedule(
         logger.warning("⚠️ Import price curve unavailable; skipping schedule generation")
         if state:
             state.warned_missing_price = True
+            if state.schedule.get("charge") or state.schedule.get("discharge"):
+                return state.schedule
         return {"charge": [], "discharge": []}
 
     if not export_curve:
@@ -1741,6 +1791,7 @@ def generate_schedule(
     if state:
         state.sell_buffer_required_soc = buffer_required_soc
         state.sell_buffer_discharge_hours = buffer_discharge_hours
+        state.sell_buffer_valid_until = main_charge_start
 
     precharge_until: Optional[datetime] = None
     precharge_price_ceiling: Optional[float] = adaptive_price_threshold
@@ -1786,14 +1837,24 @@ def generate_schedule(
                 deficit_soc = buffer_required_soc - soc
                 required_minutes = int(math.ceil((deficit_soc / soc_per_hour_charge) * 60.0))
                 if required_minutes > 0:
-                    precharge_until = interval_start + timedelta(minutes=required_minutes)
-                    logger.info(
-                        "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min until %s",
-                        soc,
-                        buffer_required_soc,
-                        required_minutes,
-                        precharge_until.astimezone().strftime("%H:%M"),
+                    requested_precharge_until = interval_start + timedelta(minutes=required_minutes)
+                    if main_charge_start is not None:
+                        precharge_until = min(requested_precharge_until, main_charge_start)
+                    else:
+                        precharge_until = requested_precharge_until
+                    actual_minutes = int(
+                        (precharge_until - interval_start).total_seconds() / 60
                     )
+                    if actual_minutes > 0:
+                        logger.info(
+                            "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min until %s",
+                            soc,
+                            buffer_required_soc,
+                            actual_minutes,
+                            precharge_until.astimezone().strftime("%H:%M"),
+                        )
+                    else:
+                        precharge_until = None
 
     if buffer_required_soc is not None and main_charge_start is not None:
         logger.info(
@@ -1823,7 +1884,44 @@ def generate_schedule(
             })
 
     charge_slot_records: List[Dict[str, Any]] = []
+    available_charge_slots = max(0, max_charge_periods - len(charge_schedule))
+    coalesce_precharge_with_main_charge = (
+        max_charge_periods == 1
+        and len(charge_schedule) == 1
+        and charge_schedule[0].get("window_type") == "precharge"
+    )
+    precharge_bounds = (
+        _parse_schedule_period_bounds(charge_schedule[0])
+        if coalesce_precharge_with_main_charge
+        else None
+    )
+    precharge_end = precharge_bounds[1] if precharge_bounds is not None else None
+    if coalesce_precharge_with_main_charge:
+        # Keep the following main-charge record so it can be coalesced with precharge.
+        available_charge_slots = 1
     neg_price_enabled = config.get("negative_price_charging", {}).get("enabled", True)
+    if coalesce_precharge_with_main_charge and not skip_charge and precharge_end is not None:
+        main_charge_window = next(
+            (
+                window
+                for window in upcoming_windows["charge"]
+                if window.get("start") == precharge_end
+            ),
+            None,
+        )
+        if main_charge_window is not None:
+            main_charge_price = float(main_charge_window.get("avg_price", 0.0))
+            is_negative_price = neg_price_enabled and main_charge_price < 0
+            main_charge_end = main_charge_window["end"]
+            charge_slot_records.append({
+                "start": precharge_end,
+                "end": main_charge_end,
+                "base_power": int(config["power"]["max_charge_power"]),
+                "duration": int((main_charge_end - precharge_end).total_seconds() / 60),
+                "window_type": "negative_price_charge" if is_negative_price else "charge",
+                "price": round(main_charge_price, 4),
+                "is_negative_price": is_negative_price,
+            })
     if not skip_charge:
         max_charge_power_w = config["power"]["max_charge_power"]
 
@@ -1848,13 +1946,15 @@ def generate_schedule(
             for window in upcoming_windows["charge"]:
                 if float(window.get("avg_price", 0.0)) >= 0:
                     continue  # regular price window — handled in pass 2
-                if len(charge_slot_records) >= max_charge_periods:
+                if len(charge_slot_records) >= available_charge_slots:
                     break
                 for slot in _expand_charge_window_slots(window):
-                    if len(charge_slot_records) >= max_charge_periods:
+                    if len(charge_slot_records) >= available_charge_slots:
                         break
                     start_dt = slot["start"]
                     end_dt = slot["end"]
+                    if coalesce_precharge_with_main_charge and start_dt != precharge_end:
+                        continue
                     if end_dt <= now:
                         continue
                     effective_start = max(start_dt, interval_start)
@@ -1903,10 +2003,12 @@ def generate_schedule(
         )
         max_window_rank = max(len(regular_charge_windows), 1)
         for window_rank, window in enumerate(regular_charge_windows, start=1):
-            if len(charge_slot_records) >= max_charge_periods:
+            if len(charge_slot_records) >= available_charge_slots:
                 break
             start_dt = window["start"]
             end_dt = window["end"]
+            if coalesce_precharge_with_main_charge and start_dt != precharge_end:
+                continue
             if end_dt <= now:
                 continue
             effective_start = max(start_dt, interval_start)
@@ -2054,12 +2156,65 @@ def generate_schedule(
             "forecast_solar_kwh": forecast_solar_kwh,
         })
 
+    if len(charge_schedule) > max_charge_periods:
+        precharge = next(
+            (period for period in charge_schedule if period.get("window_type") == "precharge"),
+            None,
+        )
+        if max_charge_periods == 1 and precharge is not None:
+            precharge_bounds = _parse_schedule_period_bounds(precharge)
+            adjacent_charge = next(
+                (
+                    period
+                    for period in charge_schedule
+                    if period is not precharge
+                    and _parse_schedule_period_bounds(period) is not None
+                    and precharge_bounds is not None
+                    and _parse_schedule_period_bounds(period)[0] == precharge_bounds[1]
+                ),
+                None,
+            )
+            if adjacent_charge is not None:
+                precharge["duration"] += int(adjacent_charge.get("duration", 0))
+                precharge["power"] = max(
+                    int(precharge.get("power", 0)),
+                    int(adjacent_charge.get("power", 0)),
+                )
+                charge_schedule = [precharge]
+            else:
+                charge_schedule = [precharge]
+        else:
+            charge_schedule = charge_schedule[:max_charge_periods]
+
     now_minute = now.replace(second=0, microsecond=0)
     discharge_not_before = max(interval_start, now_minute)
+    adaptive_fallback_not_before = interval_start
     if precharge_until is not None:
         discharge_not_before = max(discharge_not_before, precharge_until)
+        adaptive_fallback_not_before = max(adaptive_fallback_not_before, precharge_until)
+    elif (
+        soc is not None
+        and buffer_required_soc is not None
+        and soc <= buffer_required_soc
+        and main_charge_start is not None
+    ):
+        # If precharging is not safe at the current price, do not drain the
+        # battery through a sell or adaptive window before the main charge.
+        # The monitor loop applies the same floor as a second line of defence.
+        discharge_not_before = max(discharge_not_before, main_charge_start)
+        adaptive_fallback_not_before = max(adaptive_fallback_not_before, main_charge_start)
+        logger.info(
+            "🛑 Holding sell/adaptive discharge until main charge at %s: SOC %.1f%% <= buffer target %.1f%%",
+            main_charge_start.astimezone().strftime("%H:%M"),
+            soc,
+            buffer_required_soc,
+        )
     if sell_wait_decision:
         discharge_not_before = max(discharge_not_before, sell_wait_decision["wait_until"])
+        adaptive_fallback_not_before = max(
+            adaptive_fallback_not_before,
+            sell_wait_decision["wait_until"],
+        )
 
     # Combine discharge + adaptive windows into discharge periods.
     # Important: profitable discharge windows are prioritized first so adaptive
@@ -2149,12 +2304,13 @@ def generate_schedule(
         and not has_active_discharge_period
         and len(discharge_schedule) < max_discharge_periods
     ):
-        fallback_duration = int((interval_end - interval_start).total_seconds() / 60)
+        fallback_start = max(interval_start, adaptive_fallback_not_before)
+        fallback_duration = int((interval_end - fallback_start).total_seconds() / 60)
         if fallback_duration > 0:
             discharge_schedule.insert(
                 0,
                 {
-                    "start": interval_start.isoformat(),
+                    "start": fallback_start.isoformat(),
                     "power": min_discharge_power,
                     "duration": fallback_duration,
                     "window_type": "adaptive",
@@ -2183,7 +2339,18 @@ def generate_schedule(
     if active_charge_power is not None:
         charge_power = active_charge_power
 
-    published = _publish_schedule(mqtt_client, schedule, is_dry_run, state=state, force=True)
+    schedule_to_publish = (
+        _build_pause_schedule(schedule)
+        if state is not None and state.schedule_pause_active
+        else schedule
+    )
+    published = _publish_schedule(
+        mqtt_client,
+        schedule_to_publish,
+        is_dry_run,
+        state=state,
+        force=True,
+    )
     if not published and not is_dry_run:
         logger.warning("⚠️ Schedule was NOT delivered to battery-api — will retry next cycle")
     api_payload = _format_schedule_for_api(schedule)
@@ -2376,6 +2543,7 @@ def generate_schedule(
     return schedule
 
 
+# Apply live safety holds and runtime power adjustments to the active plan.
 def monitor_and_adjust_active_period(
     config: Dict[str, Any],
     ha_api: HomeAssistantApi,
@@ -2596,31 +2764,10 @@ def monitor_and_adjust_active_period(
                   {"price_range": runtime_price_range, "import_price": import_price, "export_price": export_price},
                   dry_run=is_dry_run)
 
-    regen_cooldown = config["timing"].get("schedule_regen_cooldown_seconds", 60)
-    regen_price_range = _should_regenerate_live_schedule(
-        runtime_price_range,
-        active_charge,
-        has_active_discharge_window,
-        import_curve,
-        soc,
-        config,
-    )
-    if regen_price_range is not None:
-        if (
-            not state.last_schedule_publish
-            or (now - state.last_schedule_publish).total_seconds() >= regen_cooldown
-        ):
-            logger.info(
-                "🔄 Live %s price band has no active window - regenerating rolling schedule",
-                regen_price_range,
-            )
-            state.schedule = generate_schedule(config, ha_api, mqtt_client, state)
-            state.schedule_generated_at = now
-            state.last_schedule_publish = now
-            return
-
     should_pause = False
+    safety_pause_active = False
     reduce_discharge = False
+    ev_pause = False
     pause_reasons: List[str] = []
     reduce_reasons: List[str] = []
 
@@ -2628,18 +2775,21 @@ def monitor_and_adjust_active_period(
         ev_threshold = config["ev_charger"]["charging_threshold"]
         if should_pause_discharge(ev_power, ev_threshold):
             should_pause = True
+            safety_pause_active = True
+            ev_pause = True
             pause_reasons.append(f"EV Charging >{ev_threshold}W")
 
     if soc is None:
-        if active_discharge:
-            should_pause = True
-            pause_reasons.append("SOC unavailable/stale")
+        should_pause = True
+        safety_pause_active = True
+        pause_reasons.append("SOC unavailable/stale")
     else:
         min_soc = config["soc"]["min_soc"]
-        dynamic_buffer_soc = state.sell_buffer_required_soc
+        dynamic_buffer_soc = _get_active_sell_buffer_soc(state, now)
         low_soc_discharge_mode = active_discharge and soc <= conservative_soc
-        # Sell-buffer floor protects planned precharge strategy in non-sell modes only.
-        use_sell_buffer_protection = runtime_price_range != "discharge" and not low_soc_discharge_mode
+        # The dynamic sell buffer is a real reserve until the next main charge.
+        # Adaptive grid-following and profitable selling must not consume it.
+        use_sell_buffer_protection = dynamic_buffer_soc is not None
         effective_min_soc = (
             max(min_soc, dynamic_buffer_soc)
             if dynamic_buffer_soc is not None and use_sell_buffer_protection
@@ -2650,6 +2800,8 @@ def monitor_and_adjust_active_period(
         is_conservative = runtime_price_range != "discharge" and not low_soc_discharge_mode
         if not can_discharge(soc, effective_min_soc, conservative_soc, is_conservative):
             should_pause = True
+            if soc <= effective_min_soc:
+                safety_pause_active = True
             if use_sell_buffer_protection and dynamic_buffer_soc is not None and effective_min_soc > min_soc:
                 pause_reasons.append(
                     f"SOC sell-buffer protection ({soc:.1f}% < {effective_min_soc:.1f}%)"
@@ -2666,13 +2818,82 @@ def monitor_and_adjust_active_period(
         # Allow adaptive 0W placeholder to start grid-following discharge.
         # is_conservative=False: adaptive targets grid≈0W, not full scheduled power,
         # so conservative_soc should not block it (only hard min_soc should).
-        # Sell-buffer protection (effective_min_soc) still applies.
+        # Sell-buffer protection (effective_min_soc) also applies to the
+        # adaptive placeholder, so a placeholder cannot silently consume the
+        # reserve while waiting for the next profitable window.
         adaptive_placeholder_can_discharge = (
             active_adaptive_placeholder
-            # Adaptive discharge follows grid demand and must not consume the
-            # sell-buffer reserve; only the hard minimum SOC is protected.
-            and can_discharge(soc, min_soc, conservative_soc, False)
+            and not ev_pause
+            # Adaptive discharge follows grid demand but must not consume the
+            # sell-buffer reserve; the hard minimum remains the final fallback.
+            and can_discharge(soc, effective_min_soc, conservative_soc, False)
         )
+
+    if state.schedule_pause_active and not safety_pause_active:
+        logger.info("🟢 Schedule pause cleared - restoring generated schedule")
+        recovery_schedule = _build_pause_recovery_schedule(
+            state.schedule,
+            soc,
+            conservative_soc,
+            state.sell_buffer_valid_until,
+        )
+        restored = _publish_schedule(
+            mqtt_client,
+            recovery_schedule,
+            is_dry_run,
+            state=state,
+            force=True,
+        )
+        if restored:
+            state.schedule_pause_active = False
+            state.last_monitor_status = None
+        return
+
+    regen_cooldown = config["timing"].get("schedule_regen_cooldown_seconds", 60)
+    regen_price_range = _should_regenerate_live_schedule(
+        runtime_price_range,
+        active_charge,
+        has_active_discharge_window,
+        import_curve,
+        soc,
+        config,
+    )
+    if regen_price_range is not None and not safety_pause_active:
+        if (
+            not state.last_schedule_publish
+            or (now - state.last_schedule_publish).total_seconds() >= regen_cooldown
+        ):
+            logger.info(
+                "🔄 Live %s price band has no active window - regenerating rolling schedule",
+                regen_price_range,
+            )
+            state.schedule = generate_schedule(config, ha_api, mqtt_client, state)
+            state.schedule_generated_at = now
+            state.last_schedule_publish = now
+            return
+
+    if state.max_soc_stabilizer_restore_pending:
+        if not safety_pause_active:
+            recovery_schedule = _build_pause_recovery_schedule(
+                state.schedule,
+                soc,
+                conservative_soc,
+                state.sell_buffer_valid_until,
+            )
+            restored = _publish_schedule(
+                mqtt_client,
+                recovery_schedule,
+                is_dry_run,
+                state=state,
+                force=True,
+            )
+            if not restored:
+                return
+            state.max_soc_stabilizer_restore_pending = False
+            state.max_soc_stabilizer_until = None
+            state.last_effective_discharge_power = None
+            state.last_monitor_status = None
+            return
 
     stabilizer_active = (
         state.max_soc_stabilizer_until is not None
@@ -2681,9 +2902,25 @@ def monitor_and_adjust_active_period(
     stabilizer_floor = max_soc - MAX_SOC_STABILIZER_HYSTERESIS_PCT
 
     if stabilizer_active:
-        if should_pause or reduce_discharge or (soc is not None and soc < stabilizer_floor):
+        if safety_pause_active or reduce_discharge or (soc is not None and soc < stabilizer_floor):
             logger.info("🟢 Max-SOC stabilizer cleared - restoring generated schedule")
-            _publish_schedule(mqtt_client, state.schedule, is_dry_run, state=state, force=True)
+            if not safety_pause_active:
+                recovery_schedule = _build_pause_recovery_schedule(
+                    state.schedule,
+                    soc,
+                    conservative_soc,
+                    state.sell_buffer_valid_until,
+                )
+                restored = _publish_schedule(
+                    mqtt_client,
+                    recovery_schedule,
+                    is_dry_run,
+                    state=state,
+                    force=True,
+                )
+                if not restored:
+                    state.max_soc_stabilizer_restore_pending = True
+                    return
             state.max_soc_stabilizer_until = None
             state.last_effective_discharge_power = None
             _update_effective_discharge_power(
@@ -2796,12 +3033,33 @@ def monitor_and_adjust_active_period(
         )
         return
 
+    if passive_active and should_pause:
+        logger.info("☁️ Passive Solar suspended during active SOC/EV protection")
+        passive_active = False
+        if state.passive_gap_active:
+            pause_schedule = _build_pause_schedule(state.schedule)
+            paused = _publish_schedule(
+                mqtt_client,
+                pause_schedule,
+                is_dry_run,
+                state=state,
+                force=True,
+            )
+            if paused:
+                state.passive_gap_active = False
+                state.schedule_pause_active = True
+
     if passive_active:
         if not state.passive_gap_active:
             logger.info("☀️ Passive Solar Mode is ACTIVE (0W Charge Gap)")
             gap_schedule = gap_scheduler.generate_passive_gap_schedule()
-            _publish_schedule(mqtt_client, gap_schedule, is_dry_run, state=state, force=True)
-            state.passive_gap_active = True
+            state.passive_gap_active = _publish_schedule(
+                mqtt_client,
+                gap_schedule,
+                is_dry_run,
+                state=state,
+                force=True,
+            )
         state.last_effective_discharge_power = 0
         _update_mode_entity(
             mqtt_client,
@@ -2831,9 +3089,39 @@ def monitor_and_adjust_active_period(
 
     if state.passive_gap_active:
         logger.info("☁️ Passive Solar Mode cleared - restoring generated schedule")
-        _publish_schedule(mqtt_client, state.schedule, is_dry_run, state=state, force=True)
-        state.passive_gap_active = False
-        state.last_monitor_status = None
+        if should_pause:
+            pause_schedule = _build_pause_schedule(state.schedule)
+            paused = _publish_schedule(
+                mqtt_client,
+                pause_schedule,
+                is_dry_run,
+                state=state,
+                force=True,
+            )
+            if paused:
+                state.schedule_pause_active = True
+                state.passive_gap_active = False
+        else:
+            restored = _publish_schedule(
+                mqtt_client,
+                state.schedule,
+                is_dry_run,
+                state=state,
+                force=True,
+            )
+            if restored:
+                state.passive_gap_active = False
+                state.last_monitor_status = None
+
+    if safety_pause_active and not state.schedule_pause_active:
+        paused = _publish_schedule(
+            mqtt_client,
+            _build_pause_schedule(state.schedule),
+            is_dry_run,
+            state=state,
+        )
+        if paused:
+            state.schedule_pause_active = True
 
     status_parts = []
     if active_charge:
@@ -2848,7 +3136,9 @@ def monitor_and_adjust_active_period(
         status_parts.append(f"{icon} {temperature}°C")
 
     # Build a status key to detect state changes and suppress repeat log lines
-    if active_discharge and should_pause:
+    if (active_discharge and should_pause) or (
+        active_adaptive_placeholder and safety_pause_active
+    ):
         monitor_status = f"paused:{','.join(pause_reasons)}"
     elif active_discharge and reduce_discharge:
         monitor_status = f"reduced:{','.join(reduce_reasons)}"
@@ -2873,7 +3163,9 @@ def monitor_and_adjust_active_period(
             level=logging.INFO,
         )
 
-    if active_discharge and should_pause:
+    if (active_discharge and should_pause) or (
+        active_adaptive_placeholder and safety_pause_active
+    ):
         if status_changed:
             logger.info("%s | 🛑 Paused | Reasons: %s", " | ".join(status_parts), ", ".join(pause_reasons))
     elif active_discharge and reduce_discharge:
@@ -2889,7 +3181,9 @@ def monitor_and_adjust_active_period(
     active_window_type = active_discharge_period.get("window_type", "discharge") if active_discharge_period else None
     if active_charge:
         effective_mode = "load"
-    elif active_discharge and should_pause:
+    elif (active_discharge and should_pause) or (
+        active_adaptive_placeholder and safety_pause_active
+    ):
         effective_mode = "paused"
     elif active_discharge and (reduce_discharge or active_window_type == "adaptive"):
         effective_mode = "adaptive"
@@ -2915,7 +3209,9 @@ def monitor_and_adjust_active_period(
         _publish_schedule(mqtt_client, state.schedule, is_dry_run, state=state, force=True)
         state.reduced_override_active = False
 
-    if active_discharge and (should_pause or reduce_discharge):
+    if (active_discharge and (should_pause or reduce_discharge)) or (
+        active_adaptive_placeholder and safety_pause_active
+    ):
         if reduce_discharge and not should_pause:
             adaptive_grace = config["timing"].get("adaptive_power_grace_seconds", 60)
             max_power = config["power"]["max_discharge_power"]
@@ -3007,8 +3303,10 @@ def monitor_and_adjust_active_period(
             )
             return
 
-        override = {"charge": state.schedule.get("charge", []), "discharge": []}
-        _publish_schedule(mqtt_client, override, is_dry_run, state=state)
+        override = _build_pause_schedule(state.schedule)
+        paused = _publish_schedule(mqtt_client, override, is_dry_run, state=state)
+        if paused:
+            state.schedule_pause_active = True
         state.reduced_override_active = False
         status_msg = build_status_message(
             runtime_price_range, False, False, None, None, temperature,

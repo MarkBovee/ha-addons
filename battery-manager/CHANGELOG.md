@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.78 — 2026-09-25
+- **Fix: Enforce the dynamic pre-sell buffer** — active sell and adaptive grid-following windows no longer drain SOC below the calculated buffer target before the next main charge.
+- **Fix: Expensive precharge fallback** — when the current price blocks precharging, discharge is held until the main charge instead of continuing to sell or cover household load from the battery.
+- **Fix: Prevent precharge overlap** — a precharge window is capped at the main charge start.
+- **Fix: Preserve paused schedule windows** — safety pauses suspend published discharge periods without discarding the generated plan, then restore it when the pause clears. The sell-buffer floor expires at the start of its associated main charge.
+- **Fix: Enforce protection across fallback modes** — adaptive placeholders and Passive Solar gap schedules no longer bypass EV or SOC safety pauses.
+- **Fix: Retain the recovery plan during price-feed outages** — failed schedule generation no longer replaces a usable stored plan with an empty one.
+- **Fix: Honor provider charge-slot limits for precharge** — an emergency buffer precharge is coalesced with an adjacent main-charge window when only one charge slot is available.
+- **Tests:** Added regressions for expensive-price discharge blocking, precharge capping, adaptive placeholder reserve protection, and pause recovery with EV monitoring.
+
 ## 0.8.77 — 2026-09-09
 - **Fix: Adaptive discharge no longer blocked by the dynamic sell-buffer floor** — active adaptive grid-following now protects only the hard minimum SOC, so it can regulate grid power toward 0W below `conservative_soc` and the calculated sell-buffer target.
 - **Tests:** Added regression coverage for adaptive discharge with an active sell-buffer target.

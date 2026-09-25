@@ -56,8 +56,10 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 
 - Current interval is checked between full schedule refreshes
 - If live interval should stay adaptive but published schedule no longer contains matching adaptive window, add-on regenerates schedule instead of going idle
-- Conservative SOC does not hard-stop all live discharge: active adaptive period can downgrade from full discharge to adaptive discharge while respecting reserve floors
-- A `0W` adaptive fallback slot is treated as a waiting placeholder, so sell-buffer protection no longer clears later profitable discharge windows before they start
+- Conservative SOC does not hard-stop all live discharge: active adaptive period can downgrade from full discharge to adaptive discharge while respecting the hard minimum and dynamic sell-buffer reserve
+- A safety pause suspends published discharge periods without discarding the generated plan; the complete plan is restored when the pause reason clears
+- EV and SOC protection also take precedence over adaptive-placeholder startup and Passive Solar fallback schedules
+- When SOC is below the dynamic sell-buffer target, sell and adaptive discharge are held until the next main charge if precharging is blocked by the current price. The target is calculated from `soc.sell_buffer_min_soc` plus the energy required for the remaining planned sell window(s).
 
 ### Solar-Aware Charging
 
@@ -102,7 +104,10 @@ Defaults live in `battery-manager/config.yaml`.
 | `soc.conservative_soc` | Softer reserve threshold |
 | `soc.max_soc` | Max target SOC |
 | `soc.battery_capacity_kwh` | Usable capacity for energy math |
-| `soc.sell_buffer_*` | Dynamic reserve before planned sell windows |
+| `soc.sell_buffer_enabled` | Enable or disable the dynamic reserve before planned sell windows |
+| `soc.sell_buffer_min_soc` | Safety SOC baseline used to calculate the dynamic sell-buffer target and the emergency precharge floor |
+| `soc.sell_buffer_rounding_step_pct` | Rounding step for the dynamic sell-buffer target |
+| `soc.sell_buffer_activation_hours_before_sell` | Lead time before the first sell window in which the buffer becomes active |
 | `solar_aware_charging.*` | Remaining-solar-aware charge reduction |
 | `passive_solar.*` | Excess-solar passive gap logic |
 | `heuristics.*` | Price and ranking heuristics |
