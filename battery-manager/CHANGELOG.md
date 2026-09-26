@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.79 — 2026-09-26
+- **Fix: Saturated sell-buffer targets no longer block profitable sells** — profitable windows may consume the calculated buffer, including when its target saturates at 100%, while schedule duration and runtime protection preserve `sell_buffer_min_soc` as the reserve floor.
+- **Fix: Sub-quarter-hour sell windows are energy-limited** — profitable windows with less than 15 minutes of reserve are truncated to the supported whole-minute duration instead of relying on the monitor to stop a full-power interval.
+- **Fix: Preserve discharge power ranks through feasibility filtering** — chronological energy budgeting no longer changes price-ranked sell power, preventing the final published schedule from exceeding the energy budget above the reserve.
+- **Tests:** Added regressions for a 100% dynamic target at 100% SOC, the runtime reserve boundary, and multi-window rank/energy consistency.
+
 ## 0.8.78 — 2026-09-25
 - **Fix: Enforce the dynamic pre-sell buffer** — active sell and adaptive grid-following windows no longer drain SOC below the calculated buffer target before the next main charge.
 - **Fix: Expensive precharge fallback** — when the current price blocks precharging, discharge is held until the main charge instead of continuing to sell or cover household load from the battery.

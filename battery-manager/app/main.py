@@ -337,7 +337,12 @@ def _get_sell_window_reserve_floor_soc(config: Dict[str, Any]) -> float:
     soc_cfg = config.get("soc", {})
     min_soc = float(soc_cfg.get("min_soc", 5))
     conservative_soc = float(soc_cfg.get("conservative_soc", min_soc))
-    return min(100.0, max(min_soc, conservative_soc))
+    sell_buffer_floor = (
+        float(soc_cfg.get("sell_buffer_min_soc", min_soc))
+        if soc_cfg.get("sell_buffer_enabled", True)
+        else min_soc
+    )
+    return min(100.0, max(min_soc, conservative_soc, sell_buffer_floor))
 
 
 def _get_effective_discharge_hours(
@@ -1088,7 +1093,7 @@ def _sum_discharge_hours_before_main_charge(
 # for it. A short energy shortfall is not a reason to drop a profitable sell
 # window: the runtime adaptively caps discharge power (grid≈0W) and never drains
 # below the SOC floor, so the pre-check is deliberately non-conservative here.
-MIN_DISCHARGE_TRUNCATE_MINUTES = 15
+MIN_DISCHARGE_TRUNCATE_MINUTES = 1
 MIN_DISCHARGE_ENERGY_KWH = 0.1
 
 
@@ -1204,7 +1209,11 @@ def _filter_supported_discharge_windows(
         # battery can deliver: a profitable sell window should not be dropped on
         # a worst-case full-power estimate alone. Only skip when the battery is
         # effectively empty for this window.
-        if available_before_window_kwh <= MIN_DISCHARGE_ENERGY_KWH:
+        minimum_window_energy_kwh = max(
+            MIN_DISCHARGE_ENERGY_KWH,
+            _period_energy_kwh(planned_power, MIN_DISCHARGE_TRUNCATE_MINUTES),
+        )
+        if available_before_window_kwh < minimum_window_energy_kwh - 1e-6:
             logger.info(
                 "⛔ Skipping discharge window %s @€%.3f: battery effectively empty for this window (needs %.2fkWh, only %.2fkWh available before start)",
                 effective_start.astimezone().strftime("%H:%M"),
@@ -2198,13 +2207,10 @@ def generate_schedule(
         and soc <= buffer_required_soc
         and main_charge_start is not None
     ):
-        # If precharging is not safe at the current price, do not drain the
-        # battery through a sell or adaptive window before the main charge.
-        # The monitor loop applies the same floor as a second line of defence.
-        discharge_not_before = max(discharge_not_before, main_charge_start)
+        # Adaptive grid-following may spend energy intended for profitable sells.
         adaptive_fallback_not_before = max(adaptive_fallback_not_before, main_charge_start)
         logger.info(
-            "🛑 Holding sell/adaptive discharge until main charge at %s: SOC %.1f%% <= buffer target %.1f%%",
+            "🛑 Holding adaptive discharge until main charge at %s: SOC %.1f%% <= buffer target %.1f%%",
             main_charge_start.astimezone().strftime("%H:%M"),
             soc,
             buffer_required_soc,
@@ -2227,6 +2233,11 @@ def generate_schedule(
             w.get("start"),
         ),
     )
+    discharge_window_rank_by_start = {
+        window["start"].isoformat(): rank
+        for rank, window in enumerate(discharge_windows_sorted, start=1)
+        if isinstance(window.get("start"), datetime)
+    }
     discharge_windows_sorted = _filter_supported_discharge_windows(
         discharge_windows_sorted,
         charge_schedule,
@@ -2236,12 +2247,6 @@ def generate_schedule(
         top_x_discharge_count,
         min_scaled_power,
     )
-    discharge_window_rank_by_start: Dict[str, int] = {}
-    for idx, window in enumerate(discharge_windows_sorted, start=1):
-        start_dt = window.get("start")
-        if isinstance(start_dt, datetime):
-            discharge_window_rank_by_start[start_dt.isoformat()] = idx
-
     adaptive_windows_sorted = sorted(
         upcoming_windows.get("adaptive", []),
         key=lambda w: w.get("start"),
@@ -2263,7 +2268,10 @@ def generate_schedule(
         end_dt = window["end"]
         if end_dt <= now:
             continue
-        effective_start = max(start_dt, discharge_not_before)
+        window_not_before = discharge_not_before
+        if window_type == "adaptive":
+            window_not_before = max(window_not_before, adaptive_fallback_not_before)
+        effective_start = max(start_dt, window_not_before)
         duration = int((end_dt - effective_start).total_seconds() / 60)
         if duration <= 0:
             continue
@@ -2787,14 +2795,22 @@ def monitor_and_adjust_active_period(
         min_soc = config["soc"]["min_soc"]
         dynamic_buffer_soc = _get_active_sell_buffer_soc(state, now)
         low_soc_discharge_mode = active_discharge and soc <= conservative_soc
-        # The dynamic sell buffer is a real reserve until the next main charge.
-        # Adaptive grid-following and profitable selling must not consume it.
-        use_sell_buffer_protection = dynamic_buffer_soc is not None
-        effective_min_soc = (
-            max(min_soc, dynamic_buffer_soc)
-            if dynamic_buffer_soc is not None and use_sell_buffer_protection
-            else min_soc
+        is_profitable_sell_window = (
+            active_discharge_period is not None
+            and active_discharge_period.get("window_type", "discharge") == "discharge"
+            and runtime_price_range == "discharge"
         )
+        if is_profitable_sell_window:
+            # A sell window may spend the computed buffer, but retain its configured safety floor.
+            effective_min_soc = _get_sell_window_reserve_floor_soc(config)
+            use_sell_buffer_protection = effective_min_soc > min_soc
+        else:
+            use_sell_buffer_protection = dynamic_buffer_soc is not None
+            effective_min_soc = (
+                max(min_soc, dynamic_buffer_soc)
+                if dynamic_buffer_soc is not None and use_sell_buffer_protection
+                else min_soc
+            )
         # During active low-SOC discharge we switch to adaptive runtime behavior
         # instead of hard-pausing based on conservative threshold.
         is_conservative = runtime_price_range != "discharge" and not low_soc_discharge_mode
