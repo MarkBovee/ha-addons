@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.80 — 2026-09-26
+- **Release:** Version bump from 0.8.79; no runtime behavior changes.
+
 ## 0.8.79 — 2026-09-26
 - **Fix: Saturated sell-buffer targets no longer block profitable sells** — profitable windows may consume the calculated buffer, including when its target saturates at 100%, while schedule duration and runtime protection preserve `sell_buffer_min_soc` as the reserve floor.
 - **Fix: Sub-quarter-hour sell windows are energy-limited** — profitable windows with less than 15 minutes of reserve are truncated to the supported whole-minute duration instead of relying on the monitor to stop a full-power interval.
