@@ -69,15 +69,38 @@ fi
 if bashio::config.has_value 'message_signoff_suffix'; then
     server_args+=(--message-signoff-suffix "$(bashio::config 'message_signoff_suffix')")
 fi
-if bashio::config.true 'enable_auth_tools'; then
-    server_args+=(--enable-auth-tools)
-    bashio::log.warning "Auth tools (login/logout) are enabled. Disable 'enable_auth_tools' once you are logged in."
-fi
 
 # Log the Graph permissions this configuration will request (offline, no secrets).
 if permissions=$(ms-365-mcp-server "${surface_args[@]}" --list-permissions 2>/dev/null \
         | jq -r '.effectivePermissions | join(", ")' 2>/dev/null) && [[ -n "${permissions}" ]]; then
     bashio::log.info "Graph delegated permissions requested at login: ${permissions}"
+fi
+
+# ------------------------------------------------------------------ login
+# One-time device-code login, done before the server starts so the URL and code
+# appear in this add-on's log. The login lives in /data and is reused afterwards;
+# the login/logout tools are never exposed to MCP clients. The same surface and
+# account flags are used so the requested scopes and the pin match the server's.
+login_args=("${surface_args[@]}")
+if bashio::config.has_value 'expected_username'; then
+    login_args+=(--expected-username "$(bashio::config 'expected_username')")
+fi
+
+# Succeeds when a cached login for the expected account can get a Graph token.
+login_is_valid() {
+    local result
+    result=$(ms-365-mcp-server "${login_args[@]}" --verify-login 2>/dev/null | tail -n 1) || return 1
+    jq -e '.success == true' <<<"${result}" >/dev/null 2>&1
+}
+
+if login_is_valid; then
+    bashio::log.info "Microsoft login found in /data."
+else
+    bashio::log.notice "No valid Microsoft login yet. Open https://microsoft.com/devicelogin, enter the code printed below and sign in within 15 minutes."
+    # The JSON result line is dropped so the account name is not printed.
+    timeout 960 ms-365-mcp-server "${login_args[@]}" --login 2>&1 | grep -v '^{' || true
+    login_is_valid || bashio::exit.nok "Microsoft login did not complete. Restart the add-on to get a new code."
+    bashio::log.info "Microsoft login completed and stored in /data."
 fi
 
 # ------------------------------------------------------------------ nginx

@@ -1,0 +1,19 @@
+configuration:
+  client_id:
+    name: Application (client) ID
+    description: Application (client) ID of your Azure app registration (required).
+  expected_username:
+    name: Your Microsoft account
+    description: Email address of the personal account allowed to log in. Any other account is rejected.
+  read_only:
+    name: Read only
+    description: Hide all tools that send, create, change or delete anything. Recommended.
+  preset:
+    name: Tool groups
+    description: Limit the tools to these groups, for example mail and calendar. Empty means all personal tools.
+  message_signoff_suffix:
+    name: Message signature
+    description: Text appended to every message sent through this add-on. Leave empty for none.
+  access_token:
+    name: Access token (generated, do not fill in)
+    description: Created automatically on first start. Reveal and copy it for your MCP client. Only fill it in to set your own, or clear it and restart to get a new one.

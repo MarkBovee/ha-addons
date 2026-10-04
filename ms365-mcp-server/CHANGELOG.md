@@ -2,6 +2,17 @@
 
 All notable changes to the Microsoft 365 MCP Server add-on will be documented in this file.
 
+## [0.4.0] - 2026-10-04
+
+### Changed
+- The one-time Microsoft login now happens in the add-on: when `/data` has no valid login, the device-code URL and code are printed in the add-on log and the server starts after sign-in.
+- Removed `enable_auth_tools`; the login and logout tools are no longer exposed to MCP clients.
+
+## [0.3.1] - 2026-10-04
+
+### Changed
+- `access_token` moved to the bottom of the configuration and all options got names and descriptions (English and Dutch). The description says the token is generated automatically and normally must not be filled in.
+
 ## [0.3.0] - 2026-10-04
 
 ### Changed
