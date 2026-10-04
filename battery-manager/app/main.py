@@ -3049,7 +3049,7 @@ def monitor_and_adjust_active_period(
         )
         return
 
-    if passive_active and should_pause:
+    if passive_active and safety_pause_active:
         logger.info("☁️ Passive Solar suspended during active SOC/EV protection")
         passive_active = False
         if state.passive_gap_active:

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.81 — 2026-10-04
+- **Fix: Passive Solar no longer suspended by the conservative-SOC discharge limit** — at low SOC (above `min_soc`, below `conservative_soc`) with surplus solar, Passive Solar was suspended every cycle ("Opportunistic Solar" was shown but nothing was sent to battery-api, so the battery stayed idle while exporting). Passive Solar is now only suspended by real safety pauses (EV charging, SOC at/below `min_soc`, SOC unavailable), so the 0W charge gap is published and solar charges the battery.
+- **Tests:** Added regression for Passive Solar at SOC between `min_soc` and `conservative_soc`.
+
 ## 0.8.80 — 2026-09-26
 - **Release:** Version bump from 0.8.79; no runtime behavior changes.
 
