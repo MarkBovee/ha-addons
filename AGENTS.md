@@ -39,6 +39,7 @@ A collection of **Home Assistant Supervisor add-ons** for home energy management
 | `charge-amps-monitor/`    | charge-amps-monitor    | `ca_`  | Charge Amps EV charger monitoring and control                |
 | `energy-prices/`          | energy-prices          | `ep_`  | Nord Pool electricity prices with import/export calculations |
 | `water-heater-scheduler/` | water-heater-scheduler | `wh_`  | Price-based water heater scheduling                          |
+| `ms365-mcp-server/`       | ms365_mcp_server       | -      | Wrapper add-on (nginx + npm package), no entities, not HEMS  |
 
 ### Key Directories
 
