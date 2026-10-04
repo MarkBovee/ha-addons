@@ -20,15 +20,13 @@ Set `client_id` and start the add-on. Leave `access_token` empty: the add-on gen
 
 ## 3. One-time login
 
-Login uses upstream's `login` / `verify-login` tools, which are only registered while `enable_auth_tools` is `true` (default).
+The add-on logs in by itself on start; no MCP client is needed.
 
-1. Connect a client as described in section 4.
-2. Ask it to call the `login` tool. It returns a message with a URL (<https://microsoft.com/devicelogin>) and a code.
-3. Open the URL, enter the code, sign in as the account in `expected_username`, and approve the permissions. A different account is rejected before anything is stored.
-4. Call `verify-login`. It should report success.
-5. Set `enable_auth_tools: false` and restart. The cached login in `/data` survives restarts and updates; the `logout` tool is no longer exposed to the model.
+1. Start the add-on. If `/data` holds no valid login, the log shows a notice and Microsoft's message with a code. The add-on waits (up to about 15 minutes) before it starts the server.
+2. Open <https://microsoft.com/devicelogin> (the link is also in the message), enter the code, sign in as the account in `expected_username`, and approve the permissions. A different account is rejected before anything is stored.
+3. The log then says the login was stored and the MCP endpoint starts. The login survives restarts and updates.
 
-If the login ever expires (for example after months unused), set `enable_auth_tools: true` again and repeat.
+If the code expires, the add-on stops with a message; restart it for a new code. If the login ever expires (for example after months unused), the next start asks for a new one automatically. To switch account, change `expected_username` and restart. The login and logout tools are never exposed to MCP clients.
 
 ## 4. Client configuration
 
@@ -93,4 +91,4 @@ What was verified in the upstream source (v0.158.0) and what it means here:
 - Add-on exits at start: the log names the invalid option (`client_id` must be a GUID, `access_token` 32-128 characters). If the generated token could not be stored, set `access_token` manually.
 - `AADSTS7000218` / public client error at login: enable **Allow public client flows** (step 3 of section 1).
 - Log line `expected account pinning is configured, but --http uses request-provided tokens ...` is upstream's generic warning. In this add-on (`--trust-proxy-auth`) the pin is enforced at login and when the cached account is resolved.
-- `verify-login` says the expected account is not in the cache: run `login` again.
+- The add-on stops with "Microsoft login did not complete": the code expired or the wrong account was used. Restart it and sign in with the account in `expected_username`.

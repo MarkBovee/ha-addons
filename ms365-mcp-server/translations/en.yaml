@@ -14,9 +14,6 @@ configuration:
   message_signoff_suffix:
     name: Message signature
     description: Text appended to every message sent through this add-on. Leave empty for none.
-  enable_auth_tools:
-    name: Enable login tools
-    description: Needed for the one-time login. Turn off once you are logged in.
   access_token:
     name: Access token (generated, do not fill in)
     description: Created automatically on first start. Reveal and copy it for your MCP client. Only fill it in to set your own, or clear it and restart to get a new one.

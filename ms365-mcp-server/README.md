@@ -15,7 +15,7 @@ Upstream's `--http` mode is built as a stateless OAuth proxy for multi-user host
 
 1. Add `https://github.com/MarkBovee/ha-addons` in `Settings -> Add-ons -> Add-on Store -> Repositories`.
 2. Install **Microsoft 365 MCP Server**.
-3. Register the Azure app and complete the one-time login: see [DOCS.md](DOCS.md).
+3. Register the Azure app (see [DOCS.md](DOCS.md)), set `client_id` and `expected_username`, start the add-on and sign in with the code shown in its log.
 
 ## Configuration
 
@@ -27,7 +27,6 @@ Upstream's `--http` mode is built as a stateless OAuth proxy for multi-user host
 | `read_only` | `false` | `--read-only` |
 | `preset` | empty (all personal tools) | `--preset a,b` |
 | `message_signoff_suffix` | `Sent via Claude` | `--message-signoff-suffix` |
-| `enable_auth_tools` | `true` | `--enable-auth-tools` (login/logout tools; turn off after login) |
 
 Fixed by the add-on: `MS365_MCP_TENANT_ID=consumers` (personal accounts only), `LOG_LEVEL=info`, `--http 127.0.0.1:3001`, `--trust-proxy-auth`, `--no-dynamic-registration`, `MS365_MCP_TOKEN_CACHE_PATH=/data/.token-cache.json`, `MS365_MCP_SELECTED_ACCOUNT_PATH=/data/.selected-account.json`, `MS365_MCP_USE_KEYTAR=0`. `MS365_MCP_REDACT_PII` is left at its default (redaction on).
 
