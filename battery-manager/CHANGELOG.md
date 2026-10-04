@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.82 — 2026-10-04
+- **Fix: Rolling regeneration no longer overwrites the Passive Solar gap** — the 0W charge gap lasts one minute; once expired, the "live adaptive band has no active window" regeneration republished the adaptive 0W discharge window, which blocked solar charging while `passive_gap_active` stayed set (so the gap was never re-sent). Regeneration is now skipped while Passive Solar is active.
+- **Tests:** Added regression for an expired gap during Passive Solar.
+
 ## 0.8.81 — 2026-10-04
 - **Fix: Passive Solar no longer suspended by the conservative-SOC discharge limit** — at low SOC (above `min_soc`, below `conservative_soc`) with surplus solar, Passive Solar was suspended every cycle ("Opportunistic Solar" was shown but nothing was sent to battery-api, so the battery stayed idle while exporting). Passive Solar is now only suspended by real safety pauses (EV charging, SOC at/below `min_soc`, SOC unavailable), so the 0W charge gap is published and solar charges the battery.
 - **Tests:** Added regression for Passive Solar at SOC between `min_soc` and `conservative_soc`.

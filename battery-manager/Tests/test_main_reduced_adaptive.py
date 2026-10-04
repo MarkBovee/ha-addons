@@ -2724,6 +2724,74 @@ def test_passive_solar_charges_at_low_soc_below_conservative(monkeypatch):
     assert published
 
 
+def test_expired_passive_gap_is_not_replaced_by_rolling_regeneration(monkeypatch):
+    """After the 1-minute gap expires, Passive Solar must not regenerate the adaptive 0W schedule."""
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["conservative_soc"] = 35
+    config["soc"]["min_soc"] = 5
+
+    now = datetime.now(timezone.utc)
+    expired_gap = {
+        "charge": [{"start": (now - timedelta(minutes=5)).isoformat(), "duration": 1, "power": 0}],
+        "discharge": [
+            {
+                "start": (now - timedelta(minutes=4)).isoformat(),
+                "duration": 1,
+                "power": 4000,
+                "window_type": "passive_gap",
+            }
+        ],
+    }
+    state = bm_main.RuntimeState(
+        schedule=deepcopy(expired_gap),
+        published_schedule=deepcopy(expired_gap),
+        schedule_generated_at=now - timedelta(minutes=5),
+        last_schedule_publish=now - timedelta(minutes=5),
+        passive_gap_active=True,
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 5.7,
+        config["entities"]["grid_power_entity"]: -2215.0,
+        config["entities"]["solar_power_entity"]: 3198.0,
+        config["entities"]["house_load_entity"]: 900.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 13.0,
+    }
+    generated = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [{"start": now.isoformat(), "price": 0.3}])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "adaptive")
+    monkeypatch.setattr(bm_main, "generate_schedule", lambda *_args, **_kwargs: generated.append(1) or {"charge": [], "discharge": []})
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bm_main, "_publish_schedule", lambda *_args, **_kwargs: True)
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=_ActiveSolarMonitorStub(),
+        gap_scheduler=_GapSchedulerStub(),
+    )
+
+    assert not generated
+    assert state.passive_gap_active is True
+
+
 # A saturated target allows selling above the configured floor and pauses at that floor.
 @pytest.mark.parametrize(("soc", "expect_pause"), [(100.0, False), (40.0, True), (39.0, True)])
 def test_active_discharge_respects_safety_floor_with_saturated_sell_buffer(monkeypatch, soc, expect_pause):

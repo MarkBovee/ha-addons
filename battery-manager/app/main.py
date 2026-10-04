@@ -2874,7 +2874,10 @@ def monitor_and_adjust_active_period(
         soc,
         config,
     )
-    if regen_price_range is not None and not safety_pause_active:
+    # While Passive Solar is active the inverter must stay free of discharge windows
+    # so surplus solar charges the battery; the expired 0W gap must not be replaced
+    # by the adaptive 0W placeholder from a rolling regeneration.
+    if regen_price_range is not None and not safety_pause_active and not passive_active:
         if (
             not state.last_schedule_publish
             or (now - state.last_schedule_publish).total_seconds() >= regen_cooldown
