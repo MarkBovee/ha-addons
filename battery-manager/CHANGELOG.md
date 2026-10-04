@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.84 — 2026-10-04
+- **Fix: Schedule times in `current_action` and the schedule displays now use local time** — "Next: … at HH:MM", the schedule summary and the schedule markdown table printed the stored UTC time, so they ran two hours behind in local time.
+- **Tests:** Added regression for local-time formatting of next-event and schedule displays.
+
 ## 0.8.83 — 2026-10-04
 - **Feature: Live solar charge trim** — during an active solar-aware charge window the grid charge power now follows live solar surplus instead of staying at the flat planned value: (remaining deficit / remaining window hours) − (solar − house load) + 1000 W buffer, rounded down to 1000 W steps and capped at the planned power. The schedule is republished only when the step changes (at most once per `adaptive_power_grace_seconds`). Negative-price and non-solar-aware windows are untouched. New options `solar_aware_charging.live_trim_enabled`, `live_trim_buffer_w`, `live_trim_step_w`.
 - **Tests:** Added helper tests and a monitor test for the trimmed publish.

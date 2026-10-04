@@ -237,6 +237,11 @@ def build_status_message(
     return f"Idle | {price_range.capitalize()}{temp_str}"
 
 
+# Schedule times are stored in UTC; users read them in the container's local timezone.
+def _local_hhmm(moment: datetime) -> str:
+    return _to_aware(moment).astimezone().strftime("%H:%M")
+
+
 def build_next_event_summary(
     schedule: Dict[str, Any],
     now: datetime,
@@ -276,12 +281,12 @@ def build_next_event_summary(
     if len(upcoming) == 1:
         ev = upcoming[0]
         label = "Charge" if ev["type"] == "charge" else "Discharge"
-        return f"Next: {label} {ev['power']}W at {ev['start'].strftime('%H:%M')}{temp_str}"
+        return f"Next: {label} {ev['power']}W at {_local_hhmm(ev['start'])}{temp_str}"
 
     parts = []
     for ev in upcoming[:2]:
         label = "Charge" if ev["type"] == "charge" else "Discharge"
-        parts.append(f"{label} {ev['power']}W at {ev['start'].strftime('%H:%M')}")
+        parts.append(f"{label} {ev['power']}W at {_local_hhmm(ev['start'])}")
     return f"Upcoming: {', '.join(parts)}{temp_str}"
 
 
@@ -318,7 +323,7 @@ def build_schedule_display(
         return f"Active: {active.get('power', 0)}W"
     if next_period:
         p, sdt = next_period
-        return f"Next: {p.get('power', 0)}W at {sdt.strftime('%H:%M')}"
+        return f"Next: {p.get('power', 0)}W at {_local_hhmm(sdt)}"
     return f"No {period_type} planned"
 
 
@@ -354,7 +359,7 @@ def build_schedule_markdown(schedule: Dict[str, Any], now: datetime) -> str:
 
             rows.append({
                 "start_dt": start_dt,
-                "time": f"{status} {start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}",
+                "time": f"{status} {_local_hhmm(start_dt)}-{_local_hhmm(end_dt)}",
                 "type": f"{icon} {label}",
                 "power": f"{power}W",
             })
