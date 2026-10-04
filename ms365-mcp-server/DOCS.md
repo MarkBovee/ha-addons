@@ -16,7 +16,7 @@
 
 ## 2. Add-on options
 
-Set `client_id` and `access_token` (generate the token with `openssl rand -hex 32`), then start the add-on. Optional narrowing, strongly recommended for an LLM-facing mailbox: `read_only: true`, a `preset` such as `[mail, calendar]`, or an `enabled_tools` regex. See the table in the README for every option.
+Set `client_id` and start the add-on. Leave `access_token` empty: the add-on generates one, stores it in the options, and logs a notice (not the value). Open the Configuration tab, click the eye icon on `access_token` and copy it. To rotate, clear the field and restart. You may also set your own (32-128 characters, `openssl rand -hex 32` works). Optional narrowing, strongly recommended for an LLM-facing mailbox: `read_only: true`, a `preset` such as `[mail, calendar]`, or an `enabled_tools` regex. See the table in the README for every option.
 
 ## 3. One-time login
 
@@ -90,7 +90,7 @@ What was verified in the upstream source (v0.158.0) and what it means here:
 ## Troubleshooting
 
 - `401` from `/mcp`: wrong or missing bearer token.
-- Add-on exits at start: the log names the invalid option (`client_id` must be a GUID, `access_token` 32-128 characters).
+- Add-on exits at start: the log names the invalid option (`client_id` must be a GUID, `access_token` 32-128 characters). If the generated token could not be stored, set `access_token` manually.
 - `AADSTS7000218` / public client error at login: enable **Allow public client flows** (step 3 of section 1).
 - Log line `expected account pinning is configured, but --http uses request-provided tokens ...` is upstream's generic warning. In this add-on (`--trust-proxy-auth`) the pin is enforced at login and when the cached account is resolved.
 - `verify-login` says the expected account is not in the cache: run `login` again.

@@ -16,7 +16,11 @@ The add-on SHALL expose the MCP endpoint on container port 3000 only through a r
 - **THEN** the request SHALL be forwarded to the MCP server bound to `127.0.0.1`
 
 #### Scenario: No token configured
-- **WHEN** `access_token` is empty, shorter than 32 characters, or contains characters outside `[A-Za-z0-9._~+/=-]`
+- **WHEN** `access_token` is empty
+- **THEN** the add-on SHALL generate a 64-character hex token, store it in its own options, and SHALL NOT log its value
+
+#### Scenario: Invalid token
+- **WHEN** `access_token` is shorter than 32 characters, longer than 128, or contains characters outside `[A-Za-z0-9._~+/=-]`
 - **THEN** the add-on SHALL refuse to start with a clear log message
 
 ### Requirement: Restricted route surface

@@ -24,7 +24,7 @@ Upstream's `--http` mode is built as a stateless OAuth proxy for multi-user host
 | `client_id` | - (required) | `MS365_MCP_CLIENT_ID` |
 | `client_secret` | empty (optional, unused for device-code login) | `MS365_MCP_CLIENT_SECRET` |
 | `tenant_id` | `consumers` | `MS365_MCP_TENANT_ID` |
-| `access_token` | - (required, 32-128 chars) | bearer token checked by nginx |
+| `access_token` | empty = generated on first start and stored here; or your own, 32-128 chars | bearer token checked by nginx |
 | `expected_username` | `markbovee@hotmail.com` | `--expected-username` |
 | `read_only` | `false` | `--read-only` |
 | `preset` | empty (all personal tools) | `--preset a,b` |

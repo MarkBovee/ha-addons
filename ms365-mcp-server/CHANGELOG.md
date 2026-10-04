@@ -2,6 +2,11 @@
 
 All notable changes to the Microsoft 365 MCP Server add-on will be documented in this file.
 
+## [0.2.0] - 2026-10-04
+
+### Added
+- `access_token` is now optional. When empty, the add-on generates a 64-character hex token on start and stores it in its own options, so it can be revealed and copied from the Configuration tab. Clearing the field and restarting rotates it. The token is never logged.
+
 ## [0.1.1] - 2026-10-04
 
 ### Fixed
