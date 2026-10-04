@@ -14,6 +14,9 @@ configuration:
   message_signoff_suffix:
     name: Message signature
     description: Text appended to every message sent through this add-on. Leave empty for none.
+  dynamic_tools:
+    name: Dynamic tools
+    description: Expose three search tools instead of about 180 individual tools; the model finds and runs tools on demand. Saves a lot of context. Upstream marks this as experimental. Read only and Tool groups still apply.
   access_token:
     name: Access token (generated, do not fill in)
     description: Created automatically on first start. Reveal and copy it for your MCP client. Only fill it in to set your own, or clear it and restart to get a new one.

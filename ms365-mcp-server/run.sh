@@ -63,6 +63,12 @@ fi
 
 server_args=(--http "127.0.0.1:${NODE_PORT}" --trust-proxy-auth --no-dynamic-registration)
 server_args+=("${surface_args[@]}")
+# Dynamic tool discovery (experimental upstream): the client sees search-tools,
+# get-tool-schema and execute-tool instead of ~180 tools. --read-only and --preset
+# still limit what these can find and run. Server only; login does not need it.
+if bashio::config.true 'dynamic_tools'; then
+    server_args+=(--discovery)
+fi
 if bashio::config.has_value 'expected_username'; then
     server_args+=(--expected-username "$(bashio::config 'expected_username')")
 fi

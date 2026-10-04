@@ -30,6 +30,13 @@ The proxy SHALL expose only `/mcp` and `/healthz`.
 - **WHEN** a client requests `/authorize`, `/token`, `/register`, `/.well-known/*` or `/callback`
 - **THEN** the proxy SHALL answer 404
 
+### Requirement: Compact tool surface
+The add-on SHALL offer `dynamic_tools` (default on) that starts the server with `--discovery`.
+
+#### Scenario: Dynamic tools with read-only
+- **WHEN** `dynamic_tools` and `read_only` are enabled
+- **THEN** `tools/list` SHALL return only the discovery tools and write tools SHALL NOT be found or executable
+
 ### Requirement: Persistent single-account login
 The add-on SHALL keep the MSAL token cache and selected account in `/data` and SHALL pin the login to `expected_username` when set.
 

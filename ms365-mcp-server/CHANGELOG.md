@@ -2,6 +2,11 @@
 
 All notable changes to the Microsoft 365 MCP Server add-on will be documented in this file.
 
+## [0.5.0] - 2026-10-04
+
+### Added
+- Option `dynamic_tools` (default on) starts the server with upstream's experimental `--discovery`: clients see `search-tools`, `get-tool-schema` and `execute-tool` instead of about 180 tools. `read_only` and `preset` still restrict what can be found and executed (verified: with `read_only` and a mail/calendar preset there are 27 searchable tools and `send-mail` is "not found"). Turn it off to list every tool directly.
+
 ## [0.4.1] - 2026-10-04
 
 ### Fixed

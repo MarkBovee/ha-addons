@@ -26,6 +26,7 @@ Upstream's `--http` mode is built as a stateless OAuth proxy for multi-user host
 | `expected_username` | `user@outlook.com` (set your own account) | `--expected-username` |
 | `read_only` | `false` | `--read-only` |
 | `preset` | empty (all personal tools) | `--preset a,b` |
+| `dynamic_tools` | `true` | `--discovery` (3 search tools instead of ~180; experimental upstream) |
 | `message_signoff_suffix` | `Sent via Claude` | `--message-signoff-suffix` |
 
 Fixed by the add-on: `MS365_MCP_TENANT_ID=consumers` (personal accounts only), `LOG_LEVEL=info`, `--http 127.0.0.1:3001`, `--trust-proxy-auth`, `--no-dynamic-registration`, `MS365_MCP_TOKEN_CACHE_PATH=/data/.token-cache.json`, `MS365_MCP_SELECTED_ACCOUNT_PATH=/data/.selected-account.json`, `MS365_MCP_USE_KEYTAR=0`. `MS365_MCP_REDACT_PII` is left at its default (redaction on).
