@@ -198,3 +198,30 @@ def allocate_solar_aware_charge_powers(
         round(grid_energy_target_kwh, 3),
         round(remaining_grid_kwh, 3),
     )
+
+
+# Live trim: size grid charge power from what is still needed minus what solar delivers now.
+def calculate_live_grid_charge_power(
+    charge_deficit_kwh: float,
+    remaining_window_hours: float,
+    solar_surplus_w: float,
+    ceiling_w: int,
+    buffer_w: int = 1000,
+    step_w: int = 1000,
+) -> int:
+    """Return the grid charge power for the current monitor cycle.
+
+    required rate = deficit / remaining hours; grid = required - solar surplus
+    + buffer, rounded down to `step_w` and clamped to [0, ceiling_w].
+    """
+
+    if charge_deficit_kwh <= 0 or ceiling_w <= 0:
+        return 0
+
+    # Floor the horizon so the last minutes of a window cannot explode the rate.
+    hours = max(float(remaining_window_hours), 1.0 / 12.0)
+    required_w = (charge_deficit_kwh / hours) * 1000.0
+    wanted_w = required_w - max(0.0, float(solar_surplus_w)) + max(0, int(buffer_w))
+    step = max(1, int(step_w))
+    stepped_w = int(math.floor(wanted_w / step)) * step
+    return max(0, min(stepped_w, int(ceiling_w)))

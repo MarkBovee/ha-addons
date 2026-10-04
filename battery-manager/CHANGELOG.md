@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.83 — 2026-10-04
+- **Feature: Live solar charge trim** — during an active solar-aware charge window the grid charge power now follows live solar surplus instead of staying at the flat planned value: (remaining deficit / remaining window hours) − (solar − house load) + 1000 W buffer, rounded down to 1000 W steps and capped at the planned power. The schedule is republished only when the step changes (at most once per `adaptive_power_grace_seconds`). Negative-price and non-solar-aware windows are untouched. New options `solar_aware_charging.live_trim_enabled`, `live_trim_buffer_w`, `live_trim_step_w`.
+- **Tests:** Added helper tests and a monitor test for the trimmed publish.
+
 ## 0.8.82 — 2026-10-04
 - **Fix: Rolling regeneration no longer overwrites the Passive Solar gap** — the 0W charge gap lasts one minute; once expired, the "live adaptive band has no active window" regeneration republished the adaptive 0W discharge window, which blocked solar charging while `passive_gap_active` stayed set (so the gap was never re-sent). Regeneration is now skipped while Passive Solar is active.
 - **Tests:** Added regression for an expired gap during Passive Solar.
