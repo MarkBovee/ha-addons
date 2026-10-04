@@ -37,6 +37,13 @@
       "description": "Schedule domestic hot water heating based on electricity prices",
       "version": "1.0.0",
       "url": "https://github.com/MarkBovee/ha-addons/tree/main/water-heater-scheduler"
+    },
+    {
+      "name": "Microsoft 365 MCP Server",
+      "slug": "ms365_mcp_server",
+      "description": "LAN-only MCP server for a personal Outlook/Hotmail account",
+      "version": "0.1.1",
+      "url": "https://github.com/MarkBovee/ha-addons/tree/master/ms365-mcp-server"
     }
   ]
 }
