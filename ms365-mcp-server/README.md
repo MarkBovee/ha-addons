@@ -22,19 +22,13 @@ Upstream's `--http` mode is built as a stateless OAuth proxy for multi-user host
 | Option | Default | Maps to |
 | --- | --- | --- |
 | `client_id` | - (required) | `MS365_MCP_CLIENT_ID` |
-| `client_secret` | empty (optional, unused for device-code login) | `MS365_MCP_CLIENT_SECRET` |
-| `tenant_id` | `consumers` | `MS365_MCP_TENANT_ID` |
 | `access_token` | empty = generated on first start and stored here; or your own, 32-128 chars | bearer token checked by nginx |
-| `expected_username` | `markbovee@hotmail.com` | `--expected-username` |
+| `expected_username` | `user@outlook.com` (set your own account) | `--expected-username` |
 | `read_only` | `false` | `--read-only` |
 | `preset` | empty (all personal tools) | `--preset a,b` |
-| `enabled_tools` | empty | `ENABLED_TOOLS` (regex) |
-| `allowed_scopes` | empty | `--allowed-scopes` (space separated) |
 | `message_signoff_suffix` | `Sent via Claude` | `--message-signoff-suffix` |
-| `public_url` | empty | `--public-url` |
 | `enable_auth_tools` | `true` | `--enable-auth-tools` (login/logout tools; turn off after login) |
-| `log_level` | `info` | `LOG_LEVEL` |
 
-Fixed by the add-on: `--http 127.0.0.1:3001`, `--trust-proxy-auth`, `--no-dynamic-registration`, `MS365_MCP_TOKEN_CACHE_PATH=/data/.token-cache.json`, `MS365_MCP_SELECTED_ACCOUNT_PATH=/data/.selected-account.json`, `MS365_MCP_USE_KEYTAR=0`. `MS365_MCP_REDACT_PII` is left at its default (redaction on).
+Fixed by the add-on: `MS365_MCP_TENANT_ID=consumers` (personal accounts only), `LOG_LEVEL=info`, `--http 127.0.0.1:3001`, `--trust-proxy-auth`, `--no-dynamic-registration`, `MS365_MCP_TOKEN_CACHE_PATH=/data/.token-cache.json`, `MS365_MCP_SELECTED_ACCOUNT_PATH=/data/.selected-account.json`, `MS365_MCP_USE_KEYTAR=0`. `MS365_MCP_REDACT_PII` is left at its default (redaction on).
 
 The host port is configurable under the add-on's Network tab (container port `3000/tcp`).

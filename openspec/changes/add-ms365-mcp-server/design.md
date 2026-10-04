@@ -15,5 +15,5 @@ Upstream `--http` (verified against v0.158.0): `/mcp` requires an `Authorization
 ## Risks
 
 - Plain HTTP on the LAN exposes the bearer token to sniffing; documented, public exposure out of scope.
-- A leaked token grants full mailbox access within the enabled tools; mitigated by `read_only`, `preset`, `enabled_tools`, `allowed_scopes`.
+- A leaked token grants full mailbox access within the enabled tools; mitigated by `read_only` and `preset`.
 - Upstream flag changes between versions; the version is pinned and bumped deliberately.
