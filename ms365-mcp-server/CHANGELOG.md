@@ -2,6 +2,11 @@
 
 All notable changes to the Microsoft 365 MCP Server add-on will be documented in this file.
 
+## [0.4.1] - 2026-10-04
+
+### Fixed
+- The device-code URL and code were not shown in the add-on log until the login had finished, because the output went through a buffering `grep`. Lines are now passed on immediately.
+
 ## [0.4.0] - 2026-10-04
 
 ### Changed
