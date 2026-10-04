@@ -79,10 +79,12 @@ What was verified in the upstream source (v0.158.0) and what it means here:
 
 - Default `--http` mode only checks that an `Authorization: Bearer ...` header exists and is not an expired JWT; the real validation is Microsoft Graph rejecting the token. It never uses the cached login.
 - With `--trust-proxy-auth` (used here) that check is skipped and **every caller uses the cached login**. Anyone who can reach the MCP server can read and send your mail. Hence nginx enforces `access_token` on `/mcp`, the MCP server listens on `127.0.0.1` only, and `/authorize`, `/token`, `/register` and `/.well-known/*` return 404 (dynamic client registration is also off via `--no-dynamic-registration`).
-- Rate limits: upstream's 120 requests/min per client IP on `/mcp` stays on (nginx forwards the real client IP); nginx additionally limits to 20 req/s per IP.
+- Rate limits: nginx limits `/mcp` to 20 req/s per client IP (burst 40) before the token is checked, so wrong-token floods are throttled too. Upstream's 120 requests/min per client IP on `/mcp` stays on (nginx forwards the real client IP). The token comparison is exact and case-sensitive.
 - The endpoint is plain HTTP: the token is visible to anyone sniffing your LAN. Do not forward the port to the internet and do not put it behind a tunnel. Rotate by changing `access_token` and restarting.
 - Mail content is untrusted input to the model (prompt injection). Prefer `read_only: true` and a narrow `preset` until you need writes. Outgoing mail gets the `message_signoff_suffix` appended.
 - Logs: upstream redacts tokens, JWTs and email addresses (`MS365_MCP_REDACT_PII` left at default). The add-on never prints `access_token` or `client_secret`.
+- Request bodies are capped at 100 KB by upstream (`express.json()`); larger tool calls, such as big base64 attachments, fail with `413`. The nginx limit of 25 MB is not the effective cap.
+- Upstream writes `mcp-server.log`, `error.log` and `audit.log` to `~/.ms-365-mcp-server/logs` inside the container with no rotation. They are lost when the add-on is rebuilt or updated and grow only with usage (about 80 KB per start).
 - The add-on process runs as root inside its container; `/data` holds the encrypted token cache plus its key file (`.cache-key`), as upstream does without a system keyring.
 
 ## Troubleshooting
@@ -90,4 +92,5 @@ What was verified in the upstream source (v0.158.0) and what it means here:
 - `401` from `/mcp`: wrong or missing bearer token.
 - Add-on exits at start: the log names the invalid option (`client_id` must be a GUID, `access_token` 32-128 characters).
 - `AADSTS7000218` / public client error at login: enable **Allow public client flows** (step 3 of section 1).
+- Log line `expected account pinning is configured, but --http uses request-provided tokens ...` is upstream's generic warning. In this add-on (`--trust-proxy-auth`) the pin is enforced at login and when the cached account is resolved.
 - `verify-login` says the expected account is not in the cache: run `login` again.

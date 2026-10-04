@@ -7,6 +7,10 @@ The add-on SHALL expose the MCP endpoint on container port 3000 only through a r
 - **WHEN** a client calls `/mcp` without the configured token
 - **THEN** the proxy SHALL answer 401 and the request SHALL NOT reach the MCP server
 
+#### Scenario: Token with different case or prefix
+- **WHEN** a client sends the token with different letter case, a lowercase `bearer` scheme, or extra whitespace
+- **THEN** the proxy SHALL answer 401 (the comparison is exact and case-sensitive)
+
 #### Scenario: Valid token
 - **WHEN** a client calls `/mcp` with the configured token
 - **THEN** the request SHALL be forwarded to the MCP server bound to `127.0.0.1`

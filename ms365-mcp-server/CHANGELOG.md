@@ -2,6 +2,15 @@
 
 All notable changes to the Microsoft 365 MCP Server add-on will be documented in this file.
 
+## [0.1.1] - 2026-10-04
+
+### Fixed
+- The bearer token comparison is now case-sensitive. nginx `map` lookups are not, so `bearer <token>` and an upper-cased token were accepted.
+- Unauthenticated requests to `/mcp` are now covered by the nginx rate limit (the token check moved to `auth_request`, which runs after `limit_req`).
+
+### Changed
+- Docs: the effective request body cap is 100 KB (upstream `express.json()`), upstream log files are unbounded, and the nginx rate limit wording was corrected.
+
 ## [0.1.0] - 2026-10-04
 
 ### Added

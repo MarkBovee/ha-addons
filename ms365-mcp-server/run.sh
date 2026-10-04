@@ -109,16 +109,11 @@ http {
     server_tokens off;
     default_type application/json;
 
-    map_hash_bucket_size 256;
     limit_req_zone \$binary_remote_addr zone=mcp:1m rate=20r/s;
-
-    map \$http_authorization \$mcp_authorized {
-        default 0;
-        "Bearer ${access_token}" 1;
-    }
 
     server {
         listen ${PROXY_PORT} default_server;
+        # Upstream's express.json() caps request bodies at 100 KB regardless of this value.
         client_max_body_size 25m;
 
         location = /healthz {
@@ -128,14 +123,12 @@ http {
             proxy_read_timeout 5s;
         }
 
+        # limit_req runs before auth_request, so unauthenticated floods are throttled too.
         location = /mcp {
             limit_req zone=mcp burst=40 nodelay;
             limit_req_status 429;
-
-            if (\$mcp_authorized = 0) {
-                add_header WWW-Authenticate 'Bearer realm="ms365-mcp"' always;
-                return 401 '{"error":"unauthorized"}';
-            }
+            auth_request /_mcp_auth;
+            error_page 401 = @mcp_unauthorized;
 
             proxy_pass http://127.0.0.1:${NODE_PORT}/mcp;
             proxy_http_version 1.1;
@@ -146,6 +139,20 @@ http {
             proxy_buffering off;
             proxy_connect_timeout 5s;
             proxy_read_timeout 180s;
+        }
+
+        # Token check. "if ... !=" compares case-sensitively; a "map" lookup does not.
+        location = /_mcp_auth {
+            internal;
+            if (\$http_authorization != "Bearer ${access_token}") {
+                return 401;
+            }
+            return 204;
+        }
+
+        location @mcp_unauthorized {
+            add_header WWW-Authenticate 'Bearer realm="ms365-mcp"' always;
+            return 401 '{"error":"unauthorized"}';
         }
 
         location / {
