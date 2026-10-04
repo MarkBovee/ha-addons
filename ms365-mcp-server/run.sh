@@ -24,6 +24,19 @@ fi
 if [[ ! "${tenant_id}" =~ ^[A-Za-z0-9.-]+$ ]]; then
     bashio::exit.nok "Option 'tenant_id' is invalid. Use 'consumers' for personal Microsoft accounts."
 fi
+# No token configured: generate one and store it in the add-on options, where the
+# Configuration tab shows it as a password field (reveal to copy). Clearing the
+# field and restarting rotates it. The value is never written to the log.
+if ! bashio::config.has_value 'access_token'; then
+    access_token=$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' 
+')
+    bashio::addon.option 'access_token' "${access_token}" || true
+    # bashio does not reliably report API failures, so read the option back.
+    if [[ "$(bashio::config 'access_token')" != "${access_token}" ]]; then
+        bashio::exit.nok "Could not store the generated access_token. Set the 'access_token' option manually."
+    fi
+    bashio::log.notice "Generated a new access_token. Open the Configuration tab, reveal 'access_token' and copy it."
+fi
 # The token is written into the nginx config, so the charset is restricted.
 if [[ ! "${access_token}" =~ ^[A-Za-z0-9._~+/=-]{32,128}$ ]]; then
     bashio::exit.nok "Option 'access_token' must be 32-128 characters from [A-Za-z0-9._~+/=-]. Generate one with: openssl rand -hex 32"
