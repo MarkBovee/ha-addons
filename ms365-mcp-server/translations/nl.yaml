@@ -14,6 +14,9 @@ configuration:
   message_signoff_suffix:
     name: Berichthandtekening
     description: Tekst die onder elk bericht komt dat via deze add-on wordt verstuurd. Leeg laten voor geen.
+  dynamic_tools:
+    name: Dynamische tools
+    description: Toon drie zoektools in plaats van ongeveer 180 losse tools; het model zoekt en gebruikt tools op aanvraag. Bespaart veel context. Upstream noemt dit experimenteel. Alleen lezen en Toolgroepen blijven gelden.
   access_token:
     name: Toegangstoken (wordt automatisch gemaakt, niet invullen)
     description: Wordt bij de eerste start automatisch aangemaakt. Onthul en kopieer het voor je MCP-client. Vul alleen iets in voor een eigen token, of wis het veld en herstart voor een nieuw token.

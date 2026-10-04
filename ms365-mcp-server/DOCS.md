@@ -18,6 +18,8 @@
 
 Set `client_id` and start the add-on. Leave `access_token` empty: the add-on generates one, stores it in the options, and logs a notice (not the value). Open the Configuration tab, click the eye icon on `access_token` and copy it. To rotate, clear the field and restart. You may also set your own (32-128 characters, `openssl rand -hex 32` works). Optional narrowing, strongly recommended for an LLM-facing mailbox: `read_only: true` or a `preset` such as `[mail, calendar]`. See the table in the README for every option.
 
+`dynamic_tools` (default on) shows the client three tools (`search-tools`, `get-tool-schema`, `execute-tool`) instead of about 180, which saves a lot of context. The model searches for the tool it needs and runs it through `execute-tool`; `read_only` and `preset` still decide what can be found and run. Upstream marks discovery as experimental. Because everything runs through one tool, some clients ask for approval on `execute-tool` as a whole rather than per action; use `read_only: true` if you do not want writes at all. Turn `dynamic_tools` off to list every tool directly.
+
 ## 3. One-time login
 
 The add-on logs in by itself on start; no MCP client is needed.
