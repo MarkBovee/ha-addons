@@ -97,8 +97,11 @@ if login_is_valid; then
     bashio::log.info "Microsoft login found in /data."
 else
     bashio::log.notice "No valid Microsoft login yet. Open https://microsoft.com/devicelogin, enter the code printed below and sign in within 15 minutes."
-    # The JSON result line is dropped so the account name is not printed.
-    timeout 960 ms-365-mcp-server "${login_args[@]}" --login 2>&1 | grep -v '^{' || true
+    # The JSON result line is dropped so the account name is not printed. A read loop
+    # (not grep) passes each line on immediately: grep buffers when writing to a pipe,
+    # which would hide the code until the login had already finished.
+    timeout 960 ms-365-mcp-server "${login_args[@]}" --login 2>&1 \
+        | while IFS= read -r line; do [[ "${line}" == \{* ]] || printf '%s\n' "${line}"; done || true
     login_is_valid || bashio::exit.nok "Microsoft login did not complete. Restart the add-on to get a new code."
     bashio::log.info "Microsoft login completed and stored in /data."
 fi
