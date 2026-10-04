@@ -787,3 +787,16 @@ class TestBuildPriceRangesDisplayPassiveBalancingSplit:
         )
         assert "Adaptive:" in result
         assert "Passive:" not in result
+
+
+# Schedule times are stored in UTC but must be shown in local time.
+def test_next_event_summary_and_schedule_display_use_local_time():
+    from app.status_reporter import build_next_event_summary, build_schedule_display
+
+    now = datetime(2026, 10, 4, 6, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 10, 4, 9, 30, tzinfo=timezone.utc)
+    schedule = {"charge": [{"start": start.isoformat(), "duration": 60, "power": 3000}], "discharge": []}
+    local_text = start.astimezone().strftime("%H:%M")
+
+    assert f"at {local_text}" in build_next_event_summary(schedule, now)
+    assert f"at {local_text}" in build_schedule_display(schedule, "charge", now)
