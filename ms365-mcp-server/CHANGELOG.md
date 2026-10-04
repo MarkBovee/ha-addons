@@ -2,6 +2,15 @@
 
 All notable changes to the Microsoft 365 MCP Server add-on will be documented in this file.
 
+## [0.3.0] - 2026-10-04
+
+### Changed
+- Simplified configuration from 13 to 6 options. Removed `tenant_id` (fixed `consumers`), `client_secret`, `enabled_tools`, `allowed_scopes`, `public_url` and `log_level` (fixed `info`).
+- `expected_username` now defaults to `user@outlook.com`; set your own account.
+
+### Fixed
+- Supervisor refused to save the configuration ("expected a URL") because `public_url` defaulted to an empty string.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

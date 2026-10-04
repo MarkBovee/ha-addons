@@ -1,5 +1,5 @@
 name: Microsoft 365 MCP Server
-version: "0.2.0"
+version: "0.3.0"
 slug: ms365_mcp_server
 description: LAN-only MCP server for a personal Outlook/Hotmail account (mail, calendar, OneDrive) via Microsoft Graph
 url: https://github.com/MarkBovee/ha-addons/tree/master/ms365-mcp-server
@@ -17,31 +17,19 @@ ports_description:
 
 options:
   client_id: ""
-  client_secret: ""
-  tenant_id: consumers
   access_token: ""
-  expected_username: markbovee@hotmail.com
+  expected_username: user@outlook.com
   read_only: false
   preset: []
-  enabled_tools: ""
-  allowed_scopes: ""
   message_signoff_suffix: Sent via Claude
-  public_url: ""
   enable_auth_tools: true
-  log_level: info
 
 schema:
   client_id: str
-  client_secret: password?
-  tenant_id: str
   access_token: password?
   expected_username: str?
   read_only: bool
   preset:
     - list(mail|calendar|contacts|files|excel|onenote|tasks|search|personal|outlook|onedrive|all)
-  enabled_tools: str?
-  allowed_scopes: str?
   message_signoff_suffix: str?
-  public_url: url?
   enable_auth_tools: bool
-  log_level: list(error|warn|info|debug)

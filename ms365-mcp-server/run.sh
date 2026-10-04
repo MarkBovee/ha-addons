@@ -15,21 +15,16 @@ bashio::log.info "Starting Microsoft 365 MCP Server add-on..."
 
 # ---------------------------------------------------------------- options
 client_id=$(bashio::config 'client_id')
-tenant_id=$(bashio::config 'tenant_id' 'consumers')
 access_token=$(bashio::config 'access_token')
 
 if [[ ! "${client_id}" =~ ^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$ ]]; then
     bashio::exit.nok "Option 'client_id' must be the Application (client) ID (a GUID) of your Azure app registration."
 fi
-if [[ ! "${tenant_id}" =~ ^[A-Za-z0-9.-]+$ ]]; then
-    bashio::exit.nok "Option 'tenant_id' is invalid. Use 'consumers' for personal Microsoft accounts."
-fi
 # No token configured: generate one and store it in the add-on options, where the
 # Configuration tab shows it as a password field (reveal to copy). Clearing the
 # field and restarting rotates it. The value is never written to the log.
 if ! bashio::config.has_value 'access_token'; then
-    access_token=$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' 
-')
+    access_token=$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n')
     bashio::addon.option 'access_token' "${access_token}" || true
     # bashio does not reliably report API failures, so read the option back.
     if [[ "$(bashio::config 'access_token')" != "${access_token}" ]]; then
@@ -44,11 +39,8 @@ fi
 
 # ------------------------------------------------------------ environment
 export MS365_MCP_CLIENT_ID="${client_id}"
-export MS365_MCP_TENANT_ID="${tenant_id}"
-if bashio::config.has_value 'client_secret'; then
-    MS365_MCP_CLIENT_SECRET=$(bashio::config 'client_secret')
-    export MS365_MCP_CLIENT_SECRET
-fi
+# Personal Microsoft accounts only; "common" refresh tokens are rejected for them.
+export MS365_MCP_TENANT_ID=consumers
 
 # Persist the MSAL token cache (+ its .cache-key) and selected account in /data.
 export MS365_MCP_TOKEN_CACHE_PATH=/data/.token-cache.json
@@ -56,14 +48,8 @@ export MS365_MCP_SELECTED_ACCOUNT_PATH=/data/.selected-account.json
 # No system credential store in the container; keep the key file next to the cache.
 export MS365_MCP_USE_KEYTAR=0
 
-LOG_LEVEL=$(bashio::config 'log_level' 'info')
-export LOG_LEVEL
+export LOG_LEVEL=info
 # MS365_MCP_REDACT_PII is deliberately left unset (default: redaction enabled).
-
-if bashio::config.has_value 'enabled_tools'; then
-    ENABLED_TOOLS=$(bashio::config 'enabled_tools')
-    export ENABLED_TOOLS
-fi
 
 # ------------------------------------------------------------------ flags
 # Flags that shape the tool surface (also used for --list-permissions below).
@@ -74,9 +60,6 @@ fi
 if bashio::config.has_value 'preset'; then
     surface_args+=(--preset "$(bashio::config 'preset | join(",")')")
 fi
-if bashio::config.has_value 'allowed_scopes'; then
-    surface_args+=(--allowed-scopes "$(bashio::config 'allowed_scopes')")
-fi
 
 server_args=(--http "127.0.0.1:${NODE_PORT}" --trust-proxy-auth --no-dynamic-registration)
 server_args+=("${surface_args[@]}")
@@ -85,9 +68,6 @@ if bashio::config.has_value 'expected_username'; then
 fi
 if bashio::config.has_value 'message_signoff_suffix'; then
     server_args+=(--message-signoff-suffix "$(bashio::config 'message_signoff_suffix')")
-fi
-if bashio::config.has_value 'public_url'; then
-    server_args+=(--public-url "$(bashio::config 'public_url')")
 fi
 if bashio::config.true 'enable_auth_tools'; then
     server_args+=(--enable-auth-tools)
