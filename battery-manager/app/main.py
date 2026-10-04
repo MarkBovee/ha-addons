@@ -39,6 +39,7 @@ from .solar_charge_optimizer import (
     SolarAwareChargeAllocation,
     allocate_solar_aware_charge_powers,
     calculate_charge_deficit_kwh,
+    calculate_live_grid_charge_power,
     parse_remaining_solar_energy_kwh,
 )
 from .gap_scheduler import GapScheduler
@@ -114,6 +115,9 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "forecast_safety_factor": 0.8,
         "min_charge_power": 500,
+        "live_trim_enabled": True,
+        "live_trim_buffer_w": 1000,
+        "live_trim_step_w": 1000,
     },
     "passive_solar": {
         "enabled": True,
@@ -188,6 +192,7 @@ class RuntimeState:
     warned_missing_solar: bool = False
     last_schedule_publish: Optional[datetime] = None
     last_power_adjustment: Optional[datetime] = None
+    last_charge_trim_at: Optional[datetime] = None
     last_effective_discharge_power: Optional[int] = None
     last_price_range: Optional[str] = None
     last_effective_mode: Optional[str] = None
@@ -1507,6 +1512,69 @@ def _build_pause_recovery_schedule(
         else:
             discharge.append(period)
     return {"charge": schedule.get("charge", []), "discharge": discharge}
+
+
+# Sum the time still ahead in today's charge periods so the rate is spread over the whole remaining window.
+def _remaining_charge_window_hours(schedule: Dict[str, Any], now: datetime) -> float:
+    total_seconds = 0.0
+    for period in schedule.get("charge", []):
+        bounds = _parse_schedule_period_bounds(period)
+        if bounds is None or bounds[1] <= now:
+            continue
+        total_seconds += (bounds[1] - max(bounds[0], now)).total_seconds()
+    return total_seconds / 3600.0
+
+
+# Trim the active solar-aware charge window to what live solar leaves over; returns (override schedule, power).
+def _build_live_trimmed_charge_schedule(
+    config: Dict[str, Any],
+    state: "RuntimeState",
+    now: datetime,
+    active_charge_period: Dict[str, Any],
+    soc: Optional[float],
+    solar_power: Optional[float],
+    house_load: Optional[float],
+) -> Optional[tuple[Dict[str, Any], int]]:
+    """Return a schedule whose active charge power follows live solar surplus.
+
+    Skips (returns None) when trimming is disabled, the window is not
+    solar-aware, a reading is missing, or nothing would change.
+    """
+
+    solar_cfg = config.get("solar_aware_charging", {})
+    if not solar_cfg.get("live_trim_enabled", True):
+        return None
+    if not active_charge_period.get("solar_aware") or soc is None or solar_power is None or house_load is None:
+        return None
+
+    ceiling_w = int(active_charge_period.get("base_power") or 0)
+    deficit_kwh = calculate_charge_deficit_kwh(
+        soc,
+        float(config["soc"].get("max_soc", 100)),
+        float(config["soc"].get("battery_capacity_kwh", 25)),
+    )
+    trimmed_w = calculate_live_grid_charge_power(
+        deficit_kwh,
+        _remaining_charge_window_hours(state.schedule, now),
+        solar_power - house_load,
+        ceiling_w,
+        int(solar_cfg.get("live_trim_buffer_w", 1000)),
+        int(solar_cfg.get("live_trim_step_w", 1000)),
+    )
+
+    current_w = int(active_charge_period.get("power", 0) or 0)
+    if trimmed_w == current_w:
+        return None
+
+    grace_seconds = config.get("timing", {}).get("adaptive_power_grace_seconds", 60)
+    if state.last_charge_trim_at and (now - state.last_charge_trim_at).total_seconds() < grace_seconds:
+        return None
+
+    charge = [
+        {**period, "power": trimmed_w} if _parse_schedule_period_bounds(period) == _parse_schedule_period_bounds(active_charge_period) else period
+        for period in state.schedule.get("charge", [])
+    ]
+    return {"charge": charge, "discharge": state.schedule.get("discharge", [])}, trimmed_w
 
 
 # Return the pre-charge SOC reserve only while its schedule window is pending.
@@ -3347,6 +3415,26 @@ def monitor_and_adjust_active_period(
         )
     else:
         if active_charge:
+            trimmed = (
+                _build_live_trimmed_charge_schedule(
+                    config, state, now, active_charge_period, soc, solar_power, house_load
+                )
+                if active_charge_period
+                else None
+            )
+            if trimmed is not None:
+                trimmed_schedule, trimmed_power = trimmed
+                logger.info(
+                    "☀️ Live solar charge trim: grid charge %sW -> %sW (solar %.0fW, load %.0fW)",
+                    active_charge_period.get("power"), trimmed_power, solar_power, house_load,
+                )
+                if _publish_schedule(mqtt_client, trimmed_schedule, is_dry_run, state=state):
+                    state.last_charge_trim_at = now
+                    effective_schedule = trimmed_schedule
+                    active_charge_period = next(
+                        (p for p in trimmed_schedule["charge"] if _is_period_active(p, now)),
+                        active_charge_period,
+                    )
             charge_power_val = int(active_charge_period.get("power", 0)) if active_charge_period else _get_active_period_power(effective_schedule, "charge", now)
             status_msg = build_status_message(
                 runtime_price_range, True, False, charge_power_val, None, temperature,
