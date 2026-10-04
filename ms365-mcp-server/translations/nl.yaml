@@ -1,0 +1,22 @@
+configuration:
+  client_id:
+    name: Toepassings-ID (client-id)
+    description: Toepassings-ID (client-id) van je Azure-app-registratie (verplicht).
+  expected_username:
+    name: Je Microsoft-account
+    description: E-mailadres van het persoonlijke account dat mag inloggen. Elk ander account wordt geweigerd.
+  read_only:
+    name: Alleen lezen
+    description: Verberg alle tools die iets versturen, aanmaken, wijzigen of verwijderen. Aanbevolen.
+  preset:
+    name: Toolgroepen
+    description: Beperk de tools tot deze groepen, bijvoorbeeld mail en agenda. Leeg betekent alle persoonlijke tools.
+  message_signoff_suffix:
+    name: Berichthandtekening
+    description: Tekst die onder elk bericht komt dat via deze add-on wordt verstuurd. Leeg laten voor geen.
+  enable_auth_tools:
+    name: Inlogtools inschakelen
+    description: Nodig voor de eenmalige login. Zet dit uit zodra je bent ingelogd.
+  access_token:
+    name: Toegangstoken (wordt automatisch gemaakt, niet invullen)
+    description: Wordt bij de eerste start automatisch aangemaakt. Onthul en kopieer het voor je MCP-client. Vul alleen iets in voor een eigen token, of wis het veld en herstart voor een nieuw token.
