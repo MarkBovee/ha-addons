@@ -17,7 +17,8 @@ RUN apk add --no-cache nodejs npm nginx curl jq \
 COPY run.sh /
 RUN chmod a+x /run.sh
 
-HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
+# The start period covers the wait for the one-time device-code login (up to ~16 min).
+HEALTHCHECK --interval=60s --timeout=5s --start-period=1000s --retries=3 \
     CMD curl -fsS http://127.0.0.1:3000/healthz >/dev/null || exit 1
 
 CMD [ "/run.sh" ]

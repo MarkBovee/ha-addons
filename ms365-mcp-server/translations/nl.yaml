@@ -14,9 +14,6 @@ configuration:
   message_signoff_suffix:
     name: Berichthandtekening
     description: Tekst die onder elk bericht komt dat via deze add-on wordt verstuurd. Leeg laten voor geen.
-  enable_auth_tools:
-    name: Inlogtools inschakelen
-    description: Nodig voor de eenmalige login. Zet dit uit zodra je bent ingelogd.
   access_token:
     name: Toegangstoken (wordt automatisch gemaakt, niet invullen)
     description: Wordt bij de eerste start automatisch aangemaakt. Onthul en kopieer het voor je MCP-client. Vul alleen iets in voor een eigen token, of wis het veld en herstart voor een nieuw token.

@@ -33,6 +33,11 @@ The proxy SHALL expose only `/mcp` and `/healthz`.
 ### Requirement: Persistent single-account login
 The add-on SHALL keep the MSAL token cache and selected account in `/data` and SHALL pin the login to `expected_username` when set.
 
+#### Scenario: First start without login
+- **WHEN** no valid login exists in `/data`
+- **THEN** the add-on SHALL print the device-code instructions in its log and SHALL start the MCP server only after a successful login for the expected account
+- **AND** the MCP client SHALL NOT be offered login or logout tools
+
 #### Scenario: Restart or update
 - **WHEN** the add-on restarts or is updated
 - **THEN** the previous login SHALL still be usable without logging in again
