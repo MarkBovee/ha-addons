@@ -1,0 +1,44 @@
+{
+  "kiosk_mode": {
+    "user_settings": [
+      {
+        "hide_header": true,
+        "hide_sidebar": true,
+        "users": [
+          "dashboard"
+        ]
+      }
+    ]
+  },
+  "views": [
+    {
+      "sections": [
+        {
+          "cards": [
+            {
+              "features_position": "bottom",
+              "grid_options": {
+                "columns": "full"
+              },
+              "icon": "mdi:arrow-left",
+              "multiline_secondary": false,
+              "tap_action": {
+                "action": "navigate",
+                "navigation_path": "/lovelace/default_view"
+              },
+              "type": "custom:mushroom-template-card",
+              "vertical": true
+            },
+            {
+              "content": "{{ \nstates('sensor.battery_manager_reasoning') \n}}\n\n{{ \nstates('sensor.battery_manager_forecast') \n}}\n\n{{\nstates('sensor.battery_manager_schedule') +\nstates('sensor.battery_manager_schedule_part_2')\n}}\n",
+              "title": "🔋 Battery Charging Schedule",
+              "type": "markdown"
+            }
+          ],
+          "type": "grid"
+        }
+      ],
+      "title": "Home"
+    }
+  ]
+}
