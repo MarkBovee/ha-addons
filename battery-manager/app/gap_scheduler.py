@@ -14,7 +14,8 @@ class GapScheduler:
         - Timeslot 2 (Now + 2 mins): Discharge (short safety fallback)
         (The inverter will self-consume solar during the gap)
         """
-        now = datetime.datetime.now(datetime.timezone.utc)
+        # SAJ slots are local time-of-day; schedule_days/other periods use local time.
+        now = datetime.datetime.now().astimezone()
 
         gap_start = now + datetime.timedelta(minutes=1)
         start_str = gap_start.strftime("%H:%M")
