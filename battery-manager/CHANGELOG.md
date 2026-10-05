@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.85 — 2026-10-05
+- **Fix: Passive Solar no longer flaps every ~5 minutes** — activation/deactivation reacted to a single measurement, so the 0W gap changed the grid flow and switched itself off again, causing a schedule write storm to the SAJ cloud. Added hysteresis: export must hold `entry_hold_seconds` (default 300) to activate, import/low solar must hold `exit_hold_seconds` (default 180) to deactivate, and the mode stays on for at least `min_active_seconds` (default 600).
+- **Fix: Passive Solar gap used UTC** — the gap slots were sent in UTC while the inverter and all other periods use local time, so the 0W gap landed in the past. It now uses local time.
+- **Fix: Double schedule write on Passive Solar clear** — clearing the gap published a pause schedule and, milliseconds later, the adaptive override, which made battery-api fail with "Failed to apply schedule". The restore is now only paused for real safety pauses, and the adaptive power adjustment is deferred when a schedule was already published in the same cycle.
+- **Tests:** Added hysteresis and local-time gap tests.
+
 ## 0.8.84 — 2026-10-04
 - **Fix: Schedule times in `current_action` and the schedule displays now use local time** — "Next: … at HH:MM", the schedule summary and the schedule markdown table printed the stored UTC time, so they ran two hours behind in local time.
 - **Tests:** Added regression for local-time formatting of next-event and schedule displays.

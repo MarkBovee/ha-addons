@@ -2706,6 +2706,8 @@ def monitor_and_adjust_active_period(
         state.warned_missing_solar = True
 
     passive_active = solar_monitor.check_passive_state(ha_api)
+    # One inverter write per cycle: SAJ cloud rejects back-to-back schedule writes.
+    schedule_published_this_cycle = False
 
     effective_schedule = state.published_schedule or state.schedule
     active_discharge_period = next(
@@ -3176,7 +3178,9 @@ def monitor_and_adjust_active_period(
 
     if state.passive_gap_active:
         logger.info("☁️ Passive Solar Mode cleared - restoring generated schedule")
-        if should_pause:
+        # Only a hard safety pause blocks the restore; conservative-SOC pauses are
+        # handled by the adaptive logic below and must not cause a second write.
+        if safety_pause_active:
             pause_schedule = _build_pause_schedule(state.schedule)
             paused = _publish_schedule(
                 mqtt_client,
@@ -3199,6 +3203,7 @@ def monitor_and_adjust_active_period(
             if restored:
                 state.passive_gap_active = False
                 state.last_monitor_status = None
+                schedule_published_this_cycle = True
 
     if safety_pause_active and not state.schedule_pause_active:
         paused = _publish_schedule(
@@ -3610,6 +3615,8 @@ def monitor_and_adjust_active_period(
                 and (now - state.last_power_adjustment).total_seconds() < adaptive_grace
             ):
                 logger.info("⏱️ Adaptive adjustment skipped (grace period active)")
+            elif schedule_published_this_cycle:
+                logger.debug("Adaptive adjustment deferred (schedule already published this cycle)")
             elif target_power != current_power:
                 delta = target_power - current_power
                 delta_str = f"+{delta}" if delta > 0 else f"{delta}"
