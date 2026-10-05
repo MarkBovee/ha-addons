@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.86 — 2026-10-05
+- **Fix: Charge power no longer follows live solar** — the live solar charge trim (0.8.83) lowered the grid charge power whenever solar was producing, so the battery charged too slowly. `solar_aware_charging.live_trim_enabled` now defaults to `false`; the planned window power stays published regardless of current solar. Set it to `true` to re-enable the trim.
+- **Tests:** Trim tests opt in explicitly; added a regression that the default does not trim.
+
 ## 0.8.85 — 2026-10-05
 - **Fix: Passive Solar no longer flaps every ~5 minutes** — activation/deactivation reacted to a single measurement, so the 0W gap changed the grid flow and switched itself off again, causing a schedule write storm to the SAJ cloud. Added hysteresis: export must hold `entry_hold_seconds` (default 300) to activate, import/low solar must hold `exit_hold_seconds` (default 180) to deactivate, and the mode stays on for at least `min_active_seconds` (default 600).
 - **Fix: Passive Solar gap used UTC** — the gap slots were sent in UTC while the inverter and all other periods use local time, so the 0W gap landed in the past. It now uses local time.
