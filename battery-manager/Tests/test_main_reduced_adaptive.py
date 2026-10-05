@@ -3411,6 +3411,7 @@ def test_zero_power_adaptive_placeholder_respects_sell_buffer(
 )
 def test_active_solar_aware_charge_window_is_trimmed_to_live_solar(monkeypatch, solar, load, expected_power):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["solar_aware_charging"]["live_trim_enabled"] = True
     now = datetime.now(timezone.utc)
     window = {
         "start": (now - timedelta(minutes=15)).isoformat(),
@@ -3467,3 +3468,8 @@ def test_active_solar_aware_charge_window_is_trimmed_to_live_solar(monkeypatch, 
     assert published
     assert published[-1]["charge"][0]["power"] == expected_power
     assert state.schedule["charge"][0]["power"] == 3252
+
+
+# Live trim is opt-in: by default the planned charge power is kept regardless of live solar.
+def test_live_solar_charge_trim_is_disabled_by_default():
+    assert bm_main.DEFAULT_CONFIG["solar_aware_charging"]["live_trim_enabled"] is False

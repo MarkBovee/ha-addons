@@ -115,7 +115,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "forecast_safety_factor": 0.8,
         "min_charge_power": 500,
-        "live_trim_enabled": True,
+        "live_trim_enabled": False,
         "live_trim_buffer_w": 1000,
         "live_trim_step_w": 1000,
     },
@@ -1542,7 +1542,7 @@ def _build_live_trimmed_charge_schedule(
     """
 
     solar_cfg = config.get("solar_aware_charging", {})
-    if not solar_cfg.get("live_trim_enabled", True):
+    if not solar_cfg.get("live_trim_enabled", False):
         return None
     if not active_charge_period.get("solar_aware") or soc is None or solar_power is None or house_load is None:
         return None
