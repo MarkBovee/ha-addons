@@ -769,6 +769,7 @@ def test_saturated_sell_buffer_truncates_sales_at_configured_safety_floor():
 # Schedule the affordable portion of a profitable sell when the buffer target saturates at 100%.
 def test_generate_schedule_allows_profitable_sell_when_saturated_buffer_equals_full_soc(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = True
     config["negative_price_charging"]["enabled"] = False
@@ -828,6 +829,7 @@ def test_generate_schedule_allows_profitable_sell_when_saturated_buffer_equals_f
 # Keep publish-time sell power ranks aligned with energy-feasibility calculations.
 def test_generate_schedule_preserves_price_ranks_after_chronological_filtering(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = False
     config["negative_price_charging"]["enabled"] = False
@@ -1007,6 +1009,7 @@ def test_generate_schedule_uses_exact_top_discharge_hours_when_soc_supports_them
 # Allow a profitable sell down to the configured reserve when precharge is costly.
 def test_generate_schedule_limits_sell_to_safety_floor_when_precharge_is_too_expensive(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = False
     config["negative_price_charging"]["enabled"] = False
@@ -1075,6 +1078,7 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     expect_sell,
 ):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = True
     config["negative_price_charging"]["enabled"] = False
@@ -1138,6 +1142,7 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
 @pytest.mark.parametrize("max_charge_periods", [1, 3])
 def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_charge_periods):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = False
     config["negative_price_charging"]["enabled"] = False
@@ -1203,6 +1208,7 @@ def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_
 # Prefer the adjacent main charge over a later negative slot when only one charge slot exists.
 def test_single_charge_slot_coalesces_precharge_with_main_charge(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = True
     config["negative_price_charging"]["enabled"] = True
@@ -1261,6 +1267,7 @@ def test_single_charge_slot_coalesces_precharge_with_main_charge(monkeypatch):
 # Keep new live sell periods paused when a rolling schedule is regenerated.
 def test_generate_schedule_preserves_active_pause(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = False
     config["negative_price_charging"]["enabled"] = False

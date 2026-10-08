@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import math
 from typing import Iterable, List, Optional, Sequence, Set, Tuple, Union
 
@@ -38,7 +38,12 @@ def _to_price_points(prices: Sequence[Union[float, int, dict]]) -> List[PricePoi
 def _select_top(points: Iterable[PricePoint], top_x: int, reverse: bool) -> List[PricePoint]:
     if top_x <= 0:
         return []
-    sorted_points = sorted(points, key=lambda p: (p.price, p.index), reverse=reverse)
+    # Equal prices resolve to the earliest slot for both directions so that ties
+    # form contiguous windows instead of drifting to the end of the day.
+    if reverse:
+        sorted_points = sorted(points, key=lambda p: (-p.price, p.index))
+    else:
+        sorted_points = sorted(points, key=lambda p: (p.price, p.index))
     return sorted_points[: min(top_x, len(sorted_points))]
 
 
@@ -104,8 +109,13 @@ def find_profitable_discharge_starts(
     export_curve: Sequence[dict],
     top_x_discharge: int,
     min_profit: float,
+    cost_basis: Optional[float] = None,
 ) -> Set[str]:
-    """Return exact export-curve start timestamps selected for profitable discharge."""
+    """Return exact export-curve start timestamps selected for profitable discharge.
+
+    ``cost_basis`` replaces the day's cheapest import price as the energy cost
+    that ``min_profit`` is added to (e.g. the forgone export price of PV energy).
+    """
 
     import_points = _to_price_points(import_curve)
     export_points = _to_price_points(export_curve)
@@ -113,7 +123,8 @@ def find_profitable_discharge_starts(
     if not import_points or not export_points or top_x_discharge <= 0:
         return set()
 
-    min_profitable_price = min(point.price for point in import_points) + float(min_profit)
+    basis = cost_basis if cost_basis is not None else min(point.price for point in import_points)
+    min_profitable_price = basis + float(min_profit)
     selected = _select_top(export_points, top_x=top_x_discharge, reverse=True)
 
     starts: Set[str] = set()
@@ -134,8 +145,16 @@ def calculate_price_ranges(
     top_x_charge: int,
     top_x_discharge: int,
     min_profit: float,
+    cost_basis: Optional[float] = None,
+    discharge_export_curve: Optional[Sequence[dict]] = None,
 ) -> Tuple[Optional[PriceRange], Optional[PriceRange], Optional[PriceRange]]:
-    """Calculate load, discharge, and adaptive ranges."""
+    """Calculate load, discharge, and adaptive ranges.
+
+    ``cost_basis`` replaces the day's cheapest import price in the profit margin.
+    ``discharge_export_curve`` restricts the quarters eligible for the discharge
+    band (e.g. only quarters after the charge window); the load band and the
+    default export curve are unaffected.
+    """
 
     import_points = _to_price_points(import_curve)
     export_points = _to_price_points(export_curve)
@@ -143,18 +162,26 @@ def calculate_price_ranges(
     if not import_points:
         return None, None, None
 
+    discharge_points = (
+        export_points if discharge_export_curve is None else _to_price_points(discharge_export_curve)
+    )
     lowest_periods = _select_top(import_points, top_x=top_x_charge, reverse=False)
-    highest_periods = _select_top(export_points, top_x=top_x_discharge, reverse=True)
+    highest_periods = _select_top(discharge_points, top_x=top_x_discharge, reverse=True)
 
-    if not lowest_periods or not highest_periods:
+    if not lowest_periods:
         return None, None, None
 
     lowest_prices = [p.price for p in lowest_periods]
-    highest_prices = [p.price for p in highest_periods]
-
     load_range = PriceRange(min_price=min(lowest_prices), max_price=max(lowest_prices))
 
-    min_import_price = min(p.price for p in import_points)
+    if not highest_periods:
+        if discharge_export_curve is None:
+            return None, None, None
+        return load_range, None, None
+
+    highest_prices = [p.price for p in highest_periods]
+
+    min_import_price = cost_basis if cost_basis is not None else min(p.price for p in import_points)
     discharge_min = max(min(highest_prices), min_import_price + min_profit)
     discharge_max = max(highest_prices)
     
@@ -334,3 +361,83 @@ def find_top_x_discharge_periods(prices: Sequence[Union[float, int, dict]], top_
 
     points = _to_price_points(prices)
     return _select_top(points, top_x=top_x, reverse=True)
+
+
+def _entry_bounds(entry: dict, interval_minutes: int) -> Optional[Tuple[datetime, datetime]]:
+    start = entry.get("start")
+    if not isinstance(start, str) or not start:
+        return None
+    try:
+        start_dt = _ensure_aware(isoparse(start))
+        end = entry.get("end")
+        end_dt = _ensure_aware(isoparse(end)) if end else start_dt + timedelta(minutes=interval_minutes)
+    except Exception:
+        return None
+    return start_dt, end_dt
+
+
+def find_main_charge_window(
+    curve: Sequence[dict],
+    exact_starts: Set[str],
+    charge_starts: Set[str],
+    interval_minutes: int,
+) -> Optional[Tuple[datetime, datetime]]:
+    """Return the main charge window of a day as (start, end).
+
+    Consecutive ``charge_starts`` slots form windows; the main window is the one
+    holding the most exact top-X slots (earliest wins a tie). Spread-only windows
+    elsewhere in the day (e.g. a cheap late-night block) never become the main
+    window, so they cannot push "after the charge window" into the night.
+    """
+
+    if not curve or not exact_starts:
+        return None
+
+    slots: List[Tuple[datetime, datetime, bool]] = []
+    for entry in curve:
+        start = entry.get("start")
+        if start not in charge_starts:
+            continue
+        bounds = _entry_bounds(entry, interval_minutes)
+        if bounds is not None:
+            slots.append((bounds[0], bounds[1], start in exact_starts))
+    if not slots:
+        return None
+    slots.sort(key=lambda item: item[0])
+
+    windows: List[List[object]] = []  # [start, end, exact_count]
+    for start_dt, end_dt, is_exact in slots:
+        if windows and start_dt <= windows[-1][1]:
+            windows[-1][1] = max(windows[-1][1], end_dt)
+            windows[-1][2] += 1 if is_exact else 0
+        else:
+            windows.append([start_dt, end_dt, 1 if is_exact else 0])
+
+    best = max(windows, key=lambda w: (w[2], -w[0].timestamp()))
+    if best[2] <= 0:
+        return None
+    return best[0], best[1]
+
+
+def filter_curve_from(curve: Sequence[dict], not_before: datetime) -> List[dict]:
+    """Return curve entries that start at or after ``not_before``."""
+
+    kept: List[dict] = []
+    for entry in curve:
+        bounds = _entry_bounds(entry, 15)
+        if bounds is not None and bounds[0] >= not_before:
+            kept.append(entry)
+    return kept
+
+
+def min_price_between(curve: Sequence[dict], start: datetime, end: datetime) -> Optional[float]:
+    """Return the lowest price among entries starting inside [start, end)."""
+
+    prices: List[float] = []
+    for entry in curve:
+        bounds = _entry_bounds(entry, 15)
+        if bounds is None or entry.get("price") is None:
+            continue
+        if start <= bounds[0] < end:
+            prices.append(float(entry["price"]))
+    return min(prices) if prices else None

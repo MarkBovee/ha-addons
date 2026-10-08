@@ -7,7 +7,7 @@ import logging
 import math
 import os
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -19,7 +19,14 @@ from shared.config_loader import get_run_once_mode
 from shared.mqtt_setup import setup_mqtt_client
 from shared.ha_mqtt_discovery import MqttDiscovery
 
+from .decision_trace import fit_attributes, get_trace_path, summarize, write_trace
 from .ev_charger_monitor import should_pause_discharge
+from .margin import (
+    DEFAULT_ROUND_TRIP_EFFICIENCY,
+    evaluate_grid_charge,
+    window_has_exact_slot,
+)
+from .plan_stability import ChargePowerLock, apply_charge_power_locks, diff_plan_powers
 from .power_calculator import calculate_rank_scaled_power
 from .price_analyzer import (
     calculate_discharge_top_x_count,
@@ -28,10 +35,13 @@ from .price_analyzer import (
     calculate_top_x_count,
     detect_interval_minutes,
     expand_charge_starts_within_price_delta,
+    filter_curve_from,
+    find_main_charge_window,
     find_profitable_discharge_starts,
     find_top_x_charge_starts,
     get_current_period_rank,
     get_current_price_entry,
+    min_price_between,
 )
 from .solar_monitor import SolarMonitor
 from .solar_charge_optimizer import (
@@ -48,6 +58,7 @@ from .temperature_advisor import get_discharge_hours
 from .status_reporter import (
     ENTITY_CHARGE_SCHEDULE,
     ENTITY_CURRENT_ACTION,
+    ENTITY_DECISION,
     ENTITY_DISCHARGE_SCHEDULE,
     ENTITY_EFFECTIVE_DISCHARGE_POWER,
     ENTITY_FORECAST,
@@ -141,6 +152,9 @@ DEFAULT_CONFIG = {
         "charge_spread_enabled": True,
         "charge_spread_max_price_delta": 0.02,
         "min_profit_threshold": 0.1,
+        "round_trip_efficiency": DEFAULT_ROUND_TRIP_EFFICIENCY,
+        "margin_basis": "day_min_import",
+        "discharge_after_charge_only": True,
         "overnight_wait_threshold": 0.02,
         "sell_wait_for_better_morning_enabled": True,
         "sell_wait_horizon_hours": 20,
@@ -164,6 +178,9 @@ DEFAULT_CONFIG = {
         "entity_id": "sensor.charge_amps_monitor_charger_current_power",
     },
     "negative_price_charging": {
+        "enabled": True,
+    },
+    "decision_trace": {
         "enabled": True,
     },
     "mqtt_host": "core-mosquitto",
@@ -206,6 +223,17 @@ class RuntimeState:
     reduced_override_active: bool = False
     max_soc_stabilizer_until: Optional[datetime] = None
     max_soc_stabilizer_restore_pending: bool = False
+    last_published_api: Optional[Dict[str, Any]] = None
+    last_publish_at: Optional[datetime] = None
+    charge_power_locks: Dict[str, ChargePowerLock] = field(default_factory=dict)
+    last_plan_inputs: Optional[Dict[str, Any]] = None
+    pv_charge_export_min: Dict[str, float] = field(default_factory=dict)
+    last_decision: Optional[Dict[str, Any]] = None
+
+
+def _utcnow() -> datetime:
+    """Return the current UTC time (single seam so plans can be replayed in tests)."""
+    return datetime.now(timezone.utc)
 
 
 def _load_config() -> Dict[str, Any]:
@@ -550,6 +578,32 @@ def _get_schedule_slot_limits(ha_api: HomeAssistantApi, config: Dict[str, Any]) 
     return max(1, max_charge), max(1, max_discharge)
 
 
+# Adaptive discharge power steps smaller than this are noise, not a plan change.
+ADAPTIVE_POWER_STEP_W = 100
+# Re-send an unchanged schedule this often in case battery-api lost it (restart).
+PUBLISH_HEARTBEAT_SECONDS = 3600
+
+
+def _schedules_equivalent(
+    previous: Dict[str, Any],
+    current: Dict[str, Any],
+    adaptive_starts: set[str],
+) -> bool:
+    """True when two API payloads only differ by adaptive power steps below 100 W."""
+    for key in ("charge", "discharge"):
+        old_periods = previous.get(key, [])
+        new_periods = current.get(key, [])
+        if len(old_periods) != len(new_periods):
+            return False
+        for old, new in zip(old_periods, new_periods):
+            if old["start"] != new["start"] or old["duration"] != new["duration"]:
+                return False
+            tolerance = ADAPTIVE_POWER_STEP_W if key == "discharge" and old["start"] in adaptive_starts else 1
+            if abs(int(old["power"]) - int(new["power"])) >= tolerance:
+                return False
+    return True
+
+
 def _publish_schedule(
     mqtt_client: Optional[MqttDiscovery],
     schedule: Dict[str, Any],
@@ -559,17 +613,33 @@ def _publish_schedule(
 ) -> bool:
     """Publish schedule to battery-api via MQTT with retry on disconnect.
 
-    Skips publishing if the payload is identical to the last published one,
-    unless *force* is True (used for fresh schedule generation).
+    Skips publishing when the published periods have not changed (adaptive
+    power steps below 100 W do not count) unless *force* is True or the last
+    publish is older than PUBLISH_HEARTBEAT_SECONDS.
     Returns True if published (or skipped as duplicate), False on error.
     """
     api_schedule = _format_schedule_for_api(schedule)
     payload_json = json.dumps(api_schedule, sort_keys=True, ensure_ascii=False)
 
-    # Dedup: skip if payload unchanged since last publish
-    if not force and state and state.last_published_payload == payload_json:
-        logger.debug("📡 Schedule unchanged, skipping publish")
-        return True
+    # Dedup: skip if the periods are unchanged since the last successful publish
+    if not force and state:
+        heartbeat_due = (
+            state.last_publish_at is not None
+            and (_utcnow() - state.last_publish_at).total_seconds() >= PUBLISH_HEARTBEAT_SECONDS
+        )
+        adaptive_starts = {
+            period["start"]
+            for period in _format_schedule_for_api({
+                "discharge": [p for p in schedule.get("discharge", []) if p.get("window_type") == "adaptive"]
+            })["discharge"]
+        }
+        unchanged = state.last_published_payload == payload_json or (
+            state.last_published_api is not None
+            and _schedules_equivalent(state.last_published_api, api_schedule, adaptive_starts)
+        )
+        if unchanged and not heartbeat_due:
+            logger.debug("📡 Schedule unchanged, skipping publish")
+            return True
 
     if dry_run:
         logger.info("📝 [Dry-Run] Schedule generated (not published)")
@@ -577,6 +647,8 @@ def _publish_schedule(
         if state:
             state.published_schedule = deepcopy(schedule)
             state.last_published_payload = payload_json
+            state.last_published_api = deepcopy(api_schedule)
+            state.last_publish_at = _utcnow()
         return True
 
     if mqtt_client is None:
@@ -622,6 +694,8 @@ def _publish_schedule(
                 if state:
                     state.published_schedule = deepcopy(schedule)
                     state.last_published_payload = payload_json
+                    state.last_published_api = deepcopy(api_schedule)
+                    state.last_publish_at = _utcnow()
                 return True
             logger.warning("⚠️ MQTT publish failed (attempt %d/%d)", attempt, max_attempts)
         else:
@@ -1110,10 +1184,35 @@ def _filter_supported_discharge_windows(
     not_before: datetime,
     top_x_discharge_count: int,
     min_scaled_power: int,
+    trace: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Keep only future discharge windows that current/planned energy can support."""
+    """Keep only future discharge windows that projected energy can support.
+
+    Energy is projected per window start: current SOC above the reserve floor,
+    plus every charge period (grid power and forecast PV share) that ends before
+    the window starts, minus earlier scheduled discharge. The planner already
+    sizes grid + PV energy to the charge deficit, so no extra cap is applied.
+    When ``trace`` is given, one record per window (decision, reason, needed and
+    available kWh, reserve floor, projected SOC) is appended to it.
+    """
+
+    def _record(window: Dict[str, Any], decision: str, reason: str, **extra: Any) -> None:
+        if trace is None:
+            return
+        start = window.get("start")
+        end = window.get("end")
+        trace.append({
+            "start": start.astimezone().isoformat() if isinstance(start, datetime) else None,
+            "end": end.astimezone().isoformat() if isinstance(end, datetime) else None,
+            "avg_price": round(float(window.get("avg_price", 0.0)), 4),
+            "decision": decision,
+            "reason": reason,
+            **extra,
+        })
 
     if soc is None or not discharge_windows:
+        for window in discharge_windows:
+            _record(window, "kept", "SOC unknown; no feasibility pruning")
         return discharge_windows
 
     battery_capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
@@ -1127,12 +1226,18 @@ def _filter_supported_discharge_windows(
 
     base_available_energy_kwh = max(0.0, (float(soc) - reserve_floor_soc) / 100.0 * battery_capacity_kwh)
     available_energy_kwh = base_available_energy_kwh
-    charge_periods: List[tuple[datetime, datetime, int]] = []
+    # Per charge period: (start, end, planned grid power W, forecast PV share kWh).
+    charge_periods: List[tuple[datetime, datetime, int, float]] = []
     for period in charge_schedule:
         bounds = _parse_schedule_period_bounds(period)
         if bounds is None:
             continue
-        charge_periods.append((bounds[0], bounds[1], int(period.get("power", 0))))
+        charge_periods.append((
+            bounds[0],
+            bounds[1],
+            int(period.get("power", 0)),
+            float(period.get("forecast_solar_kwh") or 0.0),
+        ))
 
     charge_periods.sort(key=lambda item: item[0])
     charge_index = 0
@@ -1158,12 +1263,13 @@ def _filter_supported_discharge_windows(
         effective_start = max(start_dt, not_before)
         duration_minutes = int((end_dt - effective_start).total_seconds() / 60)
         if duration_minutes <= 0:
+            _record(window, "dropped", "window already over", rank=rank)
             continue
 
         while charge_index < len(charge_periods) and charge_periods[charge_index][1] <= effective_start:
-            charge_start, charge_end, charge_power = charge_periods[charge_index]
+            charge_start, charge_end, charge_power, charge_solar_kwh = charge_periods[charge_index]
             charge_duration = int((charge_end - charge_start).total_seconds() / 60)
-            charge_energy_kwh = _period_energy_kwh(charge_power, charge_duration)
+            charge_energy_kwh = _period_energy_kwh(charge_power, charge_duration) + charge_solar_kwh
             available_energy_kwh += charge_energy_kwh
             charged_before_start_kwh += charge_energy_kwh
             charge_index += 1
@@ -1177,10 +1283,22 @@ def _filter_supported_discharge_windows(
             min_scaled_power,
         )
         required_energy_kwh = _period_energy_kwh(planned_power, duration_minutes)
+        projected_soc = reserve_floor_soc + available_before_window_kwh / battery_capacity_kwh * 100.0
+        energy_fields = {
+            "rank": rank,
+            "planned_power": int(planned_power),
+            "needed_kwh": round(required_energy_kwh, 2),
+            "available_kwh": round(available_before_window_kwh, 2),
+            "reserve_floor_soc": reserve_floor_soc,
+            "projected_soc_at_start": round(min(projected_soc, 100.0), 1),
+            "scheduled_charge_kwh": round(charged_before_start_kwh, 2),
+            "earlier_discharge_kwh": round(reserved_before_start_kwh, 2),
+        }
         if required_energy_kwh <= available_energy_kwh + 1e-6:
             available_energy_kwh = max(0.0, available_energy_kwh - required_energy_kwh)
             reserved_before_start_kwh += required_energy_kwh
             feasible_windows.append(window)
+            _record(window, "kept", "enough projected energy", **energy_fields)
             continue
 
         supported_duration_minutes = int((available_energy_kwh * 1000.0 / float(planned_power)) * 60.0 + 1e-9)
@@ -1207,6 +1325,13 @@ def _filter_supported_discharge_windows(
             available_energy_kwh = max(0.0, available_energy_kwh - partial_energy_kwh)
             reserved_before_start_kwh += partial_energy_kwh
             feasible_windows.append(partial_window)
+            _record(
+                window,
+                "truncated",
+                f"needs {required_energy_kwh:.2f}kWh, projected {available_before_window_kwh:.2f}kWh; cut to {supported_duration_minutes}m",
+                truncated_to_minutes=supported_duration_minutes,
+                **energy_fields,
+            )
             continue
 
         # Not enough energy for a meaningful partial window. Keep the window
@@ -1226,6 +1351,7 @@ def _filter_supported_discharge_windows(
                 required_energy_kwh,
                 available_before_window_kwh,
             )
+            _record(window, "dropped", "battery effectively empty for this window", **energy_fields)
             continue
 
         # Reserve only what is actually available so later windows are not
@@ -1244,6 +1370,7 @@ def _filter_supported_discharge_windows(
         available_energy_kwh = max(0.0, available_energy_kwh - actual_energy_kwh)
         reserved_before_start_kwh += actual_energy_kwh
         feasible_windows.append(window)
+        _record(window, "kept_capped", "short on energy; runtime caps discharge power", **energy_fields)
 
     return feasible_windows
 
@@ -1587,6 +1714,288 @@ def _get_active_sell_buffer_soc(state: RuntimeState, now: datetime) -> Optional[
 
 
 
+def _parse_start_set(starts: set[str]) -> set[datetime]:
+    """Parse raw curve start strings into aware datetimes."""
+    parsed: set[datetime] = set()
+    for start in starts:
+        try:
+            value = isoparse(start)
+        except Exception:
+            continue
+        parsed.add(value if value.tzinfo else value.replace(tzinfo=timezone.utc))
+    return parsed
+
+
+def _apply_grid_charge_margin_gate(
+    config: Dict[str, Any],
+    upcoming: Dict[str, List[Dict[str, Any]]],
+    exact_start_dts: set[datetime],
+    now: datetime,
+    records: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Drop charge windows outside the cheapest top-X slots that earn too little margin.
+
+    A window made only of spread/other slots is kept only when
+    ``sell * round_trip_efficiency - charge_price >= grid_charge_min_margin`` for
+    the sell windows following it. Windows with a strict top-X slot and
+    negative-price windows are never gated.
+    """
+
+    heur = config["heuristics"]
+    efficiency = float(heur.get("round_trip_efficiency", DEFAULT_ROUND_TRIP_EFFICIENCY))
+    min_margin = heur.get("grid_charge_min_margin")
+    min_margin = float(heur.get("min_profit_threshold", 0.1) if min_margin is None else min_margin)
+
+    kept: List[Dict[str, Any]] = []
+    for window in upcoming.get("charge", []):
+        price = float(window.get("avg_price", 0.0))
+        if price < 0 or window["end"] <= now or window_has_exact_slot(window, exact_start_dts):
+            kept.append(window)
+            continue
+        verdict = evaluate_grid_charge(
+            charge_price=price,
+            charge_end=window["end"],
+            discharge_windows=upcoming.get("discharge", []),
+            charge_windows=upcoming.get("charge", []),
+            efficiency=efficiency,
+            min_margin=min_margin,
+        )
+        records.append({
+            "kind": "charge_window",
+            "start": window["start"].astimezone().isoformat(),
+            "end": window["end"].astimezone().isoformat(),
+            "charge_price": round(price, 4),
+            **verdict,
+        })
+        if verdict["allowed"]:
+            kept.append(window)
+        else:
+            logger.info(
+                "🚫 Skipping grid charge %s-%s @€%.3f: %s",
+                window["start"].astimezone().strftime("%H:%M"),
+                window["end"].astimezone().strftime("%H:%M"),
+                price,
+                verdict["reason"],
+            )
+    return kept
+
+
+@dataclass
+class DayPlan:
+    """Per-day price ranges and charge/sell slot selection."""
+
+    load_range: Optional[PriceRange]
+    discharge_range: Optional[PriceRange]
+    adaptive_range: Optional[PriceRange]
+    discharge_slot_starts: set
+    exact_charge_starts: set
+    charge_slot_starts: set
+    charge_spread_active: bool
+    charge_window: Optional[tuple[datetime, datetime]]
+    sell_from: Optional[datetime]
+    cost_basis: Optional[float]
+    day_min_import: Optional[float]
+    basis_source: str
+
+
+def _resolve_cost_basis(
+    config: Dict[str, Any],
+    import_day: List[Dict[str, Any]],
+    export_day: List[Dict[str, Any]],
+    charge_window: Optional[tuple[datetime, datetime]],
+    state: Optional["RuntimeState"],
+    day_key: Optional[str],
+) -> tuple[Optional[float], Optional[float], str]:
+    """Return (cost basis override, day min import, source) for the profit margin.
+
+    ``day_min_import`` keeps the historic behaviour (override None). With
+    ``solar_export`` the basis is the lowest export price in the planned PV
+    charge window or in the quarters the battery actually charged from PV,
+    whichever is lower: PV energy costs the export price it displaces.
+    """
+
+    prices = [float(e["price"]) for e in import_day if e.get("price") is not None]
+    day_min_import = min(prices) if prices else None
+    if config["heuristics"].get("margin_basis", "day_min_import") != "solar_export":
+        return None, day_min_import, "day_min_import"
+
+    candidates: List[float] = []
+    if charge_window is not None:
+        planned = min_price_between(export_day, charge_window[0], charge_window[1])
+        if planned is not None:
+            candidates.append(planned)
+    if state is not None and day_key in state.pv_charge_export_min:
+        candidates.append(state.pv_charge_export_min[day_key])
+    if not candidates:
+        return None, day_min_import, "day_min_import (no PV charge window known)"
+    # A negative export price must not turn the margin into a free pass.
+    return max(0.0, min(candidates)), day_min_import, "solar_export"
+
+
+def _plan_day(
+    config: Dict[str, Any],
+    import_day: List[Dict[str, Any]],
+    export_day: List[Dict[str, Any]],
+    top_x_charge_count: int,
+    top_x_discharge_count: int,
+    interval_minutes: int,
+    state: Optional["RuntimeState"] = None,
+    day_key: Optional[str] = None,
+) -> DayPlan:
+    """Select charge slots, the charge window and profitable sell slots for one day.
+
+    With ``discharge_after_charge_only`` the top-X sell quarters are picked only
+    from quarters after the end of the day's main charge window; quarters before
+    it never use the sell budget (and so never drive pre-charging).
+    """
+
+    heur = config["heuristics"]
+    min_profit = heur.get("min_profit_threshold", 0.1)
+    exact = find_top_x_charge_starts(import_day, top_x_charge_count)
+    slots = set(exact)
+    if bool(heur.get("charge_spread_enabled", True)):
+        slots = expand_charge_starts_within_price_delta(
+            import_day,
+            slots,
+            float(heur.get("charge_spread_max_price_delta", 0.02) or 0.0),
+        )
+    charge_window = find_main_charge_window(import_day, exact, slots, interval_minutes)
+    sell_from = (
+        charge_window[1]
+        if bool(heur.get("discharge_after_charge_only", True)) and charge_window is not None
+        else None
+    )
+    discharge_export = filter_curve_from(export_day, sell_from) if sell_from is not None else None
+    basis, day_min_import, source = _resolve_cost_basis(
+        config, import_day, export_day, charge_window, state, day_key
+    )
+    load_range, discharge_range, adaptive_range = calculate_price_ranges(
+        import_day,
+        export_day,
+        top_x_charge_count,
+        top_x_discharge_count,
+        min_profit,
+        cost_basis=basis,
+        discharge_export_curve=discharge_export,
+    )
+    discharge_starts = find_profitable_discharge_starts(
+        import_day,
+        export_day if discharge_export is None else discharge_export,
+        top_x_discharge_count,
+        min_profit,
+        cost_basis=basis,
+    )
+    return DayPlan(
+        load_range=load_range,
+        discharge_range=discharge_range,
+        adaptive_range=adaptive_range,
+        discharge_slot_starts=discharge_starts,
+        exact_charge_starts=exact,
+        charge_slot_starts=slots,
+        charge_spread_active=len(slots) > len(exact),
+        charge_window=charge_window,
+        sell_from=sell_from,
+        cost_basis=basis,
+        day_min_import=day_min_import,
+        basis_source=source,
+    )
+
+
+def _local_period(period: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact, local-time view of a schedule period for the decision trace."""
+    start = period.get("start")
+    try:
+        start_text = isoparse(start).astimezone().strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        start_text = str(start)
+    return {
+        "start": start_text,
+        "duration": period.get("duration"),
+        "power": period.get("power"),
+        "window_type": period.get("window_type"),
+        "price": period.get("price"),
+    }
+
+
+def _explain_power_change(previous: Optional[Dict[str, Any]], current: Dict[str, Any], lock_events: List[Dict[str, Any]]) -> str:
+    """Name the inputs that moved between two plans (for the >25% power-change log)."""
+    reasons: List[str] = []
+    previous = previous or {}
+    prev_soc, soc = previous.get("soc"), current.get("soc")
+    if prev_soc is not None and soc is not None and abs(soc - prev_soc) >= 1.0:
+        reasons.append(f"SoC {prev_soc:.1f}->{soc:.1f}%")
+    for key, label in (
+        ("remaining_solar_kwh", "remaining solar"),
+        ("deficit_kwh", "charge deficit"),
+        ("grid_target_kwh", "grid target"),
+    ):
+        before, after = previous.get(key), current.get(key)
+        if before is None or after is None:
+            if before != after:
+                reasons.append(f"{label} {before}->{after}")
+        elif abs(after - before) > 0.1 * max(abs(before), 1.0):
+            reasons.append(f"{label} {before:.2f}->{after:.2f}kWh")
+    if any(event.get("action") == "recomputed" for event in lock_events):
+        reasons.append("charge power lock released")
+    return "; ".join(reasons) or "no tracked input moved (price ranking/window set changed)"
+
+
+def _record_decision(
+    config: Dict[str, Any],
+    mqtt_client: Any,
+    state: Optional["RuntimeState"],
+    trace: Dict[str, Any],
+    schedule: Dict[str, Any],
+    previous_schedule: Optional[Dict[str, Any]],
+    interval_start: datetime,
+    interval_minutes: int,
+    plan_inputs: Dict[str, Any],
+    precharge_trace: Dict[str, Any],
+    published: bool,
+    lock_events: List[Dict[str, Any]],
+) -> None:
+    """Finish the decision record, log it, write it to the JSONL file and the sensor."""
+
+    trace["precharge"] = precharge_trace
+    trace["final"] = {
+        "charge": [_local_period(p) for p in schedule.get("charge", [])],
+        "discharge": [_local_period(p) for p in schedule.get("discharge", [])],
+        "published_to_battery_api": published,
+    }
+
+    changes = diff_plan_powers(previous_schedule, schedule, interval_start, interval_minutes)
+    previous_inputs = state.last_plan_inputs if state is not None else None
+    trace["power_changes"] = changes
+    if changes:
+        reason = _explain_power_change(previous_inputs, plan_inputs, lock_events)
+        for change in changes:
+            change["reason"] = reason
+            logger.info(
+                "📉 Planned %s power changed >25%% for unchanged quarter %s (x%d): %dW -> %dW | %s",
+                change["kind"],
+                isoparse(change["from"]).astimezone().strftime("%H:%M"),
+                change["quarters"],
+                change["old_power"],
+                change["new_power"],
+                reason,
+            )
+    if state is not None:
+        state.last_plan_inputs = plan_inputs
+        state.last_decision = trace
+
+    # Diagnostics may carry datetimes; keep the record strictly JSON for MQTT and the file.
+    trace = json.loads(json.dumps(trace, default=str))
+    if state is not None:
+        state.last_decision = trace
+
+    summary = summarize(trace)
+    logger.info(summary)
+    is_dry_run = config.get("dry_run", False)
+    update_entity(mqtt_client, ENTITY_DECISION, summary[:255], fit_attributes(trace), dry_run=is_dry_run)
+    if config.get("decision_trace", {}).get("enabled", True) and not os.getenv("DECISION_TRACE_DISABLED"):
+        write_trace(get_trace_path(config), trace)
+
+
 # Build and publish the full rolling plan, retaining an active safety pause.
 def generate_schedule(
     config: Dict[str, Any],
@@ -1628,9 +2037,14 @@ def generate_schedule(
 
     max_charge_periods, max_discharge_periods = _get_schedule_slot_limits(ha_api, config)
 
-    now = datetime.now(timezone.utc)
+    now = _utcnow()
     interval_minutes = detect_interval_minutes(import_curve)
     interval_start, interval_end = _interval_window(now, interval_minutes)
+    trace: Dict[str, Any] = {
+        "timestamp_utc": now.isoformat(),
+        "timestamp_local": now.astimezone().isoformat(),
+    }
+    previous_schedule = deepcopy(state.schedule) if state is not None else None
 
     top_x_charge_hours = config["heuristics"]["top_x_charge_hours"]
     configured_discharge_hours = float(config["heuristics"]["top_x_discharge_hours"])
@@ -1638,6 +2052,8 @@ def generate_schedule(
     min_profit = config["heuristics"].get("min_profit_threshold", 0.1)
     overnight_threshold = config["heuristics"].get("overnight_wait_threshold", 0.02)
 
+    temperature: Optional[float] = None
+    temperature_discharge_hours: Optional[float] = None
     if config["temperature_based_discharge"]["enabled"]:
         temperature_entity = config["entities"]["temperature_entity"]
         temperature = _get_sensor_float(ha_api, temperature_entity)
@@ -1658,6 +2074,14 @@ def generate_schedule(
 
     top_x_charge_count = calculate_top_x_count(top_x_charge_hours, interval_minutes)
     top_x_discharge_count = calculate_discharge_top_x_count(top_x_discharge_hours, interval_minutes)
+    trace["temperature"] = temperature
+    trace["discharge_hours"] = {
+        "configured": configured_discharge_hours,
+        "temperature_limit": temperature_discharge_hours,
+        "effective": top_x_discharge_hours,
+        "top_x_discharge_quarters": top_x_discharge_count,
+        "top_x_charge_quarters": top_x_charge_count,
+    }
 
     today_import, tomorrow_import = _split_curve_by_date(import_curve, now)
     today_export, tomorrow_export_curve = _split_curve_by_date(export_curve, now)
@@ -1666,31 +2090,27 @@ def generate_schedule(
     range_import_curve = today_import if today_import else import_curve
     range_export_curve = today_export if today_export else export_curve
 
-    load_range, discharge_range, adaptive_range = calculate_price_ranges(
+    local_today = now.astimezone().date()
+    today_plan = _plan_day(
+        config,
         range_import_curve,
         range_export_curve,
         top_x_charge_count,
         top_x_discharge_count,
-        min_profit,
+        interval_minutes,
+        state,
+        local_today.isoformat(),
     )
-    today_discharge_slot_starts = find_profitable_discharge_starts(
-        range_import_curve,
-        range_export_curve,
-        top_x_discharge_count,
-        min_profit,
-    )
-    today_exact_charge_slot_starts = find_top_x_charge_starts(range_import_curve, top_x_charge_count)
-    today_charge_slot_starts = set(today_exact_charge_slot_starts)
+    load_range = today_plan.load_range
+    discharge_range = today_plan.discharge_range
+    adaptive_range = today_plan.adaptive_range
+    today_discharge_slot_starts = today_plan.discharge_slot_starts
+    today_exact_charge_slot_starts = today_plan.exact_charge_starts
+    today_charge_slot_starts = today_plan.charge_slot_starts
     charge_spread_cfg = config.get("heuristics", {})
     charge_spread_enabled = bool(charge_spread_cfg.get("charge_spread_enabled", True))
     charge_spread_max_price_delta = float(charge_spread_cfg.get("charge_spread_max_price_delta", 0.02) or 0.0)
-    if charge_spread_enabled:
-        today_charge_slot_starts = expand_charge_starts_within_price_delta(
-            range_import_curve,
-            today_charge_slot_starts,
-            charge_spread_max_price_delta,
-        )
-    today_charge_spread_active = len(today_charge_slot_starts) > len(today_exact_charge_slot_starts)
+    today_charge_spread_active = today_plan.charge_spread_active
     # If adaptive mode is disabled via config, force adaptive_range to None
     # so we don't display it or schedule adaptive windows
     adaptive_enabled = config.get("adaptive", {}).get("enabled", True)
@@ -1711,8 +2131,15 @@ def generate_schedule(
     import_price = float(current_import_entry.get("price", 0.0))
     export_price = float(current_export_entry.get("price", import_price))
     adaptive_price_threshold = config["heuristics"].get("adaptive_price_threshold")
+    # Before the charge window ends no sell window exists, so the discharge
+    # band must not classify the current interval as "discharge".
+    discharge_range_now = (
+        discharge_range
+        if today_plan.sell_from is None or now >= today_plan.sell_from
+        else None
+    )
     price_range = _determine_price_range(
-        import_price, export_price, load_range, discharge_range, adaptive_price_threshold,
+        import_price, export_price, load_range, discharge_range_now, adaptive_price_threshold,
         adaptive_enabled=adaptive_enabled,
     )
 
@@ -1731,6 +2158,28 @@ def generate_schedule(
             soc,
             conservative_soc,
         )
+
+    trace.update({
+        "soc": soc,
+        "import_price": round(import_price, 4),
+        "export_price": round(export_price, 4),
+        "price_range": price_range,
+        "effective_price_range": effective_price_range,
+        "day_min_import": today_plan.day_min_import,
+        "margin_basis": {
+            "mode": config["heuristics"].get("margin_basis", "day_min_import"),
+            "source": today_plan.basis_source,
+            "cost_basis": today_plan.cost_basis if today_plan.cost_basis is not None else today_plan.day_min_import,
+            "min_profit": min_profit,
+        },
+        "charge_window": (
+            [w.astimezone().isoformat() for w in today_plan.charge_window]
+            if today_plan.charge_window
+            else None
+        ),
+        "sell_from": today_plan.sell_from.astimezone().isoformat() if today_plan.sell_from else None,
+        "ranges": _build_range_state(load_range, discharge_range, adaptive_range),
+    })
 
     if state:
         # Detect new prices (e.g. tomorrow's prices arriving ~14:00)
@@ -1765,32 +2214,28 @@ def generate_schedule(
     tomorrow_discharge: Optional[PriceRange] = None
     tomorrow_discharge_slot_starts: Optional[set[str]] = None
     tomorrow_charge_slot_starts: Optional[set[str]] = None
+    tomorrow_exact_charge_slot_starts: set[str] = set()
 
     if tomorrow_import:
         tomorrow_export = tomorrow_import
         if export_curve:
             tomorrow_export = tomorrow_export_curve
-        tomorrow_load, tomorrow_discharge, tomorrow_adaptive = calculate_price_ranges(
+        tomorrow_plan = _plan_day(
+            config,
             tomorrow_import,
             tomorrow_export,
             top_x_charge_count,
             top_x_discharge_count,
-            min_profit,
+            interval_minutes,
+            state,
+            (local_today + timedelta(days=1)).isoformat(),
         )
-        tomorrow_discharge_slot_starts = find_profitable_discharge_starts(
-            tomorrow_import,
-            tomorrow_export,
-            top_x_discharge_count,
-            min_profit,
-        )
-        tomorrow_exact_charge_slot_starts = find_top_x_charge_starts(tomorrow_import, top_x_charge_count)
-        tomorrow_charge_slot_starts = set(tomorrow_exact_charge_slot_starts)
-        if charge_spread_enabled:
-            tomorrow_charge_slot_starts = expand_charge_starts_within_price_delta(
-                tomorrow_import,
-                tomorrow_charge_slot_starts,
-                charge_spread_max_price_delta,
-            )
+        tomorrow_load = tomorrow_plan.load_range
+        tomorrow_discharge = tomorrow_plan.discharge_range
+        tomorrow_adaptive = tomorrow_plan.adaptive_range
+        tomorrow_discharge_slot_starts = tomorrow_plan.discharge_slot_starts
+        tomorrow_exact_charge_slot_starts = tomorrow_plan.exact_charge_starts
+        tomorrow_charge_slot_starts = tomorrow_plan.charge_slot_starts
         forecast_text = build_tomorrow_story(
             tomorrow_load, tomorrow_discharge, tomorrow_adaptive, tomorrow_import,
             adaptive_price_threshold=adaptive_price_threshold,
@@ -1859,11 +2304,32 @@ def generate_schedule(
             f" | details={sell_wait_diagnostics}" if sell_wait_diagnostics else "",
         )
 
+    trace["sell_wait"] = {
+        "active": bool(sell_wait_decision),
+        "wait_until": sell_wait_decision["wait_until"].astimezone().isoformat() if sell_wait_decision else None,
+        "detail": sell_wait_diagnostics or None,
+    }
+
+    margin_gate_records: List[Dict[str, Any]] = []
+    upcoming_windows["charge"] = _apply_grid_charge_margin_gate(
+        config,
+        upcoming_windows,
+        _parse_start_set(today_exact_charge_slot_starts | tomorrow_exact_charge_slot_starts),
+        now,
+        margin_gate_records,
+    )
+    trace["margin_gate"] = margin_gate_records
+
     buffer_required_soc, buffer_discharge_hours, main_charge_start = _calculate_dynamic_sell_buffer_soc(
         upcoming_windows,
         now,
         config,
     )
+    trace["sell_buffer"] = {
+        "required_soc": buffer_required_soc,
+        "discharge_hours_before_main_charge": round(buffer_discharge_hours, 3),
+        "main_charge_start": main_charge_start.astimezone().isoformat() if main_charge_start else None,
+    }
 
     if state:
         state.sell_buffer_required_soc = buffer_required_soc
@@ -1871,6 +2337,7 @@ def generate_schedule(
         state.sell_buffer_valid_until = main_charge_start
 
     precharge_until: Optional[datetime] = None
+    precharge_trace: Dict[str, Any] = {"decision": "none"}
     precharge_price_ceiling: Optional[float] = adaptive_price_threshold
     if precharge_price_ceiling is None and load_range is not None:
         precharge_price_ceiling = load_range.max_price
@@ -1894,6 +2361,10 @@ def generate_schedule(
                 import_price,
                 precharge_price_ceiling,
             )
+            precharge_trace = {
+                "decision": "skipped_price",
+                "reason": f"price {import_price:.3f} above ceiling {precharge_price_ceiling:.3f}",
+            }
         else:
             if (
                 precharge_price_ceiling is not None
@@ -1910,6 +2381,30 @@ def generate_schedule(
             capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
             charge_power_watts = float(config["power"].get("max_charge_power", 8000))
             soc_per_hour_charge = max(0.0, (charge_power_watts / 1000.0) / max(capacity_kwh, 0.1) * 100.0)
+            if not is_below_sell_buffer_floor:
+                driving_windows = [
+                    w for w in upcoming_windows.get("discharge", [])
+                    if w.get("end") and w["end"] > now
+                    and (main_charge_start is None or w["start"] < main_charge_start)
+                ]
+                gate_heur = config["heuristics"]
+                gate_margin = gate_heur.get("grid_charge_min_margin")
+                gate_margin = float(
+                    gate_heur.get("min_profit_threshold", 0.1) if gate_margin is None else gate_margin
+                )
+                verdict = evaluate_grid_charge(
+                    charge_price=import_price,
+                    charge_end=min((w["start"] for w in driving_windows), default=interval_end),
+                    discharge_windows=driving_windows,
+                    charge_windows=[],
+                    efficiency=float(gate_heur.get("round_trip_efficiency", DEFAULT_ROUND_TRIP_EFFICIENCY)),
+                    min_margin=gate_margin,
+                )
+                margin_gate_records.append({"kind": "precharge", "charge_price": round(import_price, 4), **verdict})
+                if not verdict["allowed"]:
+                    logger.info("🚫 Skipping pre-sell precharge @€%.3f: %s", import_price, verdict["reason"])
+                    precharge_trace = {"decision": "skipped_margin", "reason": verdict["reason"]}
+                    soc_per_hour_charge = 0.0
             if soc_per_hour_charge > 0:
                 deficit_soc = buffer_required_soc - soc
                 required_minutes = int(math.ceil((deficit_soc / soc_per_hour_charge) * 60.0))
@@ -1923,6 +2418,14 @@ def generate_schedule(
                         (precharge_until - interval_start).total_seconds() / 60
                     )
                     if actual_minutes > 0:
+                        precharge_trace = {
+                            "decision": "added",
+                            "minutes": actual_minutes,
+                            "until": precharge_until.astimezone().isoformat(),
+                            "soc": soc,
+                            "buffer_required_soc": buffer_required_soc,
+                            "forced_below_floor": is_below_sell_buffer_floor,
+                        }
                         logger.info(
                             "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min until %s",
                             soc,
@@ -2146,6 +2649,17 @@ def generate_schedule(
                     solar_aware_allocation.grid_energy_target_kwh,
                 )
 
+    trace["solar_aware"] = {
+        "enabled": solar_aware_enabled,
+        "applied": bool(solar_aware_allocation and solar_aware_allocation.applied),
+        "deficit_kwh": round(solar_charge_deficit_kwh, 3),
+        "remaining_solar_kwh": solar_aware_remaining_kwh,
+        "usable_solar_kwh": solar_aware_allocation.usable_solar_kwh if solar_aware_allocation else None,
+        "grid_target_kwh": solar_aware_allocation.grid_energy_target_kwh if solar_aware_allocation else None,
+        "unallocated_grid_kwh": solar_aware_allocation.remaining_grid_energy_kwh if solar_aware_allocation else None,
+        "forecast_safety_factor": solar_aware_cfg.get("forecast_safety_factor", 0.8),
+    }
+
     if (
         charge_spread_enabled
         and today_charge_spread_active
@@ -2263,6 +2777,29 @@ def generate_schedule(
         else:
             charge_schedule = charge_schedule[:max_charge_periods]
 
+    lock_events: List[Dict[str, Any]] = []
+    if state is not None:
+        lock_events = apply_charge_power_locks(
+            charge_schedule,
+            state.charge_power_locks,
+            now,
+            soc,
+            solar_aware_remaining_kwh,
+            _get_sensor_float(ha_api, config["entities"].get("solar_power_entity", "")),
+            previous_schedule,
+            float(config["soc"].get("battery_capacity_kwh", 25)),
+        )
+        for event in lock_events:
+            if event["action"] == "recomputed" and event.get("previous_power") not in (None, event["power"]):
+                logger.info(
+                    "🔓 Charge power for window ending %s recomputed %sW -> %sW: %s",
+                    event["window_end"],
+                    event["previous_power"],
+                    event["power"],
+                    event["reason"],
+                )
+    trace["charge_locks"] = lock_events
+
     now_minute = now.replace(second=0, microsecond=0)
     discharge_not_before = max(interval_start, now_minute)
     adaptive_fallback_not_before = interval_start
@@ -2306,6 +2843,17 @@ def generate_schedule(
         for rank, window in enumerate(discharge_windows_sorted, start=1)
         if isinstance(window.get("start"), datetime)
     }
+    trace["discharge_windows_before"] = [
+        {
+            "rank": rank,
+            "start": window["start"].astimezone().isoformat(),
+            "end": window["end"].astimezone().isoformat(),
+            "avg_price": round(float(window.get("avg_price", 0.0)), 4),
+        }
+        for rank, window in enumerate(discharge_windows_sorted, start=1)
+        if isinstance(window.get("start"), datetime) and isinstance(window.get("end"), datetime)
+    ]
+    filter_trace: List[Dict[str, Any]] = []
     discharge_windows_sorted = _filter_supported_discharge_windows(
         discharge_windows_sorted,
         charge_schedule,
@@ -2314,7 +2862,18 @@ def generate_schedule(
         discharge_not_before,
         top_x_discharge_count,
         min_scaled_power,
+        trace=filter_trace,
     )
+    trace["discharge_windows"] = filter_trace
+    trace["discharge_windows_after"] = [
+        {
+            "start": window["start"].astimezone().isoformat(),
+            "end": window["end"].astimezone().isoformat(),
+            "avg_price": round(float(window.get("avg_price", 0.0)), 4),
+        }
+        for window in sorted(discharge_windows_sorted, key=lambda w: w["start"])
+        if isinstance(window.get("start"), datetime) and isinstance(window.get("end"), datetime)
+    ]
     adaptive_windows_sorted = sorted(
         upcoming_windows.get("adaptive", []),
         key=lambda w: w.get("start"),
@@ -2420,13 +2979,14 @@ def generate_schedule(
         if state is not None and state.schedule_pause_active
         else schedule
     )
+    publish_marker = state.last_publish_at if state is not None else None
     published = _publish_schedule(
         mqtt_client,
         schedule_to_publish,
         is_dry_run,
         state=state,
-        force=True,
     )
+    sent_to_battery_api = published and (state is None or state.last_publish_at != publish_marker)
     if not published and not is_dry_run:
         logger.warning("⚠️ Schedule was NOT delivered to battery-api — will retry next cycle")
     api_payload = _format_schedule_for_api(schedule)
@@ -2616,6 +3176,26 @@ def generate_schedule(
         dry_run=is_dry_run,
     )
 
+    _record_decision(
+        config,
+        mqtt_client,
+        state,
+        trace,
+        schedule,
+        previous_schedule,
+        interval_start,
+        interval_minutes,
+        {
+            "soc": soc,
+            "remaining_solar_kwh": solar_aware_remaining_kwh,
+            "deficit_kwh": solar_charge_deficit_kwh,
+            "grid_target_kwh": solar_aware_allocation.grid_energy_target_kwh if solar_aware_allocation else None,
+        },
+        precharge_trace,
+        sent_to_battery_api,
+        lock_events,
+    )
+
     return schedule
 
 
@@ -2763,7 +3343,6 @@ def monitor_and_adjust_active_period(
     top_x_discharge_hours, _ = _get_effective_discharge_hours(config, temperature)
     top_x_discharge_count = calculate_discharge_top_x_count(top_x_discharge_hours, interval_minutes)
 
-    min_profit = config["heuristics"].get("min_profit_threshold", 0.1)
     today_import, _ = _split_curve_by_date(import_curve or [], now)
     today_export, _ = _split_curve_by_date(export_curve or [], now)
     range_import_curve = today_import if today_import else (import_curve or [])
@@ -2779,13 +3358,19 @@ def monitor_and_adjust_active_period(
             passive_active = False
             solar_monitor.is_passive_active = False
 
-    load_range, discharge_range, adaptive_range = calculate_price_ranges(
+    day_plan = _plan_day(
+        config,
         range_import_curve,
         range_export_curve,
         top_x_charge_count,
         top_x_discharge_count,
-        min_profit,
+        interval_minutes,
+        state,
+        now.astimezone().date().isoformat(),
     )
+    load_range = day_plan.load_range
+    discharge_range = day_plan.discharge_range
+    adaptive_range = day_plan.adaptive_range
     if not config.get("adaptive", {}).get("enabled", True):
         adaptive_range = None
 
@@ -2808,8 +3393,16 @@ def monitor_and_adjust_active_period(
     )
     adaptive_price_threshold = config["heuristics"].get("adaptive_price_threshold")
     adaptive_enabled = config.get("adaptive", {}).get("enabled", True)
+    if passive_active and current_export_entry:
+        # Actual PV charge window: remember the cheapest export price seen while
+        # solar charged the battery (cost basis for margin_basis=solar_export).
+        pv_day = now.astimezone().date().isoformat()
+        state.pv_charge_export_min[pv_day] = min(
+            state.pv_charge_export_min.get(pv_day, export_price), export_price
+        )
     price_range = _determine_price_range(
-        import_price, export_price, load_range, discharge_range,
+        import_price, export_price, load_range,
+        discharge_range if day_plan.sell_from is None or now >= day_plan.sell_from else None,
         adaptive_price_threshold,
         adaptive_enabled=adaptive_enabled,
     )

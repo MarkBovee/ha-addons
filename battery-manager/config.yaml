@@ -1,6 +1,6 @@
 name: Battery Manager
 description: Optimize battery charging and discharging using dynamic prices, solar, grid, and EV status
-version: "0.8.86"
+version: "0.8.87"
 slug: battery_manager
 init: false
 homeassistant_api: true
@@ -80,6 +80,9 @@ options:
     charge_spread_enabled: true
     charge_spread_max_price_delta: 0.01
     min_profit_threshold: 0.1
+    round_trip_efficiency: 0.9
+    margin_basis: day_min_import
+    discharge_after_charge_only: true
     overnight_wait_threshold: 0.02
     sell_wait_for_better_morning_enabled: true
     sell_wait_horizon_hours: 20
@@ -107,6 +110,9 @@ options:
     entity_id: "sensor.charge_amps_monitor_charger_current_power"
 
   negative_price_charging:
+    enabled: true
+
+  decision_trace:
     enabled: true
 
   mqtt_host: "core-mosquitto"
@@ -183,6 +189,10 @@ schema:
     charge_spread_enabled: bool?
     charge_spread_max_price_delta: float(0,1)?
     min_profit_threshold: float(0,2)
+    grid_charge_min_margin: float(0,2)?
+    round_trip_efficiency: float(0.5,1)?
+    margin_basis: list(day_min_import|solar_export)?
+    discharge_after_charge_only: bool?
     overnight_wait_threshold: float(0,1)
     sell_wait_for_better_morning_enabled: bool?
     sell_wait_horizon_hours: float(0,24)?
@@ -202,6 +212,9 @@ schema:
     entity_id: str
 
   negative_price_charging:
+    enabled: bool?
+
+  decision_trace:
     enabled: bool?
 
   mqtt_host: str?

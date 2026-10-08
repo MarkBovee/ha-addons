@@ -32,6 +32,7 @@ ENTITY_SCHEDULE = "schedule"
 ENTITY_SCHEDULE_2 = "schedule_part_2"
 ENTITY_MODE = "mode"
 ENTITY_EFFECTIVE_DISCHARGE_POWER = "effective_discharge_power"
+ENTITY_DECISION = "decision"
 
 ALL_ENTITIES = [
     ENTITY_STATUS,
@@ -123,6 +124,12 @@ def publish_all_entities(mqtt: MqttDiscovery) -> None:
             device_class="power",
             state_class="measurement",
             icon="mdi:flash",
+        ),
+        EntityConfig(
+            object_id=ENTITY_DECISION,
+            name="Decision",
+            state="unknown",
+            icon="mdi:clipboard-text-search",
         ),
     ]
     for cfg in configs:
