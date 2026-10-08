@@ -50,7 +50,10 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 - Most expensive periods become discharge candidates
 - Mid-range profitable periods can become adaptive discharge windows
 - Low-value periods stay passive unless heuristics promote them
-- Future sell windows are pruned when current SOC plus planned charging cannot support them
+- Future sell windows are pruned when the SOC projected at their start (current SOC + planned grid charge + forecast PV share − earlier sells) cannot support them
+- Top-X sell hours are picked from quarters after the day's main charge window (`heuristics.discharge_after_charge_only`); quarters before it never use the sell budget or trigger grid precharging
+- Grid charging outside the cheapest top-X slots (spread-only windows, sell-buffer precharge) must earn `sell × round_trip_efficiency − charge ≥ grid_charge_min_margin`
+- The power of a charge window is held for an hour unless SoC or the solar forecast moves noticeably; the schedule is only re-sent to battery-api when its periods change
 
 ### Live Adaptive Control
 
@@ -113,6 +116,12 @@ Defaults live in `battery-manager/config.yaml`.
 | `heuristics.*` | Price and ranking heuristics |
 | `heuristics.charge_spread_enabled` | Spread charging over almost-equal cheap hours instead of always charging flat-out |
 | `heuristics.charge_spread_max_price_delta` | Extra cheap-hour tolerance band in EUR/kWh for spread charging |
+| `heuristics.min_profit_threshold` | Margin in EUR/kWh a sell price must exceed the cost basis by |
+| `heuristics.grid_charge_min_margin` | Minimum net margin for grid charging outside the top-X slots (default: `min_profit_threshold`) |
+| `heuristics.round_trip_efficiency` | Efficiency applied to the sell price in the margin check (default 0.90) |
+| `heuristics.margin_basis` | Cost basis for the profit margin: `day_min_import` (default) or `solar_export` (lowest export price in the PV charge window) |
+| `heuristics.discharge_after_charge_only` | Pick top-X sell hours only after the main charge window (default true) |
+| `decision_trace.enabled` | Write `/data/decision_trace.jsonl` and update `sensor.battery_manager_decision` (default true) |
 | `temperature_based_discharge.*` | Temperature-to-discharge-hour mapping |
 | `ev_charger.*` | EV integration |
 | `negative_price_charging.enabled` | Allow charging logic for negative prices |
@@ -145,6 +154,7 @@ Published entities use `sensor.battery_manager_*` IDs.
 | `sensor.battery_manager_schedule_part_2` | Overflow schedule markdown |
 | `sensor.battery_manager_mode` | Current runtime mode |
 | `sensor.battery_manager_effective_discharge_power` | Effective live discharge power |
+| `sensor.battery_manager_decision` | One-line summary of the last plan; attributes hold the full decision record |
 
 Schedule output to `Battery API` uses the existing topic:
 
@@ -179,7 +189,11 @@ Lower `timing.max_ev_sensor_age_seconds` or fix stale EV sensor updates.
 
 ### Discharge Windows Disappear
 
-Current versions intentionally prune future sell windows that cannot be supported by current SOC plus already-planned charging.
+Current versions intentionally prune future sell windows that cannot be supported by the SOC projected at their start (current SOC plus planned grid charge and forecast PV, minus earlier sells).
+
+### Why Did the Plan Do That?
+
+Every plan generation appends one JSON line to `/data/decision_trace.jsonl` (the last record is also the attributes of `sensor.battery_manager_decision`). Each sell window lists its decision (`kept`, `truncated`, `kept_capped`, `dropped`) with rank, needed and available kWh, reserve floor and projected SoC; skipped grid charges list the margin that failed. Read it with `tail -n 1 /data/decision_trace.jsonl | jq`.
 
 ## Local Development
 
