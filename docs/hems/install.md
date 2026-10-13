@@ -18,9 +18,9 @@ Getest tegen Home Assistant 2026.9.4 (de versie op de server) met `pytest-homeas
 | Netvermogen | `sensor.power_usage` | positief = import |
 | AC-uitgang omvormer (optioneel) | `sensor.saj_total_grid_power` | geeft het huisverbruik als P1 + omvormer, zoals in de ontwerpregels |
 | EV-vermogen (optioneel) | `sensor.charge_amps_monitor_charger_current_power` | wordt van het basisverbruik afgetrokken |
-| Prijscurve | `sensor.energy_prices_electricity_import_price` | moet een `price_curve`-attribuut hebben (`start`, `end`, `price`) |
+| Prijscurve (optioneel) | `sensor.energy_prices_electricity_import_price` | terugval als Nord Pool uitvalt en controle op de eigen prijsberekening; moet een `price_curve`-attribuut hebben (`start`, `end`, `price`) |
 
-4. Instellingen, HEMS, Configureren: de standaardwaarden zijn de besluiten uit `docs/hems/intake-decisions.md` (capaciteit 25 kWh, 8 kW, vloer 5 %, reserve 30 %, round trip 0,82, slijtagemarge 0,10, prijscomponenten zoals energy-prices). PV-factor 0 betekent automatisch kalibreren op de opgenomen PV.
+4. Instellingen, HEMS, Configureren: de standaardwaarden zijn de besluiten uit `docs/hems/intake-decisions.md` (capaciteit 25 kWh, 8 kW, vloer 5 %, reserve 30 %, round trip 0,82, minimale winstmarge 0,10, prijscomponenten zoals energy-prices, Nord Pool aan voor zone NL). PV-factor 0 betekent automatisch kalibreren op de opgenomen PV.
 
 ## Wat je ziet
 
@@ -30,8 +30,9 @@ Alle sensoren hangen onder één apparaat "HEMS". Vermogens volgen de HEMS-conve
 |---|---|
 | `sensor.hems_battery_action` | charge, discharge of idle voor het huidige kwartier; attributen `reason` en `keep_value_eur_kwh` leggen uit waarom |
 | `sensor.hems_battery_setpoint` | vermogen in W dat HEMS nu zou vragen |
-| `sensor.hems_expected_saving` | verwachte besparing over de horizon (EUR, zonder slijtage) |
-| `sensor.hems_status` | ok, no_soc, stale_soc, no_prices of no_price_for_now |
+| `sensor.hems_expected_saving` | verwachte besparing over de horizon (EUR kas; de minimale winstmarge telt niet als kost mee) |
+| `sensor.hems_status` | ok, no_soc, stale_soc, no_prices of no_price_for_now; attribuut `price_source` (market of curve) |
+| `binary_sensor.hems_tomorrow_prices_available` | aan zodra (een deel van) de prijzen van morgen bekend zijn; attributen `tomorrow_intervals`, `prices_until`, `price_source` |
 | `sensor.hems_import_price`, `sensor.hems_export_price` | prijs van het huidige kwartier; export met bonus alleen overdag en bij positieve prijs |
 | `sensor.hems_pv_forecast_next_24_h` | PV-verwachting komende 24 uur (kWh) |
 | `sensor.hems_plan` | aantal geplande kwartieren; attribuut `slots` met de komende 12 uur |
@@ -55,9 +56,10 @@ Integratie verwijderen onder Apparaten en diensten, map `custom_components/hems/
 ## Bekende beperkingen
 
 - Alleen dry-run; schrijven naar de batterij is er niet.
-- PV-voorspelling is grof: één factor op Open-Meteo-straling (R² 0,82 op 3-12 okt). Weer komt van `api.open-meteo.com`; alleen de op 0,01° afgeronde locatie verlaat de installatie. Uitzetten kan in de opties; zonder weer is de PV-verwachting 0 en staat dat in de trace.
+- PV-voorspelling is grof: één factor op Open-Meteo-straling (R² 0,82 op 3-12 okt). Weer komt van `api.open-meteo.com` (blijft aan, besluit van Mark); uitzetten kan in de opties; zonder weer is de PV-verwachting 0 en staat dat in de trace.
 - Verbruiksvoorspelling: mediaan per lokaal uur over 7 dagen uit de recorder-statistieken; tot er historie is geldt 400 W.
-- Prijzen komen uit de `price_curve` van de energy-prices-sensor; HEMS haalt Nord Pool nog niet zelf op.
+- Prijzen haalt HEMS zelf op bij Nord Pool (`dataportal-api.nordpoolgroup.com`, dezelfde bron als energy-prices; morgen verschijnt rond 13:00, tot dan antwoordt de API 204). Valt Nord Pool uit, dan gebruikt HEMS de `price_curve`-sensor; het verschil tussen beide staat in de trace als `price_check_max_diff` (hoort rond 0,0001 te liggen, meer wijst op andere prijsinstellingen dan energy-prices). Zonder beide bronnen is de status `no_prices`.
+- Uitgaand verkeer: alleen `dataportal-api.nordpoolgroup.com` en `api.open-meteo.com` (die laatste met op 0,01° afgeronde coördinaten).
 - Of de Zonnebonus ook voor avondlevering uit de batterij geldt is onbevestigd; de schakelaars in de opties dekken beide.
 
 ## Ontwikkelen
