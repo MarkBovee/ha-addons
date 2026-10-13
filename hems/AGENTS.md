@@ -38,7 +38,7 @@ python3 scripts/hems_replay.py                    # replay on the local recorded
 
 ## Deploying to the Home Assistant server
 
-Deploy only when the user asks for it for this change; approval for one deploy does not cover the next. Never push, and never deploy from a dirty or failing tree.
+Standing approval (Mark, 13 Oct 2026): for test rounds of HEMS an agent may, without asking each time, deploy with `python3 hems/deploy.py --batch`, restart Home Assistant (`--restart --yes`; HA automations are down for 1-5 minutes, add-ons such as battery-manager keep running) and add or reload the HEMS integration through the Home Assistant tools. It covers HEMS in dry-run only: it does not cover enabling any device writes, changing other integrations or add-ons, or pushing. Never deploy from a dirty or failing tree, and tell the user what was deployed afterwards.
 
 ```bash
 python3 hems/deploy.py --dry-run     # shows target, files, and changes nothing
