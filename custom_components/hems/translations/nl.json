@@ -1,0 +1,95 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HEMS: kies je entiteiten",
+        "description": "HEMS praat alleen met Home Assistant-entiteiten. Kies per rol één sensor. Deze versie plant in dry-run en schakelt nooit een apparaat.",
+        "data": {
+          "soc_entity": "Batterij laadtoestand (%)",
+          "battery_power_entity": "Batterijvermogen (W)",
+          "battery_power_positive_is_discharging": "Batterijvermogen is positief bij ontladen",
+          "pv_entity": "PV-vermogen (W)",
+          "grid_entity": "Netvermogen bij de meter (W, positief = import)",
+          "inverter_output_entity": "AC-uitgang omvormer (W, optioneel; verbetert de huisverbruik-schatting)",
+          "ev_power_entity": "EV-laadvermogen (W, optioneel; telt niet mee in het basisverbruik)",
+          "price_curve_entity": "Importprijs-sensor met een price_curve-attribuut"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Een gekozen entiteit bestaat niet."
+    },
+    "abort": {
+      "already_configured": "HEMS is al ingesteld."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HEMS-instellingen",
+        "description": "Batterij, voorspelling en prijscomponenten. De prijscomponenten volgen de energy-prices add-on.",
+        "data": {
+          "capacity_kwh": "Bruikbare batterijcapaciteit (kWh)",
+          "max_power_kw": "Maximaal laad-/ontlaadvermogen (kW)",
+          "hard_min_soc_pct": "Harde minimum-SoC (%)",
+          "reserve_soc_pct": "Reserve-SoC (%)",
+          "round_trip_eff": "Round-trip rendement (0-1)",
+          "wear_cost": "Slijtagemarge (EUR per ontladen kWh)",
+          "pv_gain_w_per_wm2": "PV-factor (W per W/m2, 0 = automatisch kalibreren)",
+          "pv_max_ac_w": "AC-limiet omvormer (W)",
+          "weather_enabled": "Weer ophalen bij Open-Meteo",
+          "import_vat_multiplier": "Import btw-factor",
+          "import_markup": "Import opslag (EUR/kWh)",
+          "import_energy_tax": "Import energiebelasting (EUR/kWh)",
+          "export_vat_multiplier": "Export btw-factor (alleen saldering)",
+          "export_bonus_pct": "Zonnebonus percentage (0,10 = 10%)",
+          "export_fixed_bonus": "Zonnebonus vast (EUR/kWh)",
+          "export_energy_tax": "Export energiebelasting-teruggave (EUR/kWh, alleen saldering)",
+          "salderen": "Saldering geldt",
+          "bonus_only_daylight": "Percentagebonus alleen tussen zonsopkomst en zonsondergang",
+          "bonus_only_positive_price": "Percentagebonus alleen bij een positieve marktprijs"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_action": {
+        "name": "Batterij-actie",
+        "state": {
+          "charge": "Laden",
+          "discharge": "Ontladen",
+          "idle": "Rust"
+        }
+      },
+      "battery_setpoint": {
+        "name": "Batterij-setpoint"
+      },
+      "expected_saving": {
+        "name": "Verwachte besparing"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "ok": "OK",
+          "no_soc": "Geen batterij-SoC",
+          "stale_soc": "Batterij-SoC is verouderd",
+          "no_prices": "Geen prijzen",
+          "no_price_for_now": "Geen prijs voor dit kwartier"
+        }
+      },
+      "import_price": {
+        "name": "Importprijs"
+      },
+      "export_price": {
+        "name": "Exportprijs"
+      },
+      "pv_forecast_24h": {
+        "name": "PV-verwachting komende 24 uur"
+      },
+      "plan": {
+        "name": "Plan"
+      }
+    }
+  }
+}

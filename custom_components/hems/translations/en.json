@@ -1,0 +1,95 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HEMS: choose your entities",
+        "description": "HEMS only talks to Home Assistant entities. Pick one sensor per role. This version plans in dry-run and never switches a device.",
+        "data": {
+          "soc_entity": "Battery state of charge (%)",
+          "battery_power_entity": "Battery power (W)",
+          "battery_power_positive_is_discharging": "Battery power is positive while discharging",
+          "pv_entity": "PV power (W)",
+          "grid_entity": "Grid power at the meter (W, positive = import)",
+          "inverter_output_entity": "Inverter AC output (W, optional; improves the house-load estimate)",
+          "ev_power_entity": "EV charger power (W, optional; excluded from the base load)",
+          "price_curve_entity": "Import price sensor with a price_curve attribute"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "One of the chosen entities does not exist."
+    },
+    "abort": {
+      "already_configured": "HEMS is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HEMS settings",
+        "description": "Battery, forecast and price components. The price components mirror the energy-prices add-on.",
+        "data": {
+          "capacity_kwh": "Usable battery capacity (kWh)",
+          "max_power_kw": "Maximum charge/discharge power (kW)",
+          "hard_min_soc_pct": "Hard minimum SoC (%)",
+          "reserve_soc_pct": "Reserve SoC (%)",
+          "round_trip_eff": "Round-trip efficiency (0-1)",
+          "wear_cost": "Wear margin (EUR per discharged kWh)",
+          "pv_gain_w_per_wm2": "PV gain (W per W/m2, 0 = calibrate automatically)",
+          "pv_max_ac_w": "Inverter AC limit (W)",
+          "weather_enabled": "Fetch weather from Open-Meteo",
+          "import_vat_multiplier": "Import VAT multiplier",
+          "import_markup": "Import markup (EUR/kWh)",
+          "import_energy_tax": "Import energy tax (EUR/kWh)",
+          "export_vat_multiplier": "Export VAT multiplier (netting only)",
+          "export_bonus_pct": "Solar bonus percentage (0.10 = 10%)",
+          "export_fixed_bonus": "Solar bonus fixed (EUR/kWh)",
+          "export_energy_tax": "Export energy tax refund (EUR/kWh, netting only)",
+          "salderen": "Netting (salderen) applies",
+          "bonus_only_daylight": "Percentage bonus only between sunrise and sunset",
+          "bonus_only_positive_price": "Percentage bonus only for a positive market price"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_action": {
+        "name": "Battery action",
+        "state": {
+          "charge": "Charge",
+          "discharge": "Discharge",
+          "idle": "Idle"
+        }
+      },
+      "battery_setpoint": {
+        "name": "Battery setpoint"
+      },
+      "expected_saving": {
+        "name": "Expected saving"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "ok": "OK",
+          "no_soc": "No battery SoC",
+          "stale_soc": "Battery SoC is stale",
+          "no_prices": "No prices",
+          "no_price_for_now": "No price for the current quarter"
+        }
+      },
+      "import_price": {
+        "name": "Import price"
+      },
+      "export_price": {
+        "name": "Export price"
+      },
+      "pv_forecast_24h": {
+        "name": "PV forecast next 24 h"
+      },
+      "plan": {
+        "name": "Plan"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "domain": "hems",
+  "name": "HEMS",
+  "codeowners": ["@MarkBovee"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/MarkBovee/ha-addons/tree/master/hems",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/MarkBovee/ha-addons/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
