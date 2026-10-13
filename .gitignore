@@ -42,3 +42,4 @@ __pycache__/
 # HEMS observation data (grows hourly; regenerate with scripts/hems_collect.py)
 docs/hems/observations/data/hourly.jsonl
 docs/hems/observations/data/snapshots.jsonl
+docs/hems/observations/data/plans.jsonl
