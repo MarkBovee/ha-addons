@@ -107,13 +107,17 @@ async def test_plans_in_dry_run_and_publishes_sensors_with_a_reason(recorder_moc
     assert json.loads(trace[-1])["dry_run"] is True and json.loads(trace[-1])["status"] == "ok"
 
 
-async def test_a_stale_soc_gives_no_decision_and_says_why(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
-    """An unavailable SoC gives status no_soc and an unknown battery action."""
+async def test_a_stale_soc_gives_no_decision_and_says_why(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock, caplog):
+    """An unavailable SoC gives status no_soc, an unknown battery action, and a log line that says so."""
     set_states(hass)
     hass.states.async_set("sensor.soc", "unavailable")
-    await setup_entry(hass, freezer, aioclient_mock)
+    with caplog.at_level(logging.INFO, logger="custom_components.hems"):
+        await setup_entry(hass, freezer, aioclient_mock)
     assert hass.states.get("sensor.hems_status").state == "no_soc"
     assert hass.states.get("sensor.hems_battery_action").state == "unknown"
+    lines = [r.getMessage() for r in caplog.records]
+    assert "HEMS no_soc: no decision this quarter | executor no_plan" in lines and "HEMS status no_soc: no decision this quarter" in lines
+    assert hass.states.get("sensor.hems_executor").state == "no_plan"
 
 
 async def test_weather_outage_is_survivable(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):

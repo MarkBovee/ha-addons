@@ -73,7 +73,7 @@ HEMS plan from 13:45, 137 quarters, expected saving 7.106 EUR:
   discharge +1d 07:30 - +1d 09:45   7043 W   15.8 kWh  soc 100% -> 30%  @0.516
 ```
 
-Tijden zijn lokaal; `+1d` betekent: morgen. Elk event uit `events.jsonl` staat ook als regel `HEMS event <naam> ...` in het log, en een status anders dan `ok` of een ingreep van de uitvoerder als WARNING. De leestool toont dezelfde dagaanduiding.
+Je ziet ze in Instellingen, Systeem, Logs (zoek op "HEMS"), of met `python3 scripts/hems_trace.py halog`. Tijden zijn lokaal; `+1d` betekent: morgen. Elk event uit `events.jsonl` staat ook als regel `HEMS event <naam> ...` in het log, en een status anders dan `ok` of een ingreep van de uitvoerder als WARNING. De leestool toont dezelfde dagaanduiding.
 
 Lezen met de leestool (haalt de bestanden met de SSH-sleutel van de server):
 

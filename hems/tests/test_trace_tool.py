@@ -108,3 +108,18 @@ def test_times_after_midnight_carry_their_day_in_every_view():
     assert any(line.startswith("+1d ") for line in tool.format_plan_table(detail))
     first_day = [line for line in tool.format_plan_table(detail)[1:] if not line.startswith("+1d")]
     assert first_day and all(not line.startswith("+") for line in first_day)
+
+
+def test_the_core_log_reader_keeps_hems_entries_with_their_plan_tree_and_drops_the_rest():
+    """Colour codes go, an unprefixed continuation line stays with its HEMS entry, other integrations' lines (and their tracebacks) are left out."""
+    log = "\n".join([
+        "\x1b[32m2026-10-13 14:11:56.036 INFO (MainThread) [custom_components.hems.coordinator] HEMS 14:00 ok: idle 0 W\x1b[0m",
+        "\x1b[32m2026-10-13 14:11:56.036 INFO (MainThread) [custom_components.hems.coordinator] HEMS plan from 14:00, 136 quarters:",
+        "  charge    +1d 00:00 - +1d 01:00   7730 W    7.7 kWh  soc 30% -> 61%  @0.263\x1b[0m",
+        "\x1b[33m2026-10-13 14:12:00.000 WARNING (MainThread) [homeassistant.components.other] something else\x1b[0m",
+        "  File \"/usr/src/other.py\", line 1, in run",
+        "\x1b[32m2026-10-13 14:15:20.277 INFO (MainThread) [custom_components.hems.coordinator] HEMS 14:15 ok: idle 0 W\x1b[0m"])
+    lines = tool.hems_log_lines(log)
+    assert [line[:23] for line in lines if line[:2] == "20"] == ["2026-10-13 14:11:56.036"] * 2 + ["2026-10-13 14:15:20.277"]
+    assert "  charge    +1d 00:00 - +1d 01:00   7730 W    7.7 kWh  soc 30% -> 61%  @0.263" in lines
+    assert all("\x1b" not in line and "other" not in line for line in lines) and len(lines) == 4

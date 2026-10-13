@@ -13,13 +13,16 @@ Usage:
   python3 scripts/hems_trace.py why TIME [--cycle T]   # why the plan does what it does at TIME (default: latest plan)
   python3 scripts/hems_trace.py diff A B               # how the plan of cycle B differs from the plan of cycle A
   python3 scripts/hems_trace.py events [-n 30] [--type market]
+  python3 scripts/hems_trace.py halog [-n 3000]        # the HEMS lines of the Home Assistant core log (REST proxy, read-only)
 TIME is HH:MM (today, local), 'YYYY-MM-DD HH:MM' (local) or an ISO timestamp.
 """
 import argparse
 import importlib.util
 import json
+import re
 import subprocess
 import sys
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -206,6 +209,33 @@ def pull(directory: Path) -> list[str]:
     return copied
 
 
+TIMESTAMPED = re.compile(r"^(\x1b\[\d+m)?\d{4}-\d\d-\d\d \d\d:\d\d:\d\d")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def hems_log_lines(text: str) -> list[str]:
+    """The HEMS entries of a Home Assistant core log, colour codes removed; the unprefixed lines of a multi-line entry (the plan tree) stay with it."""
+    kept, inside = [], False
+    for line in text.splitlines():
+        if TIMESTAMPED.match(line):
+            inside = "custom_components.hems" in line
+        if inside:
+            kept.append(ANSI.sub("", line))
+    return kept
+
+
+def fetch_core_log(entries: int) -> str:
+    """The last `entries` lines of the Home Assistant core log through the REST proxy of the Supervisor (read-only; token from .env, never printed)."""
+    spec = importlib.util.spec_from_file_location("hems_deploy", ROOT / "hems" / "deploy.py")
+    deploy = importlib.util.module_from_spec(spec)
+    sys.modules["hems_deploy"] = deploy
+    spec.loader.exec_module(deploy)
+    env = deploy.parse_env((ROOT / ".env").read_text())
+    request = urllib.request.Request(env["HA_API_URL"].rstrip("/") + "/hassio/core/logs",       # HA_API_URL already ends in /api
+                                     headers={"Authorization": "Bearer " + env["HA_API_TOKEN"], "Accept": "text/plain", "Range": f"entries=:-{entries}:{entries}"})
+    return urllib.request.urlopen(request, timeout=90).read().decode(errors="replace")
+
+
 def main() -> int:
     """Command line entry point."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -225,7 +255,12 @@ def main() -> int:
     events = sub.add_parser("events")
     events.add_argument("-n", type=int, default=30)
     events.add_argument("--type")
+    halog = sub.add_parser("halog")
+    halog.add_argument("-n", type=int, default=3000, help="how many core-log lines to look through")
     args = parser.parse_args()
+    if args.command == "halog":
+        print("\n".join(hems_log_lines(fetch_core_log(args.n))) or "no HEMS lines in that stretch of the core log")
+        return 0
     if args.pull:
         print("pulled:", ", ".join(pull(args.dir)) or "nothing (is the SSH key set up?)")
     if not args.command:

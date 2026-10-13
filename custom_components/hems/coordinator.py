@@ -266,7 +266,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             self._last_action = action
         await self._note_execution(execution)
         tz = dt_util.get_default_time_zone()
-        suffix = "" if execution.code == AS_PLANNED else f" | executor {execution.code}: {execution.power_w} W instead of {execution.planned_w} W"
+        suffix = ""
+        if execution.code != AS_PLANNED:
+            suffix = f" | executor {execution.code}" + (f": {execution.power_w} W instead of {execution.planned_w} W" if execution.overridden else "")
         _LOGGER.info("%s%s", cycle_line(record, tz), suffix)
         tree = plan_tree(record, tz)
         if tree:
