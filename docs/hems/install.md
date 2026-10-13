@@ -6,6 +6,8 @@ Getest tegen Home Assistant 2026.9.4 (de versie op de server) met `pytest-homeas
 
 ## Installeren
 
+Snelste route: `python3 hems/deploy.py --dry-run` en daarna `python3 hems/deploy.py` (details en sleutel-instelling in `hems/AGENTS.md`). Het script leest alleen `HA_HOST`, `HA_SSH_USER` en optioneel het pad `HA_SSH_KEY` uit `.env`, nooit een wachtwoord; zonder sleutel vraagt ssh één keer om het wachtwoord. Handmatig kan ook:
+
 1. Kopieer de map `custom_components/hems/` uit deze repo naar `/config/custom_components/hems/` op de HA-server (Samba-share `config`, of via de SSH-add-on). De submap `engine/` hoort erbij: dat is een gegenereerde kopie van `hems/core`.
 2. Herstart Home Assistant (een nieuwe integratie wordt pas na een herstart gevonden).
 3. Instellingen, Apparaten en diensten, Integratie toevoegen, **HEMS**. Kies de entiteiten:
@@ -51,7 +53,7 @@ Vergelijk `sensor.hems_battery_setpoint` met het werkelijke batterijvermogen en 
 
 ## Terugdraaien
 
-Integratie verwijderen onder Apparaten en diensten, map `custom_components/hems/` en `/config/hems/` weghalen. Er is niets anders gewijzigd.
+Integratie verwijderen onder Apparaten en diensten, map `custom_components/hems/` en `/config/hems/` weghalen. Er is niets anders gewijzigd. Het deploy-script bewaart de laatste drie versies als `/config/.hems-backup/hems-*.tar.gz`.
 
 ## Bekende beperkingen
 
