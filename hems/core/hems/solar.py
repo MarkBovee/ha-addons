@@ -1,0 +1,49 @@
+"""Sunrise/sunset without dependencies (NOAA almanac approximation, accurate to a few minutes).
+
+Used by the price model: the Zonneplan solar bonus is modelled per slot as daylight / not daylight.
+No polar day or night support; that is irrelevant at Dutch latitudes.
+"""
+import math
+from datetime import date, datetime, timedelta, timezone
+
+_ZENITH_DEG = 90.833    # official sunrise/sunset: sun's upper limb plus atmospheric refraction
+
+
+def _sun_event_utc(day: date, latitude: float, longitude: float, sunrise: bool) -> datetime | None:
+    """UTC moment of sunrise or sunset on `day`, or None when the sun does not rise/set."""
+    day_of_year = day.timetuple().tm_yday
+    lng_hour = longitude / 15.0
+    approx = day_of_year + ((6.0 if sunrise else 18.0) - lng_hour) / 24.0
+    mean_anomaly = 0.9856 * approx - 3.289
+    true_lng = (mean_anomaly + 1.916 * math.sin(math.radians(mean_anomaly))
+                + 0.020 * math.sin(math.radians(2 * mean_anomaly)) + 282.634) % 360
+    right_ascension = math.degrees(math.atan(0.91764 * math.tan(math.radians(true_lng)))) % 360
+    # Right ascension must sit in the same quadrant as the true longitude.
+    right_ascension += (math.floor(true_lng / 90) - math.floor(right_ascension / 90)) * 90
+    right_ascension /= 15.0
+    sin_dec = 0.39782 * math.sin(math.radians(true_lng))
+    cos_dec = math.cos(math.asin(sin_dec))
+    cos_hour = ((math.cos(math.radians(_ZENITH_DEG)) - sin_dec * math.sin(math.radians(latitude)))
+                / (cos_dec * math.cos(math.radians(latitude))))
+    if not -1.0 <= cos_hour <= 1.0:
+        return None
+    hour_angle = (360.0 - math.degrees(math.acos(cos_hour))) if sunrise else math.degrees(math.acos(cos_hour))
+    local_mean_time = hour_angle / 15.0 + right_ascension - 0.06571 * approx - 6.622
+    utc_hours = (local_mean_time - lng_hour) % 24.0
+    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(hours=utc_hours)
+
+
+def sun_times_utc(day: date, latitude: float, longitude: float) -> tuple[datetime, datetime] | None:
+    """(sunrise, sunset) in UTC for the UTC calendar `day`, or None when the sun does not rise and set."""
+    rise = _sun_event_utc(day, latitude, longitude, sunrise=True)
+    sset = _sun_event_utc(day, latitude, longitude, sunrise=False)
+    return (rise, sset) if rise and sset else None
+
+
+def is_daylight(moment: datetime, latitude: float, longitude: float) -> bool:
+    """True when `moment` (timezone-aware) lies between sunrise and sunset at the location."""
+    if moment.tzinfo is None:
+        raise ValueError("moment must be timezone-aware")
+    moment_utc = moment.astimezone(timezone.utc)
+    times = sun_times_utc(moment_utc.date(), latitude, longitude)
+    return times is not None and times[0] <= moment_utc < times[1]

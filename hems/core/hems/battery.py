@@ -7,19 +7,25 @@ of the optimisation instead of a calendar-day heuristic.
 """
 from dataclasses import dataclass, field
 
-SLOT_H = 0.25
+from hems.slots import SLOT_H
 
 
 @dataclass
 class BatteryConfig:
     capacity_kwh: float = 25.0
     max_power_kw: float = 8.0
-    min_soc: float = 0.30            # conservative floor (fraction)
+    hard_min_soc: float = 0.05       # absolute battery minimum (fraction); never discharged below
+    reserve_soc: float = 0.30        # conservative reserve floor; a setting, later dynamic via Slot.reserve_soc
     max_soc: float = 1.00
-    round_trip_eff: float = 0.90
+    round_trip_eff: float = 0.82     # measured 3-12 Oct 2026 (docs/hems/intake-decisions.md); a setting
     wear_cost: float = 0.10          # EUR per kWh discharged: fixed margin vs cycle wear
     step_kwh: float = 0.25           # SoC grid resolution
     allow_grid_charge: bool = True
+
+    def __post_init__(self) -> None:
+        """Fail fast on an inconsistent floor: the reserve cannot sit below the hard minimum."""
+        if not 0.0 <= self.hard_min_soc <= self.reserve_soc <= self.max_soc <= 1.0:
+            raise ValueError("need 0 <= hard_min_soc <= reserve_soc <= max_soc <= 1")
 
 
 @dataclass
@@ -28,6 +34,7 @@ class Slot:
     export_price: float
     load_kwh: float = 0.0            # house consumption in the slot
     pv_kwh: float = 0.0              # PV production in the slot
+    reserve_soc: float | None = None  # reserve floor for this slot (fraction); None = BatteryConfig.reserve_soc
 
 
 @dataclass
@@ -49,22 +56,31 @@ class Plan:
 
     @property
     def saving(self) -> float:
+        """Cost avoided versus the same horizon without a battery (EUR)."""
         return self.baseline_cost - self.total_cost
 
 
 def _grid_cost(net_kwh: float, s: Slot) -> float:
+    """Cost of a grid exchange in the slot: import at the import price, export at the export price."""
     return net_kwh * s.import_price if net_kwh > 0 else net_kwh * s.export_price
+
+
+def _floor_levels(slots: list[Slot], cfg: BatteryConfig) -> list[int]:
+    """SoC floor per slot in grid steps: the slot's reserve (or the config default), never below the hard minimum."""
+    return [round(max(cfg.hard_min_soc, cfg.reserve_soc if s.reserve_soc is None else s.reserve_soc)
+                  * cfg.capacity_kwh / cfg.step_kwh) for s in slots]
 
 
 def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
          terminal_value: float | None = None) -> Plan:
     """Optimal battery schedule. terminal_value: EUR/kWh credit for energy left at
     the end of the horizon (default: cheapest import price in horizon * eff, i.e.
-    what it would cost to refill)."""
+    what it would cost to refill). The floor may differ per slot (Slot.reserve_soc);
+    a SoC already below the floor can only hold or charge, never discharge."""
     n = len(slots)
     eff = cfg.round_trip_eff ** 0.5
     step = cfg.step_kwh
-    lo = round(cfg.min_soc * cfg.capacity_kwh / step)
+    floors = _floor_levels(slots, cfg)
     hi = round(cfg.max_soc * cfg.capacity_kwh / step)
     start = min(max(round(soc_kwh / step), 0), hi)
     max_steps = int(cfg.max_power_kw * SLOT_H / step)
@@ -81,13 +97,12 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
     for t in range(n - 1, -1, -1):
         s = slots[t]
         net = s.load_kwh - s.pv_kwh
+        lo = floors[t]
         for k in range(hi + 1):
             best, best_d = INF, 0
             for d in range(-max_steps, max_steps + 1):      # d>0 charge steps (SoC side)
                 k2 = k + d
-                if k2 < min(lo, k) or k2 > hi:
-                    continue
-                if k2 < lo and d < 0:                        # never discharge below floor
+                if k2 < min(lo, k) or k2 > hi:               # never discharge below the floor
                     continue
                 dsoc = d * step
                 ac = dsoc / eff if d > 0 else dsoc * eff     # AC-side energy

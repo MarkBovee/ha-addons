@@ -1,26 +1,72 @@
 """Price contract: market price (EUR/kWh, ex tax) -> consumer import/export price.
 
-Zonneplan-style formulas (see plan). Quarter-hour is the time unit.
+Setting names and defaults mirror the energy-prices add-on (Zonneplan 2026) so the same values can be copied.
+Quarter-hour is the time unit. The solar bonus (10 %) is modelled per slot: it needs a daylight flag and a
+positive market price (README of energy-prices and the Zonneplan page; the add-on code itself applies it
+unconditionally). Whether battery-sourced evening export earns it is unconfirmed, hence the two switches.
 """
 from dataclasses import dataclass
+from datetime import datetime
+
+from hems.contracts import MarketPrices
+from hems.solar import is_daylight
 
 
 @dataclass(frozen=True)
 class PriceModel:
-    vat: float = 1.21
-    energy_tax: float = 0.11085      # EUR/kWh incl. in import
+    import_vat_multiplier: float = 1.21
     import_markup: float = 0.02
-    export_markup: float = 0.02
-    salderen: bool = True            # 2026 rules; False = 2027 rules (no netting)
+    import_energy_tax: float = 0.11085           # EUR/kWh incl. VAT
+    export_vat_multiplier: float = 1.21          # only used while netting (salderen) applies
+    export_bonus_pct: float = 0.10               # Zonnebonus percentage
+    export_fixed_bonus: float = 0.02             # Zonnebonus fixed, always paid
+    export_energy_tax: float = 0.11085           # refunded on export only while netting applies
+    salderen: bool = True                        # 2026 rules; False = 2027 rules (no netting)
+    bonus_only_daylight: bool = True             # percentage bonus only between sunrise and sunset
+    bonus_only_positive_price: bool = True       # percentage bonus only for a positive market price
 
     def import_price(self, market: float) -> float:
-        return market * self.vat + self.energy_tax + self.import_markup
+        """Consumer import price for a market price (EUR/kWh)."""
+        return market * self.import_vat_multiplier + self.import_energy_tax + self.import_markup
 
-    def export_price(self, market: float) -> float:
+    def market_from_import(self, import_price: float) -> float:
+        """Invert import_price: recover the market price, e.g. from a recorded consumer import price."""
+        return (import_price - self.import_energy_tax - self.import_markup) / self.import_vat_multiplier
+
+    def bonus_pct_for(self, market: float, daylight: bool) -> float:
+        """Percentage bonus that actually applies in this slot (0 when a switch withholds it)."""
+        if self.bonus_only_daylight and not daylight:
+            return 0.0
+        if self.bonus_only_positive_price and market <= 0:
+            return 0.0
+        return self.export_bonus_pct
+
+    def export_price(self, market: float, daylight: bool) -> float:
+        """Consumer export price for a market price in a slot that is (not) in daylight (EUR/kWh)."""
+        base = market * (1 + self.bonus_pct_for(market, daylight))
         if self.salderen:
-            return market * 1.10 * self.vat + self.export_markup + self.energy_tax
-        return market * 1.10 + self.export_markup
+            return base * self.export_vat_multiplier + self.export_fixed_bonus + self.export_energy_tax
+        return base + self.export_fixed_bonus
 
 
-def curves(market: list[float], model: PriceModel) -> tuple[list[float], list[float]]:
-    return [model.import_price(m) for m in market], [model.export_price(m) for m in market]
+def curves(market: list[float], model: PriceModel, daylight: list[bool]) -> tuple[list[float], list[float]]:
+    """Import and export price per slot. `daylight` has one flag per slot (see hems.solar.is_daylight)."""
+    if len(daylight) != len(market):
+        raise ValueError("daylight needs one flag per slot")
+    return ([model.import_price(m) for m in market],
+            [model.export_price(m, d) for m, d in zip(market, daylight)])
+
+
+@dataclass(frozen=True)
+class PriceSeries:
+    """What the planner consumes: consumer prices per quarter on a UTC grid."""
+    starts: tuple[datetime, ...]
+    import_eur_kwh: tuple[float, ...]
+    export_eur_kwh: tuple[float, ...]
+
+
+def build_price_series(market: MarketPrices, model: PriceModel, latitude: float, longitude: float) -> PriceSeries:
+    """Apply the price model to market prices; daylight is evaluated at the start of each quarter."""
+    daylight = [is_daylight(start, latitude, longitude) for start in market.starts]
+    imp, exp = curves(list(market.market_eur_kwh), model, daylight)
+    return PriceSeries(market.starts, tuple(imp), tuple(exp))

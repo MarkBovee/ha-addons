@@ -14,17 +14,15 @@ class Load:
 def allocate(house_w: float, loads: list[Load], grid_limit_w: float = 15000.0,
              hysteresis_w: float = 500.0, previous: dict[str, float] | None = None) -> dict[str, float]:
     """Return granted power per load. house_w = uncontrollable baseload.
-    Loads are served by priority; a load that cannot get min_w gets 0.
-    hysteresis: a load that was running keeps min_w alive with hysteresis_w extra slack
-    to avoid flapping."""
+
+    Uncontrollable loads run regardless of their priority, so they are deducted from the headroom first;
+    controllable loads then share what is left by priority, and a load that cannot get min_w gets 0.
+    hysteresis: a load that was running keeps min_w alive with hysteresis_w of slack to avoid flapping;
+    that is the one case where the total can exceed the grid limit, by at most hysteresis_w."""
     previous = previous or {}
-    headroom = grid_limit_w - house_w
-    granted: dict[str, float] = {}
-    for ld in sorted(loads, key=lambda x: x.priority):
-        if not ld.controllable:
-            granted[ld.name] = ld.wanted_w
-            headroom -= ld.wanted_w
-            continue
+    granted = {ld.name: ld.wanted_w for ld in loads if not ld.controllable}
+    headroom = grid_limit_w - house_w - sum(granted.values())
+    for ld in sorted((ld for ld in loads if ld.controllable), key=lambda x: x.priority):
         running = previous.get(ld.name, 0) > 0
         give = min(ld.wanted_w, max(headroom, 0.0))
         floor = ld.min_w - (hysteresis_w if running else 0.0)   # stay on slightly below min
