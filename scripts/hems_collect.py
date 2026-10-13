@@ -88,6 +88,7 @@ SNAPSHOT_EXTRA = [
 ]
 SNAPSHOT_REGEX = re.compile(r"^sensor\.saj_(charge|discharge)_\d+_(start_time|end_time|power_percent|day_mask)$")
 PRICE_CURVES = ["sensor.energy_prices_electricity_import_price", "sensor.energy_prices_electricity_export_price"]
+PRICE_ENTITY = "sensor.current_price"   # template helper: import price of the current quarter
 
 
 def load_env():
@@ -163,7 +164,60 @@ def snapshot(ha):
     OUT.mkdir(parents=True, exist_ok=True)
     with open(OUT / "snapshots.jsonl", "a") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    store_curves(states, now)
     return row
+
+
+def store_curves(states, now):
+    """Bewaar de volledige price_curve (kwartierprijzen) zodra de bronsensor een nieuwe last_update heeft.
+
+    Alleen bij een nieuwe last_update, zodat het bestand niet elk uur dubbele curves krijgt; de samenvatting in
+    snapshots.jsonl is te grof om later een dag te kunnen replayen."""
+    path = OUT / "price_curves.jsonl"
+    seen = set()
+    if path.exists():
+        for line in path.read_text().splitlines():
+            r = json.loads(line)
+            seen.add((r["entity"], r["last_update"]))
+    with open(path, "a") as f:
+        for e in PRICE_CURVES:
+            attrs = (states.get(e) or {}).get("attributes") or {}
+            curve, stamp = attrs.get("price_curve") or [], attrs.get("last_update")
+            if not curve or (e, stamp) in seen:
+                continue
+            f.write(json.dumps({"ts_utc": now.isoformat(timespec="seconds"), "entity": e, "last_update": stamp,
+                                "curve": [[it["start"], it["price"]] for it in curve]}, ensure_ascii=False) + "\n")
+
+
+def quarter_prices(ha, hours):
+    """Backfill kwartier-importprijzen uit de recorderhistorie van sensor.current_price.
+
+    Per kwartier wint de state met de langste duur: de template-sensor kan de kwartiergrens met enkele seconden
+    missen. De state van energy_prices_electricity_import_price is hier bewust niet gebruikt (ruwe marktprijs,
+    uurlijks ververst). Idempotent: bestaande kwartieren worden overgeslagen."""
+    OUT.mkdir(parents=True, exist_ok=True)
+    path = OUT / "prices_quarter.jsonl"
+    have = set()
+    if path.exists():
+        have = {json.loads(line)["quarter_utc"] for line in path.read_text().splitlines()}
+    end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start = end - timedelta(hours=hours)
+    series = history(ha, [PRICE_ENTITY], start, end).get(PRICE_ENTITY, [])
+    added, quarter = 0, start
+    with open(path, "a") as f:
+        while quarter < end:
+            nxt = quarter + timedelta(minutes=15)
+            stamp = quarter.isoformat(timespec="seconds")
+            durations = {}
+            for state, secs in segments(series, quarter, nxt):
+                if num(state) is not None:
+                    durations[state] = durations.get(state, 0) + secs
+            if durations and stamp not in have:
+                f.write(json.dumps({"quarter_utc": stamp, "quarter_local": quarter.astimezone(TZ).isoformat(timespec="seconds"),
+                                    "import_price": float(max(durations, key=durations.get))}) + "\n")
+                added += 1
+            quarter = nxt
+    return added, (series[0][0].astimezone(TZ).isoformat(timespec="minutes") if series else None)
 
 
 DISCOVER = re.compile(r"^(sensor|number|binary_sensor|select|switch|water_heater|climate|input_text|input_number|input_boolean)\."
@@ -353,7 +407,7 @@ def dashboards(env):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["run", "snapshot", "hourly", "plans", "dashboards"])
+    ap.add_argument("mode", choices=["run", "snapshot", "hourly", "plans", "prices", "dashboards"])
     ap.add_argument("--hours", type=int, default=12)
     a = ap.parse_args()
     env = load_env()
@@ -368,6 +422,9 @@ def main():
         print(f"hourly: +{added} hours, no history for: {missing or 'none'}")
     if a.mode in ("run", "plans"):
         print(f"plans: +{plans(ha, a.hours)} wijzigingen")
+    if a.mode == "prices":
+        added, first = quarter_prices(ha, a.hours)
+        print(f"prices: +{added} kwartieren, oudste recorderstate: {first}")
 
 
 if __name__ == "__main__":

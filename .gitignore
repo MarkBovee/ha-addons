@@ -43,3 +43,5 @@ __pycache__/
 docs/hems/observations/data/hourly.jsonl
 docs/hems/observations/data/snapshots.jsonl
 docs/hems/observations/data/plans.jsonl
+docs/hems/observations/data/prices_quarter.jsonl
+docs/hems/observations/data/price_curves.jsonl
