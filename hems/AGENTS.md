@@ -21,7 +21,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 - Every function gets a short intent docstring, tests included. Verify with an AST scan before finishing.
 - Prices: the percentage Zonnebonus applies only in daylight and for a positive price (both switchable); the energy-prices add-on code applies it always, do not copy that.
 - The minimum profit margin (`min_profit_margin`, default 0.10 EUR/kWh) is a planner threshold, never a cost. Replay and sensors report cash.
-- Entity ids are derived from the English entity names (`sensor.hems_battery_action`, `binary_sensor.hems_tomorrow_prices_available`); keep the English name stable.
+- Entity ids are set explicitly from the entity key (`sensor.hems_battery_action`, `binary_sensor.hems_tomorrow_prices_available`) because Home Assistant otherwise derives them from the instance language (a Dutch install gets `sensor.hems_batterij_actie`). Keep the keys stable; renaming one breaks dashboards.
 - Weather (Open-Meteo) requests carry coordinates rounded to 0.01 degrees. Keep it that way.
 
 ## Tests
@@ -68,7 +68,7 @@ echo 'HA_SSH_KEY=~/.ssh/ha_hems' >> .env
 
 ### After a deploy
 
-1. Restart Home Assistant (user approval; or `--restart`). A new or changed integration is only loaded after a restart.
-2. First time only: Settings, Devices & services, Add integration, HEMS; pick the entities (the table in `../docs/hems/install.md`).
+1. Restart Home Assistant (user approval; or `--restart`). A new or changed integration is only loaded after a restart. `deploy.py --restart --yes` waits until the REST API answers again; after a restart the SoC sensors of battery-api appear a little later, HEMS then reports `no_soc` and replans by itself after 60 seconds.
+2. First time only: add the integration, in the UI or through the Home Assistant tools: `ha_set_integration(domain="hems", config={"soc_entity": ..., "battery_power_entity": ..., "battery_power_positive_is_discharging": true, "pv_entity": ..., "grid_entity": ..., "inverter_output_entity": ..., "ev_power_entity": ..., "price_curve_entity": ...})` with the entities from the table in `../docs/hems/install.md`. To start over (for instance after an entity-id change) remove the entry with `ha_remove_helpers_integrations(target=<entry_id>, confirm=True)` and add it again; only ever remove the HEMS entry.
 3. Verify read-only through the Home Assistant MCP tools or REST: `sensor.hems_status` is `ok`, `sensor.hems_battery_action` has a `reason`, `binary_sensor.hems_tomorrow_prices_available` matches whether Nord Pool has published, and `/config/hems/decision_trace.jsonl` gains a line per quarter.
 4. Read the HA log for `custom_components.hems` errors; a failed Nord Pool or Open-Meteo fetch is a warning and the plan continues on the fallbacks.

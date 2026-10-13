@@ -15,13 +15,14 @@ from homeassistant.components.recorder.statistics import statistics_during_perio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .adapters import base_load_history, parse_price_curve, reading_from_state, statistic_rows
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_GRID, CONF_INVERTER, CONF_PRICE_CURVE,
-                    CONF_PV, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, HISTORY_DAYS, HISTORY_REFRESH, TRACE_DIR, TRACE_FILE,
-                    WEATHER_MAX_AGE, WEATHER_REFRESH)
+                    CONF_PV, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, HISTORY_DAYS, HISTORY_REFRESH, RETRY_DELAY, RETRY_STATUSES,
+                    TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.contracts import MarketPrices
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
@@ -78,6 +79,19 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._market_tried_at: datetime | None = None
         self._weather_tried_at: datetime | None = None
         self._gain = 0.0
+        self._retry_cancel = None
+
+    async def _retry(self, _now: datetime) -> None:
+        """Replan once after RETRY_DELAY because an input (SoC, prices) was missing."""
+        self._retry_cancel = None
+        await self.async_request_refresh()
+
+    async def async_shutdown(self) -> None:
+        """Cancel a pending retry together with the coordinator."""
+        if self._retry_cancel:
+            self._retry_cancel()
+            self._retry_cancel = None
+        await super().async_shutdown()
 
     def _entity(self, key: str) -> str | None:
         """Entity id configured for a role, or None."""
@@ -176,6 +190,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         if output.decision:
             self._previous = output.decision
         await self.hass.async_add_executor_job(self._trace.write, {"dry_run": True, "pv_gain": round(gain, 2), **output.trace})
+        if output.status in RETRY_STATUSES and self._retry_cancel is None:
+            self._retry_cancel = async_call_later(self.hass, RETRY_DELAY, self._retry)
         weather_age = (now - self._weather.fetched_at).total_seconds() / 60 if self._weather else None
         known = set(self._market.starts if self._market else ()) | {t for t, _ in inputs.import_curve}
         prices_until = max(known) + timedelta(minutes=15) if known else None

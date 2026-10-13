@@ -26,6 +26,8 @@ Snelste route: `python3 hems/deploy.py --dry-run` en daarna `python3 hems/deploy
 
 ## Wat je ziet
 
+Na een herstart van Home Assistant staan de sensoren van battery-api er nog niet meteen; HEMS meldt dan kort `no_soc` en plant na 60 seconden zelf opnieuw.
+
 Alle sensoren hangen onder één apparaat "HEMS". Vermogens volgen de HEMS-conventie: **plus = laden, min = ontladen**.
 
 | Sensor | Betekenis |
@@ -36,7 +38,7 @@ Alle sensoren hangen onder één apparaat "HEMS". Vermogens volgen de HEMS-conve
 | `sensor.hems_status` | ok, no_soc, stale_soc, no_prices of no_price_for_now; attribuut `price_source` (market of curve) |
 | `binary_sensor.hems_tomorrow_prices_available` | aan zodra (een deel van) de prijzen van morgen bekend zijn; attributen `tomorrow_intervals`, `prices_until`, `price_source` |
 | `sensor.hems_import_price`, `sensor.hems_export_price` | prijs van het huidige kwartier; export met bonus alleen overdag en bij positieve prijs |
-| `sensor.hems_pv_forecast_next_24_h` | PV-verwachting komende 24 uur (kWh) |
+| `sensor.hems_pv_forecast_24h` | PV-verwachting komende 24 uur (kWh) |
 | `sensor.hems_plan` | aantal geplande kwartieren; attribuut `slots` met de komende 12 uur |
 
 ## Decision trace

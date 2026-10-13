@@ -87,6 +87,58 @@ def test_a_key_is_passed_by_path_and_batch_forbids_prompts():
     assert "-i" not in deploy.ssh_command(deploy.Target("h", "u"), "/tmp/c", "true") and "BatchMode=yes" not in deploy.ssh_command(deploy.Target("h", "u"), "/tmp/c", "true")
 
 
+def test_the_tar_stream_contains_the_files_root_owned_and_relative(tmp_path):
+    """Regression: GNU tar needs -C before -T, and entries must not carry the local user's uid."""
+    root = tmp_path / "custom_components" / "hems"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.py").write_text("a")
+    (root / "sub" / "b.json").write_text("b")
+    tar = deploy.stream_tar(["a.py", "sub/b.json"], root=tmp_path)
+    with tarfile.open(fileobj=tar.stdout, mode="r|") as archive:
+        entries = {m.name: (m.uid, m.gid) for m in archive}
+    assert tar.wait() == 0
+    assert entries == {"a.py": (0, 0), "sub/b.json": (0, 0)}
+
+
+def test_privileged_wraps_the_script_for_sudo_without_a_password_prompt():
+    """sudo runs with -n (never prompts) and the script survives quoting; without sudo it is unchanged."""
+    script = deploy.remote_install_script(deploy.Target("h", "u"))
+    wrapped = deploy.privileged(script, sudo=True)
+    import shlex
+    assert shlex.split(wrapped)[:4] == ["sudo", "-n", "sh", "-c"] and shlex.split(wrapped)[4] == script
+    assert deploy.privileged(script, sudo=False) == script
+
+
+def test_a_dropped_connection_during_restart_is_the_expected_outcome(monkeypatch):
+    """HA closes the socket while shutting down; that must not abort the script, and it then waits for HA to return."""
+    import http.client
+    calls = []
+
+    class Answer(io.BytesIO):
+        """A urlopen result that is also a context manager."""
+        status = 200
+
+        def __enter__(self):
+            """Return self for `with`."""
+            return self
+
+        def __exit__(self, *exc):
+            """Nothing to release."""
+            return False
+
+    def fake_urlopen(request, timeout=0):
+        """check_config answers; the restart call drops the connection."""
+        calls.append(request.full_url)
+        if request.full_url.endswith("/config/core/check_config"):
+            return Answer(b'{"result": "valid"}')
+        raise http.client.RemoteDisconnected("closed")
+
+    monkeypatch.setattr(deploy.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(deploy, "wait_for_home_assistant", lambda base, token: True)
+    deploy.restart_home_assistant({"HA_API_URL": "http://ha/api", "HA_API_TOKEN": "t"}, assume_yes=True)
+    assert calls == ["http://ha/api/config/core/check_config", "http://ha/api/services/homeassistant/restart"]
+
+
 def test_install_swaps_the_integration_and_keeps_a_backup_of_the_old_one(tmp_path):
     """First deploy installs; the second replaces everything (stale files vanish) and archives the previous copy."""
     target = deploy.Target("h", "u", config_dir=str(tmp_path))

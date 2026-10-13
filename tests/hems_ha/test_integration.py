@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.hems.const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_GRID, CONF_PRICE_CURVE, CONF_PV,
                                           CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
@@ -100,7 +100,7 @@ async def test_plans_in_dry_run_and_publishes_sensors_with_a_reason(recorder_moc
     assert action.attributes["price_source"] == "market" and action.attributes["price_check_max_diff"] < 0.00015   # Nord Pool agrees with the price sensor
     assert float(hass.states.get("sensor.hems_import_price").state) == pytest.approx(0.3375, abs=0.2)
     assert int(hass.states.get("sensor.hems_plan").state) > 0 and hass.states.get("sensor.hems_plan").attributes["slots"]
-    assert float(hass.states.get("sensor.hems_pv_forecast_next_24_h").state) > 0
+    assert float(hass.states.get("sensor.hems_pv_forecast_24h").state) > 0
     trace = (Path(hass.config.path("hems", "decision_trace.jsonl"))).read_text().splitlines()
     assert json.loads(trace[-1])["dry_run"] is True and json.loads(trace[-1])["status"] == "ok"
 
@@ -199,3 +199,28 @@ async def test_tomorrow_prices_are_off_in_the_morning(recorder_mock, hass: HomeA
     await setup_entry(hass, freezer, aioclient_mock)
     state = hass.states.get("binary_sensor.hems_tomorrow_prices_available")
     assert state.state == "off" and state.attributes["tomorrow_intervals"] == 0
+
+
+async def test_entity_ids_do_not_depend_on_the_instance_language(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """On a Dutch instance the ids are still the English, key-based ones (regression: they came out as sensor.hems_batterij_actie)."""
+    hass.config.language = "nl"
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    for entity_id in ("sensor.hems_battery_action", "sensor.hems_battery_setpoint", "sensor.hems_status", "sensor.hems_plan",
+                      "sensor.hems_pv_forecast_24h", "binary_sensor.hems_tomorrow_prices_available"):
+        assert hass.states.get(entity_id) is not None, entity_id
+    assert hass.states.get("sensor.hems_batterij_actie") is None
+
+
+async def test_a_missing_soc_after_a_restart_is_retried_within_a_minute(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The battery sensors appear shortly after HA starts; HEMS replans after 60 s instead of waiting for the next quarter."""
+    set_states(hass)
+    hass.states.async_set("sensor.soc", "unavailable")
+    await setup_entry(hass, freezer, aioclient_mock)
+    assert hass.states.get("sensor.hems_status").state == "no_soc"
+    hass.states.async_set("sensor.soc", "40")
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.hems_status").state == "ok"
+

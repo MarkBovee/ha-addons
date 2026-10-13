@@ -12,19 +12,22 @@ Usage:
   python3 hems/deploy.py --dry-run          # show what would happen, change nothing
   python3 hems/deploy.py                    # checks, deploy, verify
   python3 hems/deploy.py --restart          # ... and restart Home Assistant after a confirmation
-Options: --host H --user U --key PATH (override .env), --batch (never prompt; needs a key or agent), --skip-checks,
+Options: --host H --user U --key PATH (override .env), --batch (never prompt; needs a key or agent), --no-sudo, --skip-checks,
          --yes (no confirmation for --restart).
 """
 import argparse
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
+import http.client
+import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -40,6 +43,7 @@ class Target:
     user: str
     config_dir: str = REMOTE_CONFIG
     key: str | None = None          # path to a private key; ssh reads it, this script never does
+    sudo: bool = True               # run the install steps through `sudo -n` (the SSH user cannot write in /config; needs passwordless sudo)
 
     @property
     def remote_dir(self) -> str:
@@ -127,6 +131,13 @@ def remote_install_script(target: Target, keep: int = KEEP_BACKUPS) -> str:
     ])
 
 
+def privileged(script: str, sudo: bool) -> str:
+    """The remote command for `script`: run by `sudo -n sh -c` when needed. stdin (the tar stream) passes straight through.
+
+    `-n` makes sudo fail instead of asking for a password, so nothing here can prompt for one."""
+    return f"sudo -n sh -c {shlex.quote(script)}" if sudo else script
+
+
 def ssh_command(target: Target, control_path: str, *remote: str, master: bool = False, batch: bool = False) -> list[str]:
     """ssh invocation that shares one authenticated connection (ControlMaster): the first call may prompt.
 
@@ -151,7 +162,9 @@ def run_checks(root: Path = ROOT) -> None:
 
 def stream_tar(files: list[str], root: Path = ROOT) -> subprocess.Popen:
     """Start tar writing the files (paths relative to the integration folder) to its stdout."""
-    tar = subprocess.Popen(["tar", "--null", "-T", "-", "-C", str(root / INTEGRATION), "-cf", "-"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    # -C must come before -T; entries are root-owned so the server copy matches the other components regardless of local uids
+    tar = subprocess.Popen(["tar", "-C", str(root / INTEGRATION), "--owner=0", "--group=0", "--numeric-owner", "--null", "-T", "-", "-cf", "-"],
+                           stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     tar.stdin.write(("\0".join(files) + "\0").encode())
     tar.stdin.close()
     return tar
@@ -163,7 +176,7 @@ def deploy(target: Target, files: list[str], control_path: str, batch: bool = Fa
     subprocess.run(ssh("true", master=True), check=True)
     try:
         tar = stream_tar(files)
-        subprocess.run(ssh(remote_install_script(target)), stdin=tar.stdout, check=True)
+        subprocess.run(ssh(privileged(remote_install_script(target), target.sudo)), stdin=tar.stdout, check=True)
         tar.stdout.close()
         if tar.wait():
             raise SystemExit("tar failed locally; verify the server copy before restarting anything.")
@@ -175,6 +188,22 @@ def deploy(target: Target, files: list[str], control_path: str, batch: bool = Fa
         print(f"Deployed and verified {len(files)} files in {target.remote_dir}")
     finally:
         subprocess.run(["ssh", "-O", "exit", "-o", f"ControlPath={control_path}", f"{target.user}@{target.host}"], capture_output=True)
+
+
+def wait_for_home_assistant(base: str, token: str, timeout_s: int = 300, poll_s: int = 5) -> bool:
+    """Poll the REST API until it answers 200 again after a restart (it first goes away, then comes back)."""
+    request = urllib.request.Request(base + "/", headers={"Authorization": f"Bearer {token}"})
+    time.sleep(poll_s)   # let the shutdown start so an answer from the old instance is not mistaken for the new one
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                if response.status == 200:
+                    return True
+        except (OSError, http.client.HTTPException):
+            pass
+        time.sleep(poll_s)
+    return False
 
 
 def restart_home_assistant(env: dict[str, str], assume_yes: bool) -> None:
@@ -199,9 +228,10 @@ def restart_home_assistant(env: dict[str, str], assume_yes: bool) -> None:
         raise SystemExit(f"HA reports an invalid configuration, not restarting: {check.get('errors')}")
     try:
         call("/services/homeassistant/restart")
-    except (TimeoutError, urllib.error.URLError):
+    except (TimeoutError, ConnectionError, http.client.HTTPException, urllib.error.URLError):
         pass   # HA drops the connection while it shuts down; that is the expected outcome
-    print("Restart requested. Add the integration under Settings > Devices & services once HA is back.")
+    print("Restart requested, waiting for Home Assistant...")
+    print("Home Assistant is back." if wait_for_home_assistant(base, token) else "Home Assistant did not answer within 5 minutes; check it.")
 
 
 def main() -> int:
@@ -210,6 +240,7 @@ def main() -> int:
     parser.add_argument("--host", help="override HA_HOST")
     parser.add_argument("--user", help="override HA_SSH_USER")
     parser.add_argument("--key", help="path to an SSH private key (override HA_SSH_KEY)")
+    parser.add_argument("--no-sudo", action="store_true", help="do not use sudo on the server (the SSH user can write in /config itself)")
     parser.add_argument("--batch", action="store_true", help="never prompt (needs a key or agent); fails instead of asking for a password")
     parser.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
     parser.add_argument("--skip-checks", action="store_true", help="do not run the core tests and the engine-sync check first")
@@ -218,10 +249,11 @@ def main() -> int:
     args = parser.parse_args()
     env = parse_env((ROOT / ".env").read_text()) if (ROOT / ".env").exists() else {}
     target, files = target_from_env(env, args.host, args.user, args.key), relative_files()
+    target = replace(target, sudo=not args.no_sudo)
     if not files:
         raise SystemExit("No files found under custom_components/hems.")
     print(f"Target {target.user}@{target.host}:{target.remote_dir}  ({len(files)} files, backups kept in {target.backup_dir}, "
-          f"{'key ' + target.key if target.key else 'no key: ssh will ask for the password'})")
+          f"{'key ' + target.key if target.key else 'no key: ssh will ask for the password'}, {'sudo' if target.sudo else 'no sudo'})")
     if args.dry_run:
         print("\n".join(f"  {f}" for f in files))
         print("Dry run: would run the checks" + (" (skipped)" if args.skip_checks else "") + ", back up, deploy, verify. Nothing was changed.")

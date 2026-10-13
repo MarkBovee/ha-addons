@@ -93,7 +93,7 @@ class HemsSensor(HemsEntity, SensorEntity):
 
     def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry, description: HemsSensorDescription) -> None:
         """Bind to the coordinator under the shared device."""
-        super().__init__(coordinator, entry, description.key)
+        super().__init__(coordinator, entry, "sensor", description.key)
         self.entity_description = description
 
     @property

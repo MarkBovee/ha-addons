@@ -21,7 +21,7 @@ class TomorrowPricesAvailable(HemsEntity, BinarySensorEntity):
 
     def __init__(self, coordinator, entry: HemsConfigEntry) -> None:
         """Register as 'tomorrow_prices_available'."""
-        super().__init__(coordinator, entry, "tomorrow_prices_available")
+        super().__init__(coordinator, entry, "binary_sensor", "tomorrow_prices_available")
 
     @property
     def is_on(self) -> bool:

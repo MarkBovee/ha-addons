@@ -43,5 +43,7 @@ HISTORY_DAYS = 7
 HISTORY_REFRESH = timedelta(hours=1)
 WEATHER_REFRESH = timedelta(minutes=30)
 WEATHER_MAX_AGE = timedelta(hours=6)           # beyond this the forecast is dropped, not trusted
+RETRY_STATUSES = frozenset({"no_soc", "stale_soc", "no_prices"})   # inputs that usually appear within a minute after a restart
+RETRY_DELAY = timedelta(seconds=60)
 TRACE_DIR = "hems"
 TRACE_FILE = "decision_trace.jsonl"
