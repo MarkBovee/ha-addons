@@ -16,9 +16,18 @@ Een HEMS-kern (`hems/core`, geen HA-imports) die per kwartier een rolling-horizo
 - **Zonnebonus = instellingen zoals energy-prices**: `export_vat_multiplier` 1,21, `export_bonus_pct` 0,10, `export_fixed_bonus` 0,02, `export_energy_tax` 0,11085, plus lengte- en breedtegraad (default uit HA). Actuele add-on-opties in HA gecontroleerd; ze komen overeen met de defaults in `prices.py`. Daarbovenop twee schakelaars, beide default aan: bonus alleen overdag (zonsopkomst-zonsondergang) en alleen bij positieve prijs. Reden: de README van energy-prices beschrijft dat gedrag en de Zonneplan-pagina bevestigt de positieve-prijs-eis voor de 10% (de vaste 0,02 geldt altijd). Het prijsmodel krijgt daarom een daglicht-vlag per slot. Replay draait met en zonder de schakelaars.
 - **NetDaemon is archief**: geen NetDaemon-add-on geïnstalleerd (gecontroleerd in HA); de `input_boolean.netdaemon_*` helpers zijn restanten en geen HEMS-zaak. De batterij heeft daarmee twee sturende lagen (battery-manager en battery-api), niet drie.
 
+## Besluiten tijdens de bouw (13 okt)
+- **Prijsbron v1**: de `price_curve` van de energy-prices-sensor (aanwijsbare entiteit). Zelf Nord Pool ophalen blijft een vervolgstap uit het plan; de bron zit achter `import_curve` in `hems.dryrun`.
+- **Open-Meteo bevestigd voor v1**: gratis, geen sleutel, kwartierdata; PV-factor gefit op 3-12 okt geeft R2 0,82. Alleen op 0,01° afgeronde coördinaten gaan de deur uit; uitzetbaar.
+- **Alleen dry-run**: de integratie schrijft nooit naar een apparaat; `BatteryPort.apply` wordt in deze versie niet aangeroepen.
+- **Engine als gegenereerde kopie**: `custom_components/hems/engine` komt uit `hems/core` via `scripts/sync_hems_core.py`; een test faalt als de kopie achterloopt.
+- **Warm water (stap 4) en EV (Charge Amps) zijn niet gebouwd**; ze zijn niet nodig voor de eerste simulatie.
+- **Replay-uitkomst** (4-11 okt, bekend verbruik en PV, 8 dagen, kasbasis): planner 16,84 EUR tegenover 15,37 EUR echt, met slijtagemarge 0,10; 22,03 EUR bij 0,05 en 24,49 EUR bij 0,00. Op 7-9 okt (dunne spreads) laadt de planner niet, waar de echte sturing verlies maakte. Zie `docs/hems/observations/replay-2026-10-13.md`.
+
 ## Open questions
 1. Bonus op batterijstroom: Zonneplan beschrijft de bonus voor "zonnestroom"; of avondlevering uit de batterij hem krijgt en of hij incl. btw is, is onbevestigd. Controle op een echte afrekening; tot dan dekken de schakelaars en de replay beide gevallen.
-2. Negatieve marktprijzen: de x1,10 maakt een negatieve prijs nog negatiever; opgelost zodra de positieve-prijs-schakelaar in het prijsmodel zit (test erbij).
+2. Slijtagemarge: 0,10 EUR/kWh kost in de replay ongeveer 7,6 EUR over 8 dagen aan kasopbrengst ten opzichte van 0,00 (24,49 tegen 16,84). Wat is de echte afschrijving per ontladen kWh? Een LFP-accu van circa 5000 EUR bij 6000 cycli komt op ruwweg 0,04 EUR/kWh; dat is een aanname en geen meting.
+3. Negatieve marktprijzen: de x1,10 maakt een negatieve prijs nog negatiever; opgelost zodra de positieve-prijs-schakelaar in het prijsmodel zit (test erbij).
 
 ## Not yet specified
 - Dynamisch reservebeleid (gebruik, temperatuur).
