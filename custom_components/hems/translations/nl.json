@@ -12,7 +12,7 @@
           "grid_entity": "Netvermogen bij de meter (W, positief = import)",
           "inverter_output_entity": "AC-uitgang omvormer (W, optioneel; verbetert de huisverbruik-schatting)",
           "ev_power_entity": "EV-laadvermogen (W, optioneel; telt niet mee in het basisverbruik)",
-          "price_curve_entity": "Importprijs-sensor met een price_curve-attribuut"
+          "price_curve_entity": "Importprijs-sensor met een price_curve-attribuut (optioneel; terugval en controle)"
         }
       }
     },
@@ -34,7 +34,7 @@
           "hard_min_soc_pct": "Harde minimum-SoC (%)",
           "reserve_soc_pct": "Reserve-SoC (%)",
           "round_trip_eff": "Round-trip rendement (0-1)",
-          "wear_cost": "Slijtagemarge (EUR per ontladen kWh)",
+          "min_profit_margin": "Minimale winstmarge (EUR per ontladen kWh, na verliezen)",
           "pv_gain_w_per_wm2": "PV-factor (W per W/m2, 0 = automatisch kalibreren)",
           "pv_max_ac_w": "AC-limiet omvormer (W)",
           "weather_enabled": "Weer ophalen bij Open-Meteo",
@@ -47,7 +47,9 @@
           "export_energy_tax": "Export energiebelasting-teruggave (EUR/kWh, alleen saldering)",
           "salderen": "Saldering geldt",
           "bonus_only_daylight": "Percentagebonus alleen tussen zonsopkomst en zonsondergang",
-          "bonus_only_positive_price": "Percentagebonus alleen bij een positieve marktprijs"
+          "bonus_only_positive_price": "Percentagebonus alleen bij een positieve marktprijs",
+          "nordpool_enabled": "Dagprijzen zelf ophalen bij Nord Pool",
+          "delivery_area": "Nord Pool-biedzone"
         }
       }
     }
@@ -89,6 +91,11 @@
       },
       "plan": {
         "name": "Plan"
+      }
+    },
+    "binary_sensor": {
+      "tomorrow_prices_available": {
+        "name": "Prijzen van morgen beschikbaar"
       }
     }
   }

@@ -7,13 +7,11 @@ from typing import Any
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
 from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import HemsConfigEntry
-from .const import DOMAIN
 from .coordinator import HemsCoordinator, HemsSnapshot
+from .entity import HemsEntity
 
 QUARTER = timedelta(minutes=15)
 PLAN_PREVIEW_SLOTS = 48                       # 12 hours of quarters in the plan attribute
@@ -68,7 +66,7 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           value=lambda s: round(s.output.decision.plan.saving, 2) if s.output.decision else None),
     HemsSensorDescription(key="status", translation_key="status", device_class=SensorDeviceClass.ENUM,
                           options=["ok", "no_soc", "stale_soc", "no_prices", "no_price_for_now"], value=lambda s: s.output.status,
-                          attributes=lambda s: {"weather_age_min": None if s.weather_age_min is None else round(s.weather_age_min),
+                          attributes=lambda s: {"price_source": s.output.trace.get("price_source"), "weather_age_min": None if s.weather_age_min is None else round(s.weather_age_min),
                                                 "history_hours": s.history_hours}),
     HemsSensorDescription(key="import_price", translation_key="import_price", native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
                           state_class=SensorStateClass.MEASUREMENT, value=lambda s: _first_price(s, "import_eur_kwh")),
@@ -88,18 +86,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry, async_a
     async_add_entities(HemsSensor(entry.runtime_data, entry, d) for d in SENSORS)
 
 
-class HemsSensor(CoordinatorEntity[HemsCoordinator], SensorEntity):
+class HemsSensor(HemsEntity, SensorEntity):
     """A read-only view of one aspect of the latest dry-run cycle."""
 
-    _attr_has_entity_name = True
     entity_description: HemsSensorDescription
 
     def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry, description: HemsSensorDescription) -> None:
-        """Bind to the coordinator and register under the shared device."""
-        super().__init__(coordinator)
+        """Bind to the coordinator under the shared device."""
+        super().__init__(coordinator, entry, description.key)
         self.entity_description = description
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name="HEMS", manufacturer="HEMS", model="Dry-run planner")
 
     @property
     def native_value(self) -> Any:

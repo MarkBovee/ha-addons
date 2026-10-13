@@ -9,8 +9,8 @@ from homeassistant.helpers import selector
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_GRID, CONF_INVERTER, CONF_PRICE_CURVE,
                     CONF_PV, CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
 
-_ROLES_REQUIRED = (CONF_SOC, CONF_BATTERY_POWER, CONF_PV, CONF_GRID, CONF_PRICE_CURVE)
-_ROLES_OPTIONAL = (CONF_INVERTER, CONF_EV)
+_ROLES_REQUIRED = (CONF_SOC, CONF_BATTERY_POWER, CONF_PV, CONF_GRID)
+_ROLES_OPTIONAL = (CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE)
 _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
 
 
@@ -33,12 +33,13 @@ def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelec
 def _options_schema(current: dict[str, Any]) -> vol.Schema:
     """All settings with their current values; the bonus switches and netting are plain booleans."""
     numbers = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1),
-               "round_trip_eff": (0.5, 1.0, 0.01), "wear_cost": (0, 1, 0.01), "pv_gain_w_per_wm2": (0, 30, 0.1), "pv_max_ac_w": (0, 30000, 100),
+               "round_trip_eff": (0.5, 1.0, 0.01), "min_profit_margin": (0, 1, 0.01), "pv_gain_w_per_wm2": (0, 30, 0.1), "pv_max_ac_w": (0, 30000, 100),
                "import_vat_multiplier": (1, 2, 0.01), "import_markup": (-0.5, 0.5, 0.0001), "import_energy_tax": (0, 1, 0.00001),
                "export_vat_multiplier": (1, 2, 0.01), "export_bonus_pct": (0, 1, 0.01), "export_fixed_bonus": (-0.5, 0.5, 0.0001),
                "export_energy_tax": (0, 1, 0.00001)}
     fields: dict[Any, Any] = {vol.Required(k, default=current[k]): _number(*bounds) for k, bounds in numbers.items()}
-    for flag in ("weather_enabled", "salderen", "bonus_only_daylight", "bonus_only_positive_price"):
+    fields[vol.Required("delivery_area", default=current["delivery_area"])] = str
+    for flag in ("weather_enabled", "nordpool_enabled", "salderen", "bonus_only_daylight", "bonus_only_positive_price"):
         fields[vol.Required(flag, default=current[flag])] = bool
     return vol.Schema(fields)
 

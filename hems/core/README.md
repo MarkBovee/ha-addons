@@ -12,7 +12,7 @@ translation lives in adapters outside this package (see docs/hems/intake-decisio
 - replay.py     replay recorded days through the rolling planner and account them like the recorded battery
 - dryrun.py     dry-run engine: inputs (prices, history, weather, SoC) to a decision plus a status that says why not
 - pvforecast.py PV forecast from irradiance (one fitted gain, inverter clip); weather.py Open-Meteo parsing
-- battery.py    DP planner, rolling horizon, wear margin, hard minimum + reserve floor (per slot), charge->discharge cycle
+- battery.py    DP planner, rolling horizon, minimum profit margin, hard minimum + reserve floor (per slot), charge->discharge cycle
 - balancer.py   priority load balancer, default grid limit 15 kW, hysteresis; uncontrollable loads count first
 - forecast.py   median local-hour consumption baseline (datetime-keyed history)
 - trace.py      JSONL decision trace (injectable clock, size rotation); the planner supplies a reason per slot

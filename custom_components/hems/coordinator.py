@@ -23,6 +23,8 @@ from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_
                     CONF_PV, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, HISTORY_DAYS, HISTORY_REFRESH, TRACE_DIR, TRACE_FILE,
                     WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
+from .engine.contracts import MarketPrices
+from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
 from .engine.dryrun import EngineInputs, EngineOutput, EngineSettings, step
 from .engine.pvforecast import fit_gain_from_history
 from .engine.prices import PriceModel
@@ -40,13 +42,15 @@ class HemsSnapshot:
     pv_gain_w_per_wm2: float
     history_hours: int
     weather_age_min: float | None
+    tomorrow_quarters: int                 # quarters of tomorrow's delivery day that are known (0 = not published)
+    prices_until: datetime | None          # end of the last known price quarter
 
 
 def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -> EngineSettings:
     """Engine settings from the options (defaults fill gaps) and the Home Assistant location."""
     o = {**DEFAULT_OPTIONS, **entry.options}
     battery = BatteryConfig(capacity_kwh=o["capacity_kwh"], max_power_kw=o["max_power_kw"], hard_min_soc=o["hard_min_soc_pct"] / 100,
-                            reserve_soc=o["reserve_soc_pct"] / 100, round_trip_eff=o["round_trip_eff"], wear_cost=o["wear_cost"])
+                            reserve_soc=o["reserve_soc_pct"] / 100, round_trip_eff=o["round_trip_eff"], min_profit_margin=o["min_profit_margin"])
     prices = PriceModel(import_vat_multiplier=o["import_vat_multiplier"], import_markup=o["import_markup"],
                         import_energy_tax=o["import_energy_tax"], export_vat_multiplier=o["export_vat_multiplier"],
                         export_bonus_pct=o["export_bonus_pct"], export_fixed_bonus=o["export_fixed_bonus"],
@@ -69,6 +73,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._pv_history: list[tuple[datetime, float]] = []
         self._history_at: datetime | None = None
         self._weather: Weather | None = None
+        self._market_prices: dict[datetime, float] = {}
+        self._market: MarketPrices | None = None
+        self._market_tried_at: datetime | None = None
         self._weather_tried_at: datetime | None = None
         self._gain = 0.0
 
@@ -96,6 +103,34 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._history = base_load_history(get(CONF_GRID), get(CONF_PV), battery, get(CONF_EV), get(CONF_INVERTER))
         self._pv_history = get(CONF_PV)
         self._history_at = now
+
+    async def _refresh_market(self, now: datetime) -> None:
+        """Fetch the day-ahead prices that should be known now (today, tomorrow once published).
+
+        HTTP 204 means 'not published yet'. A failed request keeps the prices already held; the engine then
+        falls back to the price-curve sensor when the market series does not cover the current quarter."""
+        options = {**DEFAULT_OPTIONS, **self.config_entry.options}
+        if not options["nordpool_enabled"]:
+            self._market = None
+            return
+        if not fetch_due(now, self._market, self._market_tried_at):
+            return
+        self._market_tried_at = now
+        area = options["delivery_area"]
+        for day in delivery_dates(now):
+            try:
+                async with async_get_clientsession(self.hass).get(
+                        NORD_POOL_URL, params=nordpool_params(day, area), headers=NORD_POOL_HEADERS,
+                        timeout=aiohttp.ClientTimeout(total=20)) as response:
+                    if response.status == 204:
+                        continue
+                    response.raise_for_status()
+                    self._market_prices.update(parse_day_ahead(await response.json(), area))
+            except (aiohttp.ClientError, TimeoutError, KeyError, ValueError) as err:
+                _LOGGER.warning("Nord Pool fetch for %s failed (%s); keeping the prices already known", day, err)
+        cutoff = now - timedelta(days=2)
+        self._market_prices = {s: p for s, p in self._market_prices.items() if s >= cutoff}
+        self._market = merge_days([self._market_prices], now)
 
     async def _refresh_weather(self, now: datetime, settings: EngineSettings) -> None:
         """Fetch Open-Meteo at most every WEATHER_REFRESH; keep the last good copy for WEATHER_MAX_AGE."""
@@ -128,6 +163,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         now = dt_util.utcnow()
         settings = settings_from_entry(self.config_entry, self.hass.config.latitude, self.hass.config.longitude)
         await self._refresh_history(now)
+        await self._refresh_market(now)
         await self._refresh_weather(now, settings)
         gain = self._calibrated_gain(settings)
         settings = replace(settings, pv_gain_w_per_wm2=gain)
@@ -135,10 +171,12 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         inputs = EngineInputs(
             now=now, soc_pct=reading_from_state(self.hass.states.get(self._entity(CONF_SOC) or "")),
             import_curve=parse_price_curve(price_state.attributes.get("price_curve") if price_state else None),
-            load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None)
+            load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market)
         output = await self.hass.async_add_executor_job(step, inputs, settings, self._previous)
         if output.decision:
             self._previous = output.decision
         await self.hass.async_add_executor_job(self._trace.write, {"dry_run": True, "pv_gain": round(gain, 2), **output.trace})
         weather_age = (now - self._weather.fetched_at).total_seconds() / 60 if self._weather else None
-        return HemsSnapshot(output, gain, len(self._history), weather_age)
+        known = set(self._market.starts if self._market else ()) | {t for t, _ in inputs.import_curve}
+        prices_until = max(known) + timedelta(minutes=15) if known else None
+        return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until)

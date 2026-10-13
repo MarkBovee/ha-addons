@@ -73,3 +73,29 @@ def test_weather_request_does_not_leak_the_exact_home_location():
     """The weather request carries coordinates rounded to about one kilometre."""
     params = open_meteo_params(52.090731, 5.121398)
     assert (params["latitude"], params["longitude"]) == (52.09, 5.12)
+
+
+def market_for(local_day="2026-10-06"):
+    """The recorded import curve turned back into market prices, as the Nord Pool source would deliver them."""
+    from hems.contracts import MarketPrices
+    from hems.prices import PriceModel
+    curve = day_curve(local_day)
+    return MarketPrices(tuple(t for t, _ in curve), tuple(PriceModel().market_from_import(p) for _, p in curve), NOW)
+
+
+def test_the_market_source_wins_and_is_cross_checked_against_the_curve():
+    """With a market series and a curve the market is used and the import-price difference is traced."""
+    out = step(inputs(market=market_for()), SETTINGS)
+    assert out.status == STATUS_OK and out.trace["price_source"] == "market" and out.trace["price_check_max_diff"] < 1e-9
+
+
+def test_a_market_without_the_current_quarter_falls_back_to_the_curve():
+    """A stale market series (yesterday) does not block planning on the price curve."""
+    out = step(inputs(market=market_for("2026-10-05")), SETTINGS)
+    assert out.status == STATUS_OK and out.trace["price_source"] == "curve"
+
+
+def test_a_market_alone_is_enough_and_no_prices_anywhere_is_reported():
+    """The market alone suffices; with neither source the status is no_prices."""
+    assert step(inputs(import_curve=[], market=market_for()), SETTINGS).trace["price_source"] == "market"
+    assert step(inputs(import_curve=[], market=None), SETTINGS).status == STATUS_NO_PRICES

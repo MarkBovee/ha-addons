@@ -12,7 +12,7 @@
           "grid_entity": "Grid power at the meter (W, positive = import)",
           "inverter_output_entity": "Inverter AC output (W, optional; improves the house-load estimate)",
           "ev_power_entity": "EV charger power (W, optional; excluded from the base load)",
-          "price_curve_entity": "Import price sensor with a price_curve attribute"
+          "price_curve_entity": "Import price sensor with a price_curve attribute (optional; fallback and cross-check)"
         }
       }
     },
@@ -34,7 +34,7 @@
           "hard_min_soc_pct": "Hard minimum SoC (%)",
           "reserve_soc_pct": "Reserve SoC (%)",
           "round_trip_eff": "Round-trip efficiency (0-1)",
-          "wear_cost": "Wear margin (EUR per discharged kWh)",
+          "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
           "pv_gain_w_per_wm2": "PV gain (W per W/m2, 0 = calibrate automatically)",
           "pv_max_ac_w": "Inverter AC limit (W)",
           "weather_enabled": "Fetch weather from Open-Meteo",
@@ -47,7 +47,9 @@
           "export_energy_tax": "Export energy tax refund (EUR/kWh, netting only)",
           "salderen": "Netting (salderen) applies",
           "bonus_only_daylight": "Percentage bonus only between sunrise and sunset",
-          "bonus_only_positive_price": "Percentage bonus only for a positive market price"
+          "bonus_only_positive_price": "Percentage bonus only for a positive market price",
+          "nordpool_enabled": "Fetch day-ahead prices from Nord Pool",
+          "delivery_area": "Nord Pool delivery area"
         }
       }
     }
@@ -89,6 +91,11 @@
       },
       "plan": {
         "name": "Plan"
+      }
+    },
+    "binary_sensor": {
+      "tomorrow_prices_available": {
+        "name": "Tomorrow prices available"
       }
     }
   }

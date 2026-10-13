@@ -20,7 +20,7 @@ class BatteryConfig:
     reserve_soc: float = 0.30        # conservative reserve floor; a setting, later dynamic via Slot.reserve_soc
     max_soc: float = 1.00
     round_trip_eff: float = 0.82     # measured 3-12 Oct 2026 (docs/hems/intake-decisions.md); a setting
-    wear_cost: float = 0.10          # EUR per kWh discharged: fixed margin vs cycle wear
+    min_profit_margin: float = 0.10  # EUR per kWh discharged: a cycle must earn at least this, net of round-trip losses
     step_kwh: float = 0.25           # SoC grid resolution
     allow_grid_charge: bool = True
 
@@ -54,7 +54,7 @@ class PlanSlot:
 @dataclass
 class Plan:
     slots: list[PlanSlot] = field(default_factory=list)
-    total_cost: float = 0.0
+    total_cost: float = 0.0          # cash grid cost of the horizon
     baseline_cost: float = 0.0       # same horizon without battery
 
     @property
@@ -78,13 +78,13 @@ def _stored_value(next_values: list[float], k: int, hi: int, step: float) -> flo
 
 def _reason(action: str, s: Slot, grid_kwh: float, stored_value: float | None, eff: float, cfg: BatteryConfig,
             at_floor: bool, at_full: bool) -> str:
-    """Why the planner chose `action`, comparing EUR per kWh stored: selling net of wear, buying net of loss, keeping.
+    """Why the planner chose `action`, comparing EUR per kWh stored: selling net of the minimum profit margin, buying net of loss, keeping.
 
     The 'keep' value is what the rest of the horizon would pay for that kWh; every decision is that comparison."""
     if stored_value is None:
         return action
     net = s.load_kwh - s.pv_kwh
-    sell = eff * ((s.import_price if net > 0 else s.export_price) - cfg.wear_cost)
+    sell = eff * ((s.import_price if net > 0 else s.export_price) - cfg.min_profit_margin)
     buy_price = s.import_price if (grid_kwh > 0 if action == "charge" else net >= 0) else s.export_price
     buy = buy_price / eff
     if action == "discharge":
@@ -142,7 +142,7 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
                     # only allow charging from surplus PV
                     if ac > max(0.0, -net) + 1e-9:
                         continue
-                c = _grid_cost(net + ac, s) + (cfg.wear_cost * -ac if ac < 0 else 0.0)
+                c = _grid_cost(net + ac, s) + (cfg.min_profit_margin * -ac if ac < 0 else 0.0)
                 c += value[t + 1][k2]
                 if c < best:
                     best, best_d = c, d
@@ -163,6 +163,6 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
         keep = _stored_value(value[t + 1], k, hi, step)
         reason = _reason(action, s, grid, keep, eff, cfg, at_floor=k <= floors[t], at_full=k >= hi)
         out.slots.append(PlanSlot(t, action, ac, k * step, grid, _grid_cost(grid, s), reason, keep))
-        out.total_cost += _grid_cost(grid, s) + (cfg.wear_cost * -ac if ac < 0 else 0.0)
+        out.total_cost += _grid_cost(grid, s)    # cash only: the margin shapes decisions, it is not money
         out.baseline_cost += _grid_cost(net, s)
     return out

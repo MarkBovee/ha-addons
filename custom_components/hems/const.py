@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 DOMAIN = "hems"
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "binary_sensor"]
 
 # Entity roles chosen in the config flow (HEMS only ever sees these Home Assistant entities).
 CONF_SOC = "soc_entity"
@@ -12,7 +12,7 @@ CONF_PV = "pv_entity"
 CONF_GRID = "grid_entity"                      # + import / - export
 CONF_INVERTER = "inverter_output_entity"       # optional: AC output of the inverter, a better house-load source
 CONF_EV = "ev_power_entity"                    # optional: subtracted from the house load
-CONF_PRICE_CURVE = "price_curve_entity"        # sensor with a `price_curve` attribute: [{start, end, price}]
+CONF_PRICE_CURVE = "price_curve_entity"        # optional: sensor with a `price_curve` attribute [{start, end, price}]; fallback and cross-check
 
 # Settings (options flow) and their defaults. Price components mirror the energy-prices add-on.
 DEFAULT_OPTIONS = {
@@ -21,10 +21,12 @@ DEFAULT_OPTIONS = {
     "hard_min_soc_pct": 5.0,
     "reserve_soc_pct": 30.0,
     "round_trip_eff": 0.82,
-    "wear_cost": 0.10,
+    "min_profit_margin": 0.10,
     "pv_gain_w_per_wm2": 0.0,                  # 0 = calibrate from recorded PV against the weather data
     "pv_max_ac_w": 8000.0,
     "weather_enabled": True,
+    "nordpool_enabled": True,                  # HEMS fetches day-ahead prices itself
+    "delivery_area": "NL",
     "import_vat_multiplier": 1.21,
     "import_markup": 0.02,
     "import_energy_tax": 0.11085,

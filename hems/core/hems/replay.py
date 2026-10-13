@@ -31,7 +31,7 @@ class ReplayData:
 @dataclass(frozen=True)
 class Account:
     """Cost of one battery behaviour over the replayed quarters."""
-    cost_eur: float                          # grid cost plus wear
+    cost_eur: float                          # cash grid cost
     baseline_eur: float                      # grid cost with no battery
     soc_delta_kwh: float                     # end minus start SoC
 
@@ -55,18 +55,18 @@ def known_until(now: datetime, tz: ZoneInfo, publish_hour: int) -> datetime:
     return midnight + timedelta(days=1) if local.hour >= publish_hour else midnight
 
 
-def slot_cost(import_price: float, export_price: float, house: float, pv: float, battery_kwh: float, wear: float) -> float:
-    """Cost of one quarter: grid exchange at the import/export price, plus wear on discharged energy."""
+def slot_cost(import_price: float, export_price: float, house: float, pv: float, battery_kwh: float) -> float:
+    """Cash cost of one quarter: grid exchange at the import/export price."""
     grid = house - pv + battery_kwh
-    return grid * (import_price if grid > 0 else export_price) + wear * max(-battery_kwh, 0.0)
+    return grid * (import_price if grid > 0 else export_price)
 
 
-def account(data: ReplayData, battery_kwh: list[float] | tuple[float, ...], soc_delta_kwh: float, wear: float) -> Account:
+def account(data: ReplayData, battery_kwh: list[float] | tuple[float, ...], soc_delta_kwh: float) -> Account:
     """Account a battery behaviour (one AC flow per quarter) against the recorded house and PV."""
     p = data.prices
-    cost = sum(slot_cost(i, e, h, v, b, wear) for i, e, h, v, b in
+    cost = sum(slot_cost(i, e, h, v, b) for i, e, h, v, b in
                zip(p.import_eur_kwh, p.export_eur_kwh, data.house_kwh, data.pv_kwh, battery_kwh))
-    base = sum(slot_cost(i, e, h, v, 0.0, 0.0) for i, e, h, v in
+    base = sum(slot_cost(i, e, h, v, 0.0) for i, e, h, v in
                zip(p.import_eur_kwh, p.export_eur_kwh, data.house_kwh, data.pv_kwh))
     return Account(cost, base, soc_delta_kwh)
 

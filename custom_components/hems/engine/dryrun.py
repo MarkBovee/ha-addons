@@ -11,9 +11,9 @@ from typing import Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .battery import BatteryConfig
-from .contracts import Reading
+from .contracts import MarketPrices, Reading
 from .forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
-from .prices import PriceModel, PriceSeries, price_series_from_import_curve
+from .prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
 from .pvforecast import pv_kwh_per_quarter
 from .rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
 from .slots import slot_starts
@@ -44,9 +44,10 @@ class EngineSettings:
 class EngineInputs:
     now: datetime
     soc_pct: Reading | None
-    import_curve: Sequence[tuple[datetime, float]]    # (quarter start UTC, consumer import price EUR/kWh)
+    import_curve: Sequence[tuple[datetime, float]]    # fallback: (quarter start UTC, consumer import price EUR/kWh)
     load_history_w: Sequence[tuple[datetime, float]]  # hourly mean base load, timezone-aware hour starts
     ghi_w_m2: Mapping[datetime, float] | None         # irradiance by quarter start; None = no weather data
+    market: MarketPrices | None = None                # preferred price source: market prices, priced by the model
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,28 @@ class EngineOutput:
 def _failure(status: str, inputs: EngineInputs, **extra) -> EngineOutput:
     """An output without a decision; the trace keeps the reason so 'why nothing?' is answerable."""
     return EngineOutput(status, None, None, {}, {}, {"status": status, "now": inputs.now.isoformat(), **extra})
+
+
+def _prices(inputs: EngineInputs, settings: EngineSettings, start: datetime) -> tuple[PriceSeries | None, str, float | None]:
+    """Price series, where it came from, and how far the fallback curve differs from the market-derived import price.
+
+    The market series wins when it contains the current quarter; otherwise the import curve is used. When both
+    exist the largest import-price difference over their overlap is reported, so a mismatch between the HEMS
+    price settings and the energy-prices add-on shows up in the trace instead of silently skewing the plan."""
+    market = inputs.market
+    from_market = build_price_series(market, settings.prices, settings.latitude, settings.longitude) if market else None
+    from_curve = (price_series_from_import_curve(inputs.import_curve, settings.prices, settings.latitude, settings.longitude)
+                  if inputs.import_curve else None)
+    check = None
+    if from_market and from_curve:
+        curve = dict(inputs.import_curve)
+        diffs = [abs(price - curve[s]) for s, price in zip(from_market.starts, from_market.import_eur_kwh) if s in curve]
+        check = round(max(diffs), 4) if diffs else None
+    if from_market and start in from_market.starts:
+        return from_market, "market", check
+    if from_curve:
+        return from_curve, "curve", check
+    return from_market, "market" if from_market else "none", check
 
 
 def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: datetime, n_slots: int) -> tuple[dict[datetime, float], str]:
@@ -80,18 +103,21 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
         return _failure(STATUS_NO_SOC, inputs)
     if not inputs.soc_pct.is_fresh(inputs.now, settings.soc_max_age):
         return _failure(STATUS_STALE_SOC, inputs, soc_age_s=round(inputs.soc_pct.age(inputs.now).total_seconds()))
-    if not inputs.import_curve:
-        return _failure(STATUS_NO_PRICES, inputs)
-    prices = price_series_from_import_curve(inputs.import_curve, settings.prices, settings.latitude, settings.longitude)
     start = floor_to_quarter(inputs.now)
+    prices, source, price_check = _prices(inputs, settings, start)
+    if prices is None:
+        return _failure(STATUS_NO_PRICES, inputs)
     load, load_source = _load_forecast(inputs, settings, start, settings.max_slots)
     pv = pv_kwh_per_quarter(inputs.ghi_w_m2 or {}, settings.pv_gain_w_per_wm2, settings.pv_max_ac_w)
     soc_kwh = inputs.soc_pct.value / 100 * cfg.capacity_kwh
     decision = plan_next(HorizonInputs(inputs.now, soc_kwh, prices, load, pv, settings.max_slots), cfg)
     if decision is None:
         return EngineOutput(STATUS_NO_PRICE_NOW, None, prices, load, pv,
-                            {"status": STATUS_NO_PRICE_NOW, "now": inputs.now.isoformat(), "prices_end": prices.starts[-1].isoformat()})
-    trace = {"status": STATUS_OK, "load_source": load_source, "weather": inputs.ghi_w_m2 is not None, **decision.trace}
+                            {"status": STATUS_NO_PRICE_NOW, "price_source": source, "now": inputs.now.isoformat(),
+                             "prices_end": prices.starts[-1].isoformat()})
+    trace = {"status": STATUS_OK, "price_source": source, "load_source": load_source, "weather": inputs.ghi_w_m2 is not None, **decision.trace}
+    if price_check is not None:
+        trace["price_check_max_diff"] = price_check
     shift = plan_shift(previous, decision)
     if shift:
         trace["plan_shift"] = shift

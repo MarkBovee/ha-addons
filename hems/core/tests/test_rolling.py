@@ -102,7 +102,7 @@ def test_replay_earns_money_on_a_wide_spread_day_and_respects_the_device_limits(
     data = synthetic_home(day, soc0_kwh=7.5)
     cfg = BatteryConfig()
     sim = run_replay(data, cfg)
-    result = account(data, sim.battery_kwh, sim.soc_kwh[-1] - data.soc0_kwh, cfg.wear_cost)
+    result = account(data, sim.battery_kwh, sim.soc_kwh[-1] - data.soc0_kwh)
     assert result.valued_saving(0.25) > 0.5
     assert min(sim.soc_kwh) >= cfg.hard_min_soc * cfg.capacity_kwh - 1e-6 and max(sim.soc_kwh) <= cfg.capacity_kwh + 1e-6
     assert max(abs(b) for b in sim.battery_kwh) <= cfg.max_power_kw * 0.25 + 1e-6
@@ -115,5 +115,5 @@ def test_replay_does_not_cycle_at_a_loss_on_a_thin_spread_day():
     data = synthetic_home(day, soc0_kwh=7.5)
     cfg = BatteryConfig()
     sim = run_replay(data, cfg)
-    result = account(data, sim.battery_kwh, sim.soc_kwh[-1] - data.soc0_kwh, cfg.wear_cost)
+    result = account(data, sim.battery_kwh, sim.soc_kwh[-1] - data.soc0_kwh)
     assert result.valued_saving(0.20) > -0.05
