@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 
 from hems.slots import SLOT_H
 
+INF = float("inf")
+
 
 @dataclass
 class BatteryConfig:
@@ -46,6 +48,7 @@ class PlanSlot:
     grid_kwh: float                  # + import / - export
     cost: float
     reason: str = ""
+    stored_value: float | None = None  # EUR per kWh kept in the battery after this slot (marginal value from the DP)
 
 
 @dataclass
@@ -63,6 +66,36 @@ class Plan:
 def _grid_cost(net_kwh: float, s: Slot) -> float:
     """Cost of a grid exchange in the slot: import at the import price, export at the export price."""
     return net_kwh * s.import_price if net_kwh > 0 else net_kwh * s.export_price
+
+
+def _stored_value(next_values: list[float], k: int, hi: int, step: float) -> float | None:
+    """Marginal value (EUR per stored kWh) of one more step of SoC, from the next slot's cost-to-go table."""
+    low, high = (k, k + 1) if k < hi else (k - 1, k)
+    if low < 0 or INF in (abs(next_values[low]), abs(next_values[high])):
+        return None
+    return -(next_values[high] - next_values[low]) / step
+
+
+def _reason(action: str, s: Slot, grid_kwh: float, stored_value: float | None, eff: float, cfg: BatteryConfig,
+            at_floor: bool, at_full: bool) -> str:
+    """Why the planner chose `action`, comparing EUR per kWh stored: selling net of wear, buying net of loss, keeping.
+
+    The 'keep' value is what the rest of the horizon would pay for that kWh; every decision is that comparison."""
+    if stored_value is None:
+        return action
+    net = s.load_kwh - s.pv_kwh
+    sell = eff * ((s.import_price if net > 0 else s.export_price) - cfg.wear_cost)
+    buy_price = s.import_price if (grid_kwh > 0 if action == "charge" else net >= 0) else s.export_price
+    buy = buy_price / eff
+    if action == "discharge":
+        return f"sell {sell:.3f} > keep {stored_value:.3f}"
+    if action == "charge":
+        return f"buy {buy:.3f} < keep {stored_value:.3f}"
+    if at_floor and sell > stored_value:
+        return f"hold at reserve floor (sell {sell:.3f} > keep {stored_value:.3f})"
+    if at_full and buy < stored_value:
+        return f"hold, battery full (buy {buy:.3f} < keep {stored_value:.3f})"
+    return f"hold: sell {sell:.3f} <= keep {stored_value:.3f} <= buy {buy:.3f}"
 
 
 def _floor_levels(slots: list[Slot], cfg: BatteryConfig) -> list[int]:
@@ -87,7 +120,6 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
     if terminal_value is None:
         terminal_value = min(s.import_price for s in slots) * eff if slots else 0.0
 
-    INF = float("inf")
     # value[t][k]: minimal cost-to-go from slot t at SoC level k
     value = [[INF] * (hi + 1) for _ in range(n + 1)]
     for k in range(hi + 1):
@@ -128,7 +160,9 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
         grid = net + ac
         k += d
         action = "charge" if d > 0 else "discharge" if d < 0 else "idle"
-        out.slots.append(PlanSlot(t, action, ac, k * step, grid, _grid_cost(grid, s), ""))
+        keep = _stored_value(value[t + 1], k, hi, step)
+        reason = _reason(action, s, grid, keep, eff, cfg, at_floor=k <= floors[t], at_full=k >= hi)
+        out.slots.append(PlanSlot(t, action, ac, k * step, grid, _grid_cost(grid, s), reason, keep))
         out.total_cost += _grid_cost(grid, s) + (cfg.wear_cost * -ac if ac < 0 else 0.0)
         out.baseline_cost += _grid_cost(net, s)
     return out
