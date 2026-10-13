@@ -1,0 +1,97 @@
+"""Dry-run engine: everything the HA layer needs per quarter, as one pure function.
+
+Gathering inputs (entities, recorder history, weather HTTP) is the HA layer's job; this module turns them into a
+battery decision and a status that says WHY there is none. It never writes to a device: the decision is advice
+that the coordinator publishes as sensors and appends to the trace, next to the control that is still in charge.
+"""
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Mapping, Sequence
+from zoneinfo import ZoneInfo
+
+from hems.battery import BatteryConfig
+from hems.contracts import Reading
+from hems.forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
+from hems.prices import PriceModel, PriceSeries, price_series_from_import_curve
+from hems.pvforecast import pv_kwh_per_quarter
+from hems.rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
+from hems.slots import slot_starts
+
+STATUS_OK = "ok"
+STATUS_NO_SOC = "no_soc"
+STATUS_STALE_SOC = "stale_soc"
+STATUS_NO_PRICES = "no_prices"
+STATUS_NO_PRICE_NOW = "no_price_for_now"
+
+
+@dataclass(frozen=True)
+class EngineSettings:
+    battery: BatteryConfig = field(default_factory=BatteryConfig)
+    prices: PriceModel = field(default_factory=PriceModel)
+    latitude: float = 52.0907
+    longitude: float = 5.1214
+    pv_gain_w_per_wm2: float = 7.0
+    pv_max_ac_w: float = 8000.0
+    soc_max_age: timedelta = timedelta(minutes=15)    # a SoC older than this is not planned on
+    load_days: int = 7
+    default_load_w: float = 400.0                     # base load until the history has samples
+    max_slots: int = 192
+    tz: ZoneInfo = LOCAL_TZ
+
+
+@dataclass(frozen=True)
+class EngineInputs:
+    now: datetime
+    soc_pct: Reading | None
+    import_curve: Sequence[tuple[datetime, float]]    # (quarter start UTC, consumer import price EUR/kWh)
+    load_history_w: Sequence[tuple[datetime, float]]  # hourly mean base load, timezone-aware hour starts
+    ghi_w_m2: Mapping[datetime, float] | None         # irradiance by quarter start; None = no weather data
+
+
+@dataclass(frozen=True)
+class EngineOutput:
+    status: str
+    decision: Decision | None
+    prices: PriceSeries | None
+    load_kwh: Mapping[datetime, float]
+    pv_kwh: Mapping[datetime, float]
+    trace: dict
+
+
+def _failure(status: str, inputs: EngineInputs, **extra) -> EngineOutput:
+    """An output without a decision; the trace keeps the reason so 'why nothing?' is answerable."""
+    return EngineOutput(status, None, None, {}, {}, {"status": status, "now": inputs.now.isoformat(), **extra})
+
+
+def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: datetime, n_slots: int) -> tuple[dict[datetime, float], str]:
+    """Base-load kWh per quarter from the local-hour median profile, or the flat default without history."""
+    if inputs.load_history_w:
+        profile, source = hourly_profile(list(inputs.load_history_w), settings.load_days, settings.tz), "history"
+    else:
+        profile, source = [settings.default_load_w] * 24, "default"
+    return dict(zip(slot_starts(start, n_slots), to_slots_kwh(profile, start, n_slots, settings.tz))), source
+
+
+def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | None = None) -> EngineOutput:
+    """Plan the battery for the current quarter, or say why that is not possible."""
+    cfg = settings.battery
+    if inputs.soc_pct is None:
+        return _failure(STATUS_NO_SOC, inputs)
+    if not inputs.soc_pct.is_fresh(inputs.now, settings.soc_max_age):
+        return _failure(STATUS_STALE_SOC, inputs, soc_age_s=round(inputs.soc_pct.age(inputs.now).total_seconds()))
+    if not inputs.import_curve:
+        return _failure(STATUS_NO_PRICES, inputs)
+    prices = price_series_from_import_curve(inputs.import_curve, settings.prices, settings.latitude, settings.longitude)
+    start = floor_to_quarter(inputs.now)
+    load, load_source = _load_forecast(inputs, settings, start, settings.max_slots)
+    pv = pv_kwh_per_quarter(inputs.ghi_w_m2 or {}, settings.pv_gain_w_per_wm2, settings.pv_max_ac_w)
+    soc_kwh = inputs.soc_pct.value / 100 * cfg.capacity_kwh
+    decision = plan_next(HorizonInputs(inputs.now, soc_kwh, prices, load, pv, settings.max_slots), cfg)
+    if decision is None:
+        return EngineOutput(STATUS_NO_PRICE_NOW, None, prices, load, pv,
+                            {"status": STATUS_NO_PRICE_NOW, "now": inputs.now.isoformat(), "prices_end": prices.starts[-1].isoformat()})
+    trace = {"status": STATUS_OK, "load_source": load_source, "weather": inputs.ghi_w_m2 is not None, **decision.trace}
+    shift = plan_shift(previous, decision)
+    if shift:
+        trace["plan_shift"] = shift
+    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace)

@@ -7,6 +7,7 @@ unconditionally). Whether battery-sourced evening export earns it is unconfirmed
 """
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Sequence
 
 from hems.contracts import MarketPrices
 from hems.solar import is_daylight
@@ -63,6 +64,19 @@ class PriceSeries:
     starts: tuple[datetime, ...]
     import_eur_kwh: tuple[float, ...]
     export_eur_kwh: tuple[float, ...]
+
+
+def price_series_from_import_curve(curve: Sequence[tuple[datetime, float]], model: PriceModel, latitude: float,
+                                   longitude: float) -> PriceSeries:
+    """Prices from a consumer import curve (quarter start UTC, EUR/kWh) such as the energy-prices sensor publishes.
+
+    The import price is taken as given; the export price is derived from the market price implied by the
+    model's import formula, with the daylight flag of each quarter."""
+    ordered = sorted(curve)
+    starts = tuple(s for s, _ in ordered)
+    market = [model.market_from_import(p) for _, p in ordered]
+    _, exp = curves(market, model, [is_daylight(s, latitude, longitude) for s in starts])
+    return PriceSeries(starts, tuple(p for _, p in ordered), tuple(exp))
 
 
 def build_price_series(market: MarketPrices, model: PriceModel, latitude: float, longitude: float) -> PriceSeries:
