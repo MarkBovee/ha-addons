@@ -25,6 +25,9 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 - The minimum profit margin (`min_profit_margin`, default 0.10 EUR/kWh) is a planner threshold, never a cost. Replay and sensors report cash.
 - Entity ids are set explicitly from the entity key (`sensor.hems_battery_action`, `binary_sensor.hems_tomorrow_prices_available`) because Home Assistant otherwise derives them from the instance language (a Dutch install gets `sensor.hems_batterij_actie`). Keep the keys stable; renaming one breaks dashboards.
 - Every decision must stay explainable: the planner keeps the numbers behind each slot (`sell_value`, `buy_cost`, `stored_value`, `reason_code`) and the coordinator logs them. When you add a decision step, add its inputs and outcome to the decision record or to `events.jsonl`, with a test.
+- Planner and executor are separate (`hems/core/hems/executor.py`). The planner decides the shape of the day from forecasts; the executor re-checks the live SoC before anything is sent and on every SoC update. Any code that will write to a device must take its power from `Execution.power_w`, never from the plan's command, and the planner and executor share the floor (`battery.floor_fraction`).
+- Times in logs and readers always say the day when it is not the plan's first day (`decision_log.when`, `+1d 07:30`): plans run 48 h and an unlabelled 07:30 reads as today.
+- The HA log must show the decisions: the integration sets its own logger to INFO at setup (the server runs `logger: default: warning`). Do not move per-cycle lines to DEBUG.
 - Weather (Open-Meteo) requests carry coordinates rounded to 0.01 degrees. Keep it that way.
 
 ## Tests
@@ -74,4 +77,8 @@ echo 'HA_SSH_KEY=~/.ssh/ha_hems' >> .env
 1. Restart Home Assistant (user approval; or `--restart`). A new or changed integration is only loaded after a restart. `deploy.py --restart --yes` waits until the REST API answers again; after a restart the SoC sensors of battery-api appear a little later, HEMS then reports `no_soc` and replans by itself after 60 seconds.
 2. First time only: add the integration, in the UI or through the Home Assistant tools: `ha_set_integration(domain="hems", config={"soc_entity": ..., "battery_power_entity": ..., "battery_power_positive_is_discharging": true, "pv_entity": ..., "grid_entity": ..., "inverter_output_entity": ..., "ev_power_entity": ..., "price_curve_entity": ...})` with the entities from the table in `../docs/hems/install.md`. To start over (for instance after an entity-id change) remove the entry with `ha_remove_helpers_integrations(target=<entry_id>, confirm=True)` and add it again; only ever remove the HEMS entry.
 3. Verify read-only through the Home Assistant MCP tools or REST: `sensor.hems_status` is `ok`, `sensor.hems_battery_action` has a `reason`, `binary_sensor.hems_tomorrow_prices_available` matches whether Nord Pool has published, and the logs grow: `python3 scripts/hems_trace.py --pull tail -n 5` shows the latest cycles, `events` the fetches and status changes.
-4. Read the HA log for `custom_components.hems` errors; a failed Nord Pool or Open-Meteo fetch is a warning and the plan continues on the fallbacks.
+4. Read the HA log for `custom_components.hems`: `ha core logs | grep HEMS` over SSH shows one decision line and the plan tree per quarter, every event, and warnings for a failed Nord Pool or Open-Meteo fetch (the plan continues on the fallbacks), a status other than `ok`, or an executor override.
+
+### Monitoring
+
+A scheduled task (`hems-dry-run-monitoring`, daily 08:26 local, set up by Mark on 13 Oct 2026) reviews the previous day read-only and writes `docs/hems/observations/monitoring/<date>.md`; it ends with a week summary after 20 Oct. It never deploys or writes to Home Assistant.

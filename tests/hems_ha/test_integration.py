@@ -1,5 +1,6 @@
 import csv
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PRICES = ROOT / "hems" / "core" / "tests" / "fixtures" / "quarter_import_prices.csv"
 NORDPOOL = ROOT / "hems" / "core" / "tests" / "fixtures" / "nordpool_2026-10-06.json"
 NOW = datetime(2026, 10, 6, 11, 7, tzinfo=timezone(timedelta(hours=2)))      # a day with a wide spread, local time
+EVENING = datetime(2026, 10, 6, 19, 7, tzinfo=timezone(timedelta(hours=2)))  # the evening peak: with enough SoC the plan discharges
 ROLES = {CONF_SOC: "sensor.soc", CONF_BATTERY_POWER: "sensor.battery_power", CONF_PV: "sensor.pv_power", CONF_GRID: "sensor.grid_power",
          CONF_PRICE_CURVE: "sensor.import_price", CONF_BATTERY_POSITIVE_DISCHARGING: True}
 
@@ -300,3 +302,59 @@ async def test_failed_fetches_and_status_changes_are_logged_with_the_reason(reco
     last = read_jsonl(hass, "decision_trace.jsonl")[-1]
     assert last["status"] == "ok" and last["inputs"]["price_curve_configured"] is True and last["price_source"] == "curve"
 
+
+
+async def test_the_executor_holds_a_discharge_when_the_soc_reaches_the_floor_inside_the_quarter(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock, caplog):
+    """The planner still says discharge for the quarter; the executor re-checks every SoC update and holds at the floor, then releases."""
+    set_states(hass, soc="60")
+    await setup_entry(hass, freezer, aioclient_mock, now=EVENING)
+    assert hass.states.get("sensor.hems_battery_action").state == "discharge"
+    assert hass.states.get("sensor.hems_executor").state == "as_planned" and int(hass.states.get("sensor.hems_battery_setpoint").state) < -1000
+    with caplog.at_level(logging.WARNING, logger="custom_components.hems"):
+        hass.states.async_set("sensor.soc", "30")
+        await hass.async_block_till_done()
+    executor = hass.states.get("sensor.hems_executor")
+    assert executor.state == "at_floor" and hass.states.get("sensor.hems_battery_setpoint").state == "0"
+    assert hass.states.get("sensor.hems_battery_action").state == "discharge"                  # the plan is the planner's, the setpoint the executor's
+    assert executor.attributes["planned_w"] < -1000 and executor.attributes["overridden"] is True and "floor 30%" in executor.attributes["reason"]
+    assert any("executor overrides the plan" in r.getMessage() for r in caplog.records)
+    assert [(e["from"], e["to"]) for e in read_jsonl(hass, "events.jsonl") if e["event"] == "executor"] == [(None, "as_planned"), ("as_planned", "at_floor")]
+    hass.states.async_set("sensor.soc", "61")
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.hems_executor").state == "as_planned" and int(hass.states.get("sensor.hems_battery_setpoint").state) < -1000
+
+
+def line_starting(lines: list[str], prefix: str) -> str:
+    """The first log line that starts with `prefix`; the failure message lists the HEMS lines that did exist."""
+    found = [line for line in lines if line.startswith(prefix)]
+    assert found, f"no log line starts with {prefix!r}; HEMS lines: {[line[:120] for line in lines if line.startswith('HEMS')]}"
+    return found[0]
+
+
+async def test_the_cycle_decision_and_the_plan_are_visible_in_the_home_assistant_log(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock, caplog):
+    """INFO lines carry the decision with its comparison, the plan's charge and discharge windows, and every event."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")             # the log shows local time, like the home it describes
+    set_states(hass, soc="60")
+    with caplog.at_level(logging.INFO, logger="custom_components.hems"):
+        await setup_entry(hass, freezer, aioclient_mock, now=EVENING)
+    lines = [r.getMessage() for r in caplog.records if r.name.startswith("custom_components.hems")]
+    cycle = line_starting(lines, "HEMS 19:00 ok: discharge")
+    assert "sell " in cycle and "keep " in cycle and "buy " in cycle and "prices market" in cycle and "executor" not in cycle
+    tree = line_starting(lines, "HEMS plan from 19:00")
+    assert " discharge " in tree
+    assert any(line.startswith("HEMS event market ") and "known_quarters" in line for line in lines)
+    assert any(line.startswith("HEMS event settings hash=") for line in lines) and any(line.startswith("HEMS event executor ") for line in lines)
+
+
+async def test_the_integration_makes_its_info_lines_visible_but_leaves_a_configured_level_alone(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """`logger: default: warning` would hide the decision log, so setup sets INFO unless the user already chose a level for it."""
+    package = logging.getLogger("custom_components.hems")
+    assert package.level == logging.NOTSET
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    assert package.level == logging.INFO
+    await hass.config_entries.async_unload(entry.entry_id)
+    package.setLevel(logging.DEBUG)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert package.level == logging.DEBUG

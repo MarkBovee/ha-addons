@@ -35,6 +35,7 @@
           "reserve_soc_pct": "Reserve-SoC (%)",
           "round_trip_eff": "Round-trip rendement (0-1)",
           "min_profit_margin": "Minimale winstmarge (EUR per ontladen kWh, na verliezen)",
+          "hold_cost_kwh_h": "Wachtkosten (EUR per opgeslagen kWh per uur; 0 = uit, hoger laadt later vóór een verkoop)",
           "pv_gain_w_per_wm2": "PV-factor (W per W/m2, 0 = automatisch kalibreren)",
           "pv_max_ac_w": "AC-limiet omvormer (W)",
           "weather_enabled": "Weer ophalen bij Open-Meteo",
@@ -92,6 +93,20 @@
       },
       "plan": {
         "name": "Plan"
+      },
+      "executor": {
+        "name": "Uitvoerder",
+        "state": {
+          "as_planned": "Volgens plan",
+          "no_plan": "Geen plan",
+          "expired": "Plan verlopen",
+          "no_soc": "Geen batterij-SoC",
+          "stale_soc": "Batterij-SoC is verouderd",
+          "at_floor": "Vastgehouden op de SoC-ondergrens",
+          "limited_floor": "Vertraagd boven de SoC-ondergrens",
+          "at_full": "Vastgehouden, batterij vol",
+          "limited_full": "Vertraagd, batterij bijna vol"
+        }
       }
     },
     "binary_sensor": {

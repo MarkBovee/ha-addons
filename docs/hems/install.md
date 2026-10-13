@@ -22,7 +22,7 @@ Snelste route: `python3 hems/deploy.py --dry-run` en daarna `python3 hems/deploy
 | EV-vermogen (optioneel) | `sensor.charge_amps_monitor_charger_current_power` | wordt van het basisverbruik afgetrokken |
 | Prijscurve (optioneel) | `sensor.energy_prices_electricity_import_price` | terugval als Nord Pool uitvalt en controle op de eigen prijsberekening; moet een `price_curve`-attribuut hebben (`start`, `end`, `price`) |
 
-4. Instellingen, HEMS, Configureren: de standaardwaarden zijn de besluiten uit `docs/hems/intake-decisions.md` (capaciteit 25 kWh, 8 kW, vloer 5 %, reserve 30 %, round trip 0,82, minimale winstmarge 0,10, prijscomponenten zoals energy-prices, Nord Pool aan voor zone NL). PV-factor 0 betekent automatisch kalibreren op de opgenomen PV.
+4. Instellingen, HEMS, Configureren: de standaardwaarden zijn de besluiten uit `docs/hems/intake-decisions.md` (capaciteit 25 kWh, 8 kW, vloer 5 %, reserve 30 %, round trip 0,82, minimale winstmarge 0,10, wachtkosten 0,002, prijscomponenten zoals energy-prices, Nord Pool aan voor zone NL). PV-factor 0 betekent automatisch kalibreren op de opgenomen PV.
 
 ## Wat je ziet
 
@@ -33,7 +33,8 @@ Alle sensoren hangen onder één apparaat "HEMS". Vermogens volgen de HEMS-conve
 | Sensor | Betekenis |
 |---|---|
 | `sensor.hems_battery_action` | charge, discharge of idle voor het huidige kwartier; attributen `reason` en `keep_value_eur_kwh` leggen uit waarom |
-| `sensor.hems_battery_setpoint` | vermogen in W dat HEMS nu zou vragen |
+| `sensor.hems_battery_setpoint` | vermogen in W dat de uitvoerder nu zou sturen, na controle op de actuele SoC; attributen `planned_w`, `overridden`, `reason` |
+| `sensor.hems_executor` | `as_planned`, `at_floor`, `limited_floor`, `at_full`, `limited_full`, `no_soc`, `stale_soc`, `expired` of `no_plan`: wat de uitvoerder met de opdracht van de planner deed |
 | `sensor.hems_expected_saving` | verwachte besparing over de horizon (EUR kas; de minimale winstmarge telt niet als kost mee) |
 | `sensor.hems_status` | ok, no_soc, stale_soc, no_prices of no_price_for_now; attribuut `price_source` (market of curve) |
 | `binary_sensor.hems_tomorrow_prices_available` | aan zodra (een deel van) de prijzen van morgen bekend zijn; attributen `tomorrow_intervals`, `prices_until`, `price_source` |
@@ -53,14 +54,33 @@ HEMS schrijft in `/config/hems/` drie bestanden, elk met roterende generaties (`
 
 Redencodes in `plans.jsonl`: `s` verkopen loont meer dan bewaren, `b` kopen is goedkoper dan bewaren, `h` vasthouden, `f` vasthouden op de reservevloer (verkopen zou lonen maar mag niet lager), `v` vasthouden omdat de batterij vol is. Alle waarden zijn EUR per kWh in de batterij; `keep` is wat de rest van de horizon die kWh waard is.
 
-Daarnaast schrijft HEMS per kwartier één regel in het Home Assistant-log (`custom_components.hems`, niveau INFO).
+### Planner en uitvoerder
+
+De **planner** bepaalt elk kwartier uit prijzen en voorspellingen hoe de dag eruitziet: laden in het goedkope venster, verkopen uit de geladen energie later. Hij plant vanaf de werkelijke SoC en maakt zichzelf elk kwartier opnieuw. De **uitvoerder** is de laatste controle vóór een apparaat: hij leest de actuele SoC opnieuw, bij elke SoC-update binnen het kwartier, en laat de opdracht nooit onder de vloer (reserve of harde minimum) ontladen, boven vol laden, of draaien op een SoC die ontbreekt of niet meer ververst wordt. Ontbreekt er nog maar een beetje ruimte, dan vertraagt hij het vermogen zodat het kwartier precies op de vloer eindigt. Dat staat in `sensor.hems_executor`, in `events.jsonl` (`executor`) en als WARNING in het HA-log zodra hij het plan overschrijft. Zodra HEMS naar de batterij gaat schrijven, gebeurt dat uitsluitend via de uitvoerder.
+
+### Wachtkosten
+
+De planner rekent vasthouden standaard als gratis. Bij gelijke prijzen laadt hij dan zo vroeg mogelijk, ook al is de verkoop pas 16 uur later. De instelling "Wachtkosten" (EUR per opgeslagen kWh per uur, standaard 0,002; 0 = uit) laat hem bij gelijke prijzen pas vlak voor de verkoop laden, vergelijkbaar met de sell buffer van battery-manager (buffer pas enkele uren vóór de verkoop laden). De werkelijke stilstandsverliezen van de batterij zijn klein (gemeten: ca. 0,1 % SoC per uur, 10 okt), het gaat dus om beslisruimte en onzekerheid, niet om verlies. Replay 4-11 okt (kas, bekend verbruik en PV): uit € 16,76, 0,001 € 16,94, **0,002 € 18,15**, 0,003 € 17,98, 0,005 € 17,25, 0,008 € 14,33. Per dag is het gemengd: op de dag met de grootste spread (6 okt) kost 0,002 € 1,24 (5,78 naar 4,54), omdat de goedkoopste uren dan minder volledig benut worden; op de andere dagen wint het meer. Op het live plan van 13 okt (36 uur, één keer plannen) kost 0,002 € 0,40 van € 7,11 en laadt het pas rond 00:00 in plaats van vanaf 13:45.
+
+### Logging in Home Assistant
+
+HEMS zet zijn eigen logger bij het starten op INFO, tenzij je in `configuration.yaml` zelf een niveau voor `custom_components.hems` instelt (Home Assistant staat standaard op `logger: default: warning`, waardoor INFO-regels van een eigen integratie anders onzichtbaar blijven). Per kwartier komen er twee regels in het HA-log:
+
+```text
+HEMS 13:45 ok: charge 7730 W | soc 46.6% | sell 0.1473 keep 0.2968 buy 0.2901 -> buy; best sell later +1d 09:00 @0.4715 | import 0.2627 export 0.2758 | 137 quarters, prices market | expected saving 7.106 EUR
+HEMS plan from 13:45, 137 quarters, expected saving 7.106 EUR:
+  charge    13:45 - 15:00   7730 W    9.7 kWh  soc 47% -> 82%  @0.2621
+  discharge +1d 07:30 - +1d 09:45   7043 W   15.8 kWh  soc 100% -> 30%  @0.516
+```
+
+Tijden zijn lokaal; `+1d` betekent: morgen. Elk event uit `events.jsonl` staat ook als regel `HEMS event <naam> ...` in het log, en een status anders dan `ok` of een ingreep van de uitvoerder als WARNING. De leestool toont dezelfde dagaanduiding.
 
 Lezen met de leestool (haalt de bestanden met de SSH-sleutel van de server):
 
 ```bash
 python3 scripts/hems_trace.py --pull tail -n 20      # een regel per kwartier
 python3 scripts/hems_trace.py show 16:15             # dat kwartier in het geheel: invoer, vergelijking, segmenten, elk geplande kwartier
-python3 scripts/hems_trace.py why 18:30              # waarom het plan om 18:30 doet wat het doet
+python3 scripts/hems_trace.py why 18:30              # waarom het plan om 18:30 doet wat het doet (vandaag; 'YYYY-MM-DD HH:MM' voor een andere dag)
 python3 scripts/hems_trace.py diff 15:00 15:15       # welke kwartieren het nieuwe plan anders plant dan het vorige
 python3 scripts/hems_trace.py events --type market   # Nord Pool-ophaalacties
 ```

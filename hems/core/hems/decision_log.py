@@ -8,7 +8,7 @@ was computed from, so a past plan can be rebuilt and compared line by line.
 import hashlib
 import json
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Mapping, Sequence
 
 from hems.battery import Plan, Slot
@@ -96,3 +96,63 @@ def settings_snapshot(parts: Mapping[str, object]) -> dict:
     values = {name: asdict(part) if is_dataclass(part) else str(part) for name, part in parts.items()}
     digest = hashlib.sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()[:8]
     return {"hash": digest, "values": values}
+
+
+# ---- text for the Home Assistant log -------------------------------------------------------------------------
+
+EVENT_VALUE_LIMIT = 160
+EVENT_LINE_LIMIT = 700
+
+
+def when(moment: datetime, reference: datetime, tz: tzinfo) -> str:
+    """Local HH:MM; a moment on another local day than `reference` gets '+1d ' (a 48 h plan crosses midnight)."""
+    local, ref = moment.astimezone(tz), reference.astimezone(tz)
+    days = (local.date() - ref.date()).days
+    return f"{local:%H:%M}" if days == 0 else f"{days:+d}d {local:%H:%M}"
+
+
+def _compare_text(compare: Mapping, start: datetime, tz: tzinfo) -> str:
+    """The sell/keep/buy comparison of the first quarter, with what 'keep' is waiting for."""
+    text = f"sell {compare.get('sell')} keep {compare.get('keep')} buy {compare.get('buy')} -> {compare.get('code')}"
+    later = compare.get("best_sell_later")
+    if later:
+        text += f"; best sell later {when(datetime.fromisoformat(later['at']), start, tz)} @{later['value']}"
+    return text
+
+
+def cycle_line(trace: Mapping, tz: tzinfo) -> str:
+    """One line per quarter for the Home Assistant log: the decision, why, the prices, and what the plan expects."""
+    status = trace.get("status")
+    if status != "ok" or "slot_start" not in trace:
+        return f"HEMS {status}: no decision this quarter"
+    start = datetime.fromisoformat(trace["slot_start"])
+    return (f"HEMS {when(start, start, tz)} {status}: {trace.get('first_action')} {trace.get('power_w')} W | soc {trace.get('soc_pct')}% | "
+            f"{_compare_text(trace.get('compare') or {}, start, tz)} | import {trace.get('import_price')} export {trace.get('export_price')} | "
+            f"{trace.get('horizon_slots')} quarters, prices {trace.get('price_source')} | expected saving {trace.get('expected_saving_eur')} EUR")
+
+
+def plan_tree(trace: Mapping, tz: tzinfo) -> list[str]:
+    """The charge and discharge windows of the whole plan, one line each (idle stretches are the gaps between them)."""
+    if "slot_start" not in trace:
+        return []
+    start = datetime.fromisoformat(trace["slot_start"])
+    lines = [f"HEMS plan from {when(start, start, tz)}, {trace.get('horizon_slots')} quarters, expected saving {trace.get('expected_saving_eur')} EUR:"]
+    for s in trace.get("segments", []):
+        if "truncated" in s:
+            lines.append(f"  ... {s['truncated']} more runs")
+        elif s["action"] != "idle":
+            lines.append(f"  {s['action']:<9} {when(datetime.fromisoformat(s['from']), start, tz)} - {when(datetime.fromisoformat(s['to']), start, tz)}  "
+                         f"{s['avg_w']:>5} W  {s['kwh']:>5.1f} kWh  soc {s['soc_from_pct']:.0f}% -> {s['soc_to_pct']:.0f}%  @{s['avg_price']}")
+    if len(lines) == 1:
+        lines.append("  no charge or discharge planned")
+    return lines
+
+
+def event_line(event: str, fields: Mapping) -> str:
+    """An event as one log line: `HEMS event <name> key=value ...`, each value and the whole line cut to a readable length."""
+    def short(value: object) -> str:
+        """A value as compact JSON, cut at EVENT_VALUE_LIMIT characters."""
+        text = json.dumps(value, separators=(",", ":"), default=str)
+        return text if len(text) <= EVENT_VALUE_LIMIT else text[:EVENT_VALUE_LIMIT] + "..."
+    line = f"HEMS event {event} " + " ".join(f"{key}={short(value)}" for key, value in fields.items())
+    return line if len(line) <= EVENT_LINE_LIMIT else line[:EVENT_LINE_LIMIT] + "..."

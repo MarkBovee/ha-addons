@@ -1,4 +1,5 @@
 """Fixtures for the HEMS integration tests (run with pytest-homeassistant-custom-component, see docs/hems/install.md)."""
+import logging
 import shutil
 
 import pytest
@@ -15,4 +16,5 @@ def auto_enable_custom_integrations(recorder_mock, enable_custom_integrations, h
     log_dir = hass.config.path("hems")
     shutil.rmtree(log_dir, ignore_errors=True)
     yield
+    logging.getLogger("custom_components.hems").setLevel(logging.NOTSET)       # the integration sets its own level at setup
     shutil.rmtree(log_dir, ignore_errors=True)

@@ -25,6 +25,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "hems" / "core"))
+from hems.decision_log import when  # noqa: E402  (one day-aware time format for the log and for this reader)
+
 DEFAULT_DIR = ROOT / "docs" / "hems" / "observations" / "data" / "trace"
 REMOTE_DIR = "/config/hems"
 FILES = ("decision_trace.jsonl", "plans.jsonl", "events.jsonl")
@@ -62,6 +65,11 @@ def local(iso: str, fmt: str = "%H:%M") -> str:
     return datetime.fromisoformat(iso).astimezone(TZ).strftime(fmt)
 
 
+def local_when(iso: str, reference_iso: str) -> str:
+    """An ISO timestamp as local HH:MM, with '+1d ' when it lies on a later local day than the reference (plans run 48 h)."""
+    return when(datetime.fromisoformat(iso), datetime.fromisoformat(reference_iso), TZ)
+
+
 def cycle_at(records: list[dict], moment: datetime, key: str = "cycle") -> dict | None:
     """The latest record whose cycle (quarter start) is at or before `moment`."""
     best = None
@@ -93,6 +101,11 @@ def plan_rows(detail: dict) -> list[dict]:
              "exp": detail["exp"][i], "load": detail["load"][i], "pv": detail["pv"][i]} for i in range(detail["n"])]
 
 
+def plan_start(detail: dict) -> datetime:
+    """The first quarter of a logged plan."""
+    return datetime.fromisoformat(detail["start"])
+
+
 def fmt(value: float | None, digits: int = 3) -> str:
     """A number with fixed decimals, or a dash for None."""
     return "-" if value is None else f"{value:.{digits}f}"
@@ -100,9 +113,9 @@ def fmt(value: float | None, digits: int = 3) -> str:
 
 def format_plan_table(detail: dict, capacity_kwh: float = 25.0) -> list[str]:
     """Every planned quarter: action, watts, SoC, prices, load/PV, and the three values the decision compares."""
-    lines = ["time   action     W     soc%   import export   load   pv    sell   keep   buy   why"]
+    lines = ["time       action     W     soc%   import export   load   pv    sell   keep   buy   why"]
     for r in plan_rows(detail):
-        lines.append(f"{r['at'].astimezone(TZ):%H:%M}  {r['action']:<9}{r['w']:>6} {r['soc'] / capacity_kwh * 100:>6.1f}  {fmt(r['imp'])} {fmt(r['exp'])}  "
+        lines.append(f"{when(r['at'], plan_start(detail), TZ):<9}  {r['action']:<9}{r['w']:>6} {r['soc'] / capacity_kwh * 100:>6.1f}  {fmt(r['imp'])} {fmt(r['exp'])}  "
                      f"{fmt(r['load'])} {fmt(r['pv'])}  {fmt(r['sell'])} {fmt(r['keep'])} {fmt(r['buy'])}  {r['code']}")
     return lines
 
@@ -116,20 +129,20 @@ def format_show(record: dict, detail: dict | None) -> list[str]:
         lines.append(f"compare : sell {fmt(c.get('sell'))}  keep {fmt(c.get('keep'))}  buy {fmt(c.get('buy'))}  code {c.get('code')}  floor {c.get('at_floor')}  full {c.get('at_full')}")
         for name in ("best_sell_later", "best_buy_later"):
             if name in c:
-                lines.append(f"          {name.replace('_', ' ')}: {c[name]['value']:.4f} at {local(c[name]['at'])}")
+                lines.append(f"          {name.replace('_', ' ')}: {c[name]['value']:.4f} at {local_when(c[name]['at'], record['slot_start'])}")
     lines.append("inputs  : " + ", ".join(f"{k}={v}" for k, v in (record.get("inputs") or {}).items()))
     lines.append(f"sources : prices {record.get('price_source')}, load {record.get('load_source')}, weather {record.get('weather')}, pv gain {record.get('pv_gain')}")
     if record.get("previous_action"):
         lines.append(f"previous: {record['previous_action']}" + ("  (changed)" if record.get("action_changed") else ""))
     if "plan_shift" in record:
         shift = record["plan_shift"]
-        lines.append(f"shift   : planned {shift['was_w']} W for this quarter at {local(shift['planned_at'])}, now {shift['now_w']} W")
+        lines.append(f"shift   : planned {shift['was_w']} W for this quarter at {local_when(shift['planned_at'], record['slot_start'])}, now {shift['now_w']} W")
     lines.append("segments:")
     for s in record.get("segments", []):
         if "truncated" in s:
             lines.append(f"  ... {s['truncated']} more")
         else:
-            lines.append(f"  {local(s['from'])}-{local(s['to'])}  {s['action']:<9} {s['avg_w']:>5} W  {s['kwh']:>5.1f} kWh  soc {s['soc_from_pct']:>5.1f}% -> {s['soc_to_pct']:>5.1f}%  price {fmt(s['avg_price'])}")
+            lines.append(f"  {local_when(s['from'], record['slot_start'])} - {local_when(s['to'], record['slot_start'])}  {s['action']:<9} {s['avg_w']:>5} W  {s['kwh']:>5.1f} kWh  soc {s['soc_from_pct']:>5.1f}% -> {s['soc_to_pct']:>5.1f}%  price {fmt(s['avg_price'])}")
     if detail:
         lines += ["", "plan:", *format_plan_table(detail)]
     return lines
@@ -140,7 +153,7 @@ def explain_slot(detail: dict, moment: datetime) -> list[str]:
     rows = plan_rows(detail)
     index = int((moment - rows[0]["at"]) / QUARTER)
     if not 0 <= index < len(rows):
-        return [f"{moment.astimezone(TZ):%H:%M} is outside this plan ({rows[0]['at'].astimezone(TZ):%H:%M} to {rows[-1]['at'].astimezone(TZ):%H:%M})"]
+        return [f"{moment.astimezone(TZ):%a %H:%M} is outside this plan ({when(rows[0]['at'], rows[0]['at'], TZ)} to {when(rows[-1]['at'], rows[0]['at'], TZ)})"]
     r = rows[index]
     lines = [f"{r['at'].astimezone(TZ):%a %H:%M}: {r['action']} {r['w']} W, SoC after {r['soc']:.2f} kWh, grid {r['grid']:+.2f} kWh",
              f"  prices import {fmt(r['imp'], 4)} export {fmt(r['exp'], 4)}; house {fmt(r['load'])} kWh, PV {fmt(r['pv'])} kWh",
@@ -150,7 +163,7 @@ def explain_slot(detail: dict, moment: datetime) -> list[str]:
     if later and r["code"] in ("h", "f") and r["sell"] is not None:
         best = max(later, key=lambda x: x["sell"])
         if best["sell"] > r["sell"]:
-            lines.append(f"  later is better: {best['at'].astimezone(TZ):%H:%M} sells at {fmt(best['sell'], 4)} (+{best['sell'] - r['sell']:.4f})")
+            lines.append(f"  later is better: {when(best['at'], rows[0]['at'], TZ)} sells at {fmt(best['sell'], 4)} (+{best['sell'] - r['sell']:.4f})")
     return lines
 
 
@@ -161,7 +174,7 @@ def diff_plans(a: dict, b: dict) -> list[str]:
     for r in plan_rows(b):
         old = before.get(r["at"])
         if old and (old["action"] != r["action"] or abs(old["w"] - r["w"]) > 0.1 * max(abs(old["w"]), abs(r["w"]), 1)):
-            changes.append(f"{r['at'].astimezone(TZ):%H:%M}  {old['action']} {old['w']} W -> {r['action']} {r['w']} W   (keep {fmt(old['keep'])} -> {fmt(r['keep'])}, import {fmt(old['imp'])} -> {fmt(r['imp'])})")
+            changes.append(f"{when(r['at'], plan_start(b), TZ):<9}  {old['action']} {old['w']} W -> {r['action']} {r['w']} W   (keep {fmt(old['keep'])} -> {fmt(r['keep'])}, import {fmt(old['imp'])} -> {fmt(r['imp'])})")
     overlap = sum(1 for r in plan_rows(b) if r["at"] in before)
     return [f"{len(changes)} of {overlap} overlapping quarters differ", *changes]
 

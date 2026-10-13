@@ -21,13 +21,14 @@ from homeassistant.util import dt as dt_util
 
 from .adapters import base_load_history, parse_price_curve, reading_from_state, statistic_rows
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_GRID, CONF_INVERTER, CONF_PRICE_CURVE,
-                    CONF_PV, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, HISTORY_DAYS, HISTORY_REFRESH,
+                    CONF_PV, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
                     PLANS_FILE, RETRY_DELAY, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.contracts import MarketPrices
-from .engine.decision_log import settings_snapshot
+from .engine.decision_log import cycle_line, event_line, plan_tree, settings_snapshot
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
 from .engine.dryrun import EngineInputs, EngineOutput, EngineSettings, step
+from .engine.executor import AS_PLANNED, Execution, execute
 from .engine.pvforecast import fit_gain_from_history
 from .engine.prices import PriceModel
 from .engine.rolling import Decision
@@ -46,13 +47,15 @@ class HemsSnapshot:
     weather_age_min: float | None
     tomorrow_quarters: int                 # quarters of tomorrow's delivery day that are known (0 = not published)
     prices_until: datetime | None          # end of the last known price quarter
+    execution: Execution                   # what the executor would send now, after checking the live SoC
 
 
 def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -> EngineSettings:
     """Engine settings from the options (defaults fill gaps) and the Home Assistant location."""
     o = {**DEFAULT_OPTIONS, **entry.options}
     battery = BatteryConfig(capacity_kwh=o["capacity_kwh"], max_power_kw=o["max_power_kw"], hard_min_soc=o["hard_min_soc_pct"] / 100,
-                            reserve_soc=o["reserve_soc_pct"] / 100, round_trip_eff=o["round_trip_eff"], min_profit_margin=o["min_profit_margin"])
+                            reserve_soc=o["reserve_soc_pct"] / 100, round_trip_eff=o["round_trip_eff"], min_profit_margin=o["min_profit_margin"],
+                            hold_cost_kwh_h=o["hold_cost_kwh_h"])
     prices = PriceModel(import_vat_multiplier=o["import_vat_multiplier"], import_markup=o["import_markup"],
                         import_energy_tax=o["import_energy_tax"], export_vat_multiplier=o["export_vat_multiplier"],
                         export_bonus_pct=o["export_bonus_pct"], export_fixed_bonus=o["export_fixed_bonus"],
@@ -76,6 +79,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._settings_hash: str | None = None
         self._last_status: str | None = None
         self._last_action: str | None = None
+        self._last_execution_code: str | None = None
+        self._settings: EngineSettings | None = None
         self._last_gain: float | None = None
         self._previous: Decision | None = None
         self._history: list[tuple[datetime, float]] = []
@@ -90,7 +95,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._retry_cancel = None
 
     async def _log_event(self, event: str, **fields: Any) -> None:
-        """Append one line to events.jsonl (fetches, status and action changes, settings) without blocking the loop."""
+        """Append one line to events.jsonl (fetches, status and action changes, settings) and log it in Home Assistant too."""
+        _LOGGER.info("%s", event_line(event, fields))
+        _LOGGER.debug("HEMS event %s (full): %s", event, fields)
         await self.hass.async_add_executor_job(self._events.write, {"event": event, **fields})
 
     async def _log_settings(self, settings: EngineSettings) -> None:
@@ -208,26 +215,62 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             return configured or settings.pv_gain_w_per_wm2
         return fit_gain_from_history(self._pv_history, self._weather.ghi_w_m2, settings.pv_gain_w_per_wm2)
 
-    async def _log_cycle(self, output: EngineOutput, now: datetime, gain: float, weather_age: float | None, has_curve: bool) -> None:
-        """Write the cycle's decision record and full plan, log status/action changes, and one line to the HA log."""
+    async def _note_execution(self, execution: Execution) -> None:
+        """Log the executor's outcome when its code changes (first cycle included): that is where plan and live SoC disagree."""
+        if execution.code == self._last_execution_code:
+            return
+        await self._log_event("executor", **{"from": self._last_execution_code, "to": execution.code}, planned_w=execution.planned_w,
+                              power_w=execution.power_w, soc_pct=execution.soc_pct, reason=execution.reason)
+        if execution.overridden:
+            _LOGGER.warning("HEMS executor overrides the plan: %s (planned %s W, now %s W)", execution.reason, execution.planned_w, execution.power_w)
+        self._last_execution_code = execution.code
+
+    async def async_recheck_execution(self) -> None:
+        """Check the plan's command against the live SoC again inside the quarter; publish and log when the outcome changes.
+
+        The planner only runs on the quarter; the SoC moves in between (a discharge reaching the floor, a battery that
+        fills up), so this runs on every SoC update and costs nothing when nothing changes."""
+        snapshot, settings = self.data, self._settings
+        if snapshot is None or settings is None or snapshot.output.decision is None:
+            return
+        reading = reading_from_state(self.hass.states.get(self._entity(CONF_SOC) or ""))
+        execution = execute(snapshot.output.decision, dt_util.utcnow(), reading, settings.battery, settings.soc_max_age)
+        previous = snapshot.execution
+        if execution.code == previous.code and abs(execution.power_w - previous.power_w) < EXECUTION_NOTICE_W:
+            return
+        self.async_set_updated_data(replace(snapshot, execution=execution))
+        await self._note_execution(execution)
+
+    async def _log_cycle(self, output: EngineOutput, now: datetime, gain: float, weather_age: float | None, has_curve: bool,
+                         execution: Execution) -> None:
+        """Write the cycle's decision record and full plan, log status/action changes, and the decision to the HA log."""
         decision = output.decision
         action = decision.plan.slots[0].action if decision else None
         inputs = {**output.trace.get("inputs", {}), "history_hours": len(self._history), "weather_age_min": None if weather_age is None else round(weather_age),
                   "market_age_min": round((now - self._market.fetched_at).total_seconds() / 60) if self._market else None, "price_curve_configured": has_curve}
         record = {"dry_run": True, "pv_gain": round(gain, 2), "settings": self._settings_hash, **output.trace, "inputs": inputs,
-                  "previous_action": self._last_action, "action_changed": bool(action and self._last_action and action != self._last_action)}
+                  "previous_action": self._last_action, "action_changed": bool(action and self._last_action and action != self._last_action),
+                  "execution": {"code": execution.code, "planned_w": execution.planned_w, "power_w": execution.power_w, "reason": execution.reason}}
         await self.hass.async_add_executor_job(self._trace.write, record)
         if output.detail and {**DEFAULT_OPTIONS, **self.config_entry.options}["trace_full_plan"]:
             await self.hass.async_add_executor_job(self._plans.write, output.detail)
         if output.status != self._last_status:
             await self._log_event("status", **{"from": self._last_status, "to": output.status})
+            if output.status != "ok":
+                _LOGGER.warning("HEMS status %s: no decision this quarter", output.status)
             self._last_status = output.status
         if action and action != self._last_action:
             await self._log_event("action", **{"from": self._last_action, "to": action}, power_w=output.trace.get("power_w"), reason=output.trace.get("reason"),
                                   soc_pct=output.trace.get("soc_pct"), slot_start=output.trace.get("slot_start"))
         if action:
             self._last_action = action
-        _LOGGER.info("HEMS %s: %s %s W (%s)", output.status, action, output.trace.get("power_w"), output.trace.get("reason"))
+        await self._note_execution(execution)
+        tz = dt_util.get_default_time_zone()
+        suffix = "" if execution.code == AS_PLANNED else f" | executor {execution.code}: {execution.power_w} W instead of {execution.planned_w} W"
+        _LOGGER.info("%s%s", cycle_line(record, tz), suffix)
+        tree = plan_tree(record, tz)
+        if tree:
+            _LOGGER.info("%s", "\n".join(tree))
 
     async def _async_update_data(self) -> HemsSnapshot:
         """One planning cycle: inputs -> engine -> trace -> snapshot for the sensors."""
@@ -238,6 +281,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         await self._refresh_weather(now, settings)
         gain = self._calibrated_gain(settings)
         settings = replace(settings, pv_gain_w_per_wm2=gain)
+        self._settings = settings
         await self._log_settings(settings)
         if self._last_gain is None or abs(gain - self._last_gain) > 0.02 * self._last_gain:
             await self._log_event("pv_gain", gain=round(gain, 3), previous=self._last_gain and round(self._last_gain, 3),
@@ -252,10 +296,11 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         if output.decision:
             self._previous = output.decision
         weather_age = (now - self._weather.fetched_at).total_seconds() / 60 if self._weather else None
-        await self._log_cycle(output, now, gain, weather_age, bool(inputs.import_curve))
+        execution = execute(output.decision, now, inputs.soc_pct, settings.battery, settings.soc_max_age)
+        await self._log_cycle(output, now, gain, weather_age, bool(inputs.import_curve), execution)
         if output.status in RETRY_STATUSES and self._retry_cancel is None:
             self._retry_cancel = async_call_later(self.hass, RETRY_DELAY, self._retry)
             await self._log_event("retry", in_seconds=RETRY_DELAY.total_seconds(), status=output.status)
         known = set(self._market.starts if self._market else ()) | {t for t, _ in inputs.import_curve}
         prices_until = max(known) + timedelta(minutes=15) if known else None
-        return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until)
+        return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution)

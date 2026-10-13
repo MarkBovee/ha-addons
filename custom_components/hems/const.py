@@ -22,6 +22,7 @@ DEFAULT_OPTIONS = {
     "reserve_soc_pct": 30.0,
     "round_trip_eff": 0.82,
     "min_profit_margin": 0.10,
+    "hold_cost_kwh_h": 0.002,                  # EUR per kWh per hour of waiting; 0 = off (charge as early as equal prices allow)
     "pv_gain_w_per_wm2": 0.0,                  # 0 = calibrate from recorded PV against the weather data
     "pv_max_ac_w": 8000.0,
     "weather_enabled": True,
@@ -46,6 +47,7 @@ WEATHER_REFRESH = timedelta(minutes=30)
 WEATHER_MAX_AGE = timedelta(hours=6)           # beyond this the forecast is dropped, not trusted
 RETRY_STATUSES = frozenset({"no_soc", "stale_soc", "no_prices"})   # inputs that usually appear within a minute after a restart
 RETRY_DELAY = timedelta(seconds=60)
+EXECUTION_NOTICE_W = 100               # a limited command that moves less than this between SoC updates is not worth a new state
 TRACE_DIR = "hems"
 TRACE_FILE = "decision_trace.jsonl"      # one line per cycle: inputs, the comparison behind the action, plan segments
 PLANS_FILE = "plans.jsonl"                 # one line per cycle: every planned quarter with the inputs it came from

@@ -19,10 +19,10 @@ from hems.rolling import HorizonInputs, plan_next  # noqa: E402
 START = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
 
 
-def decision(soc_kwh: float = 5.0, spread: float = 0.30, offset: int = 0):
+def decision(soc_kwh: float = 5.0, spread: float = 0.30, offset: int = 0, quarters: int = 40):
     """A plan over 40 quarters: cheap first, a price peak later, so it charges, holds and sells."""
-    starts = tuple(START + timedelta(minutes=15 * i) for i in range(40))
-    imp = tuple(0.20 if i < 12 else (0.20 + spread if 24 <= i < 32 else 0.28) for i in range(40))
+    starts = tuple(START + timedelta(minutes=15 * i) for i in range(quarters))
+    imp = tuple(0.20 if i < 12 else (0.20 + spread if 24 <= i < 32 else 0.28) for i in range(quarters))
     exp = tuple(p - 0.02 for p in imp)
     now = START + timedelta(minutes=15 * offset)
     return plan_next(HorizonInputs(now, soc_kwh, PriceSeries(starts, imp, exp), {}, {}), BatteryConfig())
@@ -97,3 +97,14 @@ def test_events_can_be_filtered_by_type():
     assert len(tool.format_events(events)) == 2
     only = tool.format_events(events, kind="market")
     assert len(only) == 1 and "known_quarters=96" in only[0]
+
+
+def test_times_after_midnight_carry_their_day_in_every_view():
+    """A plan that runs past local midnight shows '+1d' on the segments, the plan table, and 'later is better', so 07:30 is never ambiguous."""
+    d = decision(offset=0, quarters=120)                     # 12:00 UTC = 14:00 local, 30 hours
+    trace, detail = records(d)
+    shown = "\n".join(tool.format_show(trace, detail))
+    assert "+1d " in shown and shown.count("+1d ") >= 3
+    assert any(line.startswith("+1d ") for line in tool.format_plan_table(detail))
+    first_day = [line for line in tool.format_plan_table(detail)[1:] if not line.startswith("+1d")]
+    assert first_day and all(not line.startswith("+") for line in first_day)

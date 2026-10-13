@@ -22,6 +22,7 @@ class BatteryConfig:
     max_soc: float = 1.00
     round_trip_eff: float = 0.82     # measured 3-12 Oct 2026 (docs/hems/intake-decisions.md); a setting
     min_profit_margin: float = 0.10  # EUR per kWh discharged: a cycle must earn at least this, net of round-trip losses
+    hold_cost_kwh_h: float = 0.002   # EUR per kWh stored per hour: a waiting premium, so equal prices charge late instead of early (replay 4-11 Oct)
     step_kwh: float = 0.25           # SoC grid resolution
     allow_grid_charge: bool = True
 
@@ -113,10 +114,17 @@ def _reason(action: str, s: Slot, grid_kwh: float, stored_value: float | None, e
     return Reasoning("hold", f"hold: sell {sell:.3f} <= keep {stored_value:.3f} <= buy {buy:.3f}", sell, buy)
 
 
+def floor_fraction(slot: Slot | None, cfg: BatteryConfig) -> float:
+    """SoC floor of a slot as a fraction: its reserve (or the config default), never below the hard minimum.
+
+    The executor uses the same floor as the planner, so a plan and its safety check cannot disagree."""
+    reserve = cfg.reserve_soc if slot is None or slot.reserve_soc is None else slot.reserve_soc
+    return max(cfg.hard_min_soc, reserve)
+
+
 def _floor_levels(slots: list[Slot], cfg: BatteryConfig) -> list[int]:
-    """SoC floor per slot in grid steps: the slot's reserve (or the config default), never below the hard minimum."""
-    return [round(max(cfg.hard_min_soc, cfg.reserve_soc if s.reserve_soc is None else s.reserve_soc)
-                  * cfg.capacity_kwh / cfg.step_kwh) for s in slots]
+    """SoC floor per slot in grid steps."""
+    return [round(floor_fraction(s, cfg) * cfg.capacity_kwh / cfg.step_kwh) for s in slots]
 
 
 def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
@@ -132,6 +140,7 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
     hi = round(cfg.max_soc * cfg.capacity_kwh / step)
     start = min(max(round(soc_kwh / step), 0), hi)
     # The inverter limit is on the AC side: charging loses energy before it reaches the cells, discharging after.
+    hold = cfg.hold_cost_kwh_h * SLOT_H * step    # per grid step of SoC held through one slot
     max_charge = int(cfg.max_power_kw * SLOT_H * eff / step)
     max_discharge = int(cfg.max_power_kw * SLOT_H / eff / step)
     if terminal_value is None:
@@ -159,7 +168,7 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
                     # only allow charging from surplus PV
                     if ac > max(0.0, -net) + 1e-9:
                         continue
-                c = _grid_cost(net + ac, s) + (cfg.min_profit_margin * -ac if ac < 0 else 0.0)
+                c = _grid_cost(net + ac, s) + (cfg.min_profit_margin * -ac if ac < 0 else 0.0) + hold * k2
                 c += value[t + 1][k2]
                 if c < best:
                     best, best_d = c, d

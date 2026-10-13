@@ -106,6 +106,28 @@ def test_clear_spread_charges_cheap_discharges_peak():
     assert p.saving > 0
 
 
+def test_below_the_reserve_the_plan_charges_first_and_sells_only_from_the_charged_energy():
+    """Starting under the reserve (24 %), the planner builds the SoC in the cheap window and sells afterwards, never below the reserve."""
+    mk_h = [0.02] * 6 + [0.10] * 12 + [0.30] * 4 + [0.10] * 2
+    p = plan(mk(hourly_to_quarters(mk_h)), 0.24 * 25, BatteryConfig())
+    ch = [s.index for s in p.slots if s.action == "charge"]
+    di = [s.index for s in p.slots if s.action == "discharge"]
+    assert ch and di and max(ch) < min(di)                       # the charge window comes before the first sale
+    assert p.slots[min(di) - 1].soc_kwh > 0.30 * 25              # the energy sold was charged first, above the reserve
+    assert min(s.soc_kwh for s in p.slots if s.index >= min(di)) >= 0.30 * 25 - 1e-9
+    assert p.saving > 0
+
+
+def test_a_waiting_cost_charges_late_instead_of_early_when_prices_are_equal():
+    """With 18 equally cheap hours before the peak, free waiting charges at night; a waiting cost charges right before the sale."""
+    mk_h = [0.10] * 18 + [0.40] * 4 + [0.10] * 2
+    first_charge = lambda hold: min(s.index for s in plan(mk(hourly_to_quarters(mk_h)), 0.30 * 25, BatteryConfig(hold_cost_kwh_h=hold)).slots if s.action == "charge")
+    assert first_charge(0.0) < 4 * 4                          # free waiting: charging starts in the first hours
+    assert first_charge(0.001) >= 14 * 4                      # a small cost: it waits until shortly before the peak
+    saving = lambda hold: plan(mk(hourly_to_quarters(mk_h)), 0.30 * 25, BatteryConfig(hold_cost_kwh_h=hold)).saving
+    assert saving(0.001) == pytest.approx(saving(0.0), abs=0.05)   # on equal prices waiting later costs no cash
+
+
 def test_thin_spread_no_cycling():
     """A spread smaller than margin plus losses leaves the battery idle."""
     mk_h = [0.10] * 12 + [0.115] * 12

@@ -35,6 +35,7 @@
           "reserve_soc_pct": "Reserve SoC (%)",
           "round_trip_eff": "Round-trip efficiency (0-1)",
           "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
+          "hold_cost_kwh_h": "Waiting cost (EUR per stored kWh per hour; 0 = off, higher charges later before a sale)",
           "pv_gain_w_per_wm2": "PV gain (W per W/m2, 0 = calibrate automatically)",
           "pv_max_ac_w": "Inverter AC limit (W)",
           "weather_enabled": "Fetch weather from Open-Meteo",
@@ -92,6 +93,20 @@
       },
       "plan": {
         "name": "Plan"
+      },
+      "executor": {
+        "name": "Executor",
+        "state": {
+          "as_planned": "As planned",
+          "no_plan": "No plan",
+          "expired": "Plan expired",
+          "no_soc": "No battery SoC",
+          "stale_soc": "Battery SoC is stale",
+          "at_floor": "Held at the SoC floor",
+          "limited_floor": "Slowed above the SoC floor",
+          "at_full": "Held, battery full",
+          "limited_full": "Slowed, battery nearly full"
+        }
       }
     },
     "binary_sensor": {

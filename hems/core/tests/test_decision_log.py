@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from test_rolling import recorded_day
 
 from hems.battery import BatteryConfig
-from hems.decision_log import best_later, plan_detail, plan_segments, settings_snapshot
+from hems.decision_log import best_later, cycle_line, event_line, plan_detail, plan_segments, plan_tree, settings_snapshot, when
 from hems.forecast import LOCAL_TZ
 from hems.prices import PriceModel
 from hems.rolling import HorizonInputs, plan_next
@@ -83,3 +83,59 @@ def test_trace_writer_keeps_several_generations_and_can_write_compact_lines(tmp_
     assert path.with_name("plans.jsonl.1").exists() and path.with_name("plans.jsonl.2").exists()
     assert not path.with_name("plans.jsonl.3").exists()
     assert '"n":5' in path.read_text() or '"n":4' in path.read_text()
+
+
+# ---- text for the Home Assistant log ------------------------------------------------------------------------
+
+def record_at(hour: int, soc_kwh: float = 12.0) -> dict:
+    """The decision record the integration writes for a cycle (trace of the decision)."""
+    d = decision_at(hour, soc_kwh)
+    return {"status": "ok", "price_source": "market", **d.trace}
+
+
+def test_a_time_on_another_day_than_the_plan_start_says_so():
+    """A plan of 48 hours crosses midnight: 07:30 tomorrow must not read as 07:30 today."""
+    start = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
+    assert when(start + timedelta(hours=1), start, LOCAL_TZ) == "15:00"
+    assert when(start + timedelta(hours=18), start, LOCAL_TZ) == "+1d 08:00"       # 12:00 UTC is 14:00 local, so +18 h is 08:00 tomorrow
+    assert when(start + timedelta(hours=44), start, LOCAL_TZ) == "+2d 10:00"
+    assert when(start - timedelta(hours=15), start, LOCAL_TZ) == "-1d 23:00"
+    assert when(start - timedelta(hours=14), start, LOCAL_TZ) == "00:00"          # local midnight is still the same local day
+
+
+def test_the_cycle_line_carries_the_decision_the_comparison_and_the_day_of_the_best_later_sale():
+    """One line says what, why (sell/keep/buy), and when keep is waiting for, with the day for tomorrow."""
+    line = cycle_line(record_at(12), LOCAL_TZ)
+    assert line.startswith("HEMS 12:00 ok: ") and "sell " in line and "keep " in line and "buy " in line and "best sell later" in line
+    assert "quarters, prices market" in line and "expected saving" in line
+    assert "\n" not in line
+
+
+def test_a_failed_cycle_is_one_line_with_the_status():
+    """Without a decision the line is the status, so the log shows why nothing was planned."""
+    assert cycle_line({"status": "no_soc"}, LOCAL_TZ) == "HEMS no_soc: no decision this quarter"
+
+
+def test_the_plan_tree_lists_every_charge_and_discharge_window_with_their_day():
+    """The tree names the windows of the whole plan, idle stretches are the gaps between them."""
+    record = record_at(0)
+    tree = plan_tree(record, LOCAL_TZ)
+    windows = [s for s in record["segments"] if s.get("action") in ("charge", "discharge")]
+    assert tree[0].startswith("HEMS plan from 00:00") and len(tree) == 1 + len(windows)
+    assert any(" charge " in line for line in tree) and any(" discharge " in line for line in tree)
+    assert plan_tree({"status": "no_soc"}, LOCAL_TZ) == []
+
+
+def test_an_idle_plan_says_so_instead_of_an_empty_tree():
+    """No windows still gives a readable line."""
+    flat = {"slot_start": "2026-10-13T12:00:00+00:00", "horizon_slots": 8, "expected_saving_eur": 0.0,
+            "segments": [{"from": "2026-10-13T12:00:00+00:00", "to": "2026-10-13T14:00:00+00:00", "action": "idle", "kwh": 0, "avg_w": 0,
+                          "soc_from_pct": 40, "soc_to_pct": 40, "avg_price": None}]}
+    assert plan_tree(flat, LOCAL_TZ)[-1] == "  no charge or discharge planned"
+
+
+def test_an_event_line_stays_one_readable_line_however_large_the_event_is():
+    """Big values (the settings of a cycle) are cut, small ones are kept whole."""
+    line = event_line("settings", {"hash": "ab12cd34", "values": {"battery": {"x": "y" * 500}}, "previous": None})
+    assert line.startswith("HEMS event settings hash=\"ab12cd34\"") and "previous=null" in line and line.count("\n") == 0 and len(line) < 720
+    assert event_line("retry", {"in_seconds": 60.0, "status": "no_soc"}) == 'HEMS event retry in_seconds=60.0 status="no_soc"'

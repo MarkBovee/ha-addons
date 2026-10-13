@@ -33,7 +33,7 @@ def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelec
 def _options_schema(current: dict[str, Any]) -> vol.Schema:
     """All settings with their current values; the bonus switches and netting are plain booleans."""
     numbers = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1),
-               "round_trip_eff": (0.5, 1.0, 0.01), "min_profit_margin": (0, 1, 0.01), "pv_gain_w_per_wm2": (0, 30, 0.1), "pv_max_ac_w": (0, 30000, 100),
+               "round_trip_eff": (0.5, 1.0, 0.01), "min_profit_margin": (0, 1, 0.01), "hold_cost_kwh_h": (0, 0.05, 0.0005), "pv_gain_w_per_wm2": (0, 30, 0.1), "pv_max_ac_w": (0, 30000, 100),
                "import_vat_multiplier": (1, 2, 0.01), "import_markup": (-0.5, 0.5, 0.0001), "import_energy_tax": (0, 1, 0.00001),
                "export_vat_multiplier": (1, 2, 0.01), "export_bonus_pct": (0, 1, 0.01), "export_fixed_bonus": (-0.5, 0.5, 0.0001),
                "export_energy_tax": (0, 1, 0.00001)}

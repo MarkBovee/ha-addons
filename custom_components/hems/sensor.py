@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HemsConfigEntry
 from .coordinator import HemsCoordinator, HemsSnapshot
+from .engine import executor
 from .entity import HemsEntity
 
 QUARTER = timedelta(minutes=15)
@@ -49,6 +50,12 @@ def _plan_preview(snap: HemsSnapshot) -> dict[str, Any]:
                        "why": s.reason} for i, s in enumerate(slots)]}
 
 
+def _execution_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """The executor's view: what the planner wanted, what may be sent after the live SoC check, and why they differ."""
+    e = snap.execution
+    return {"planned_w": e.planned_w, "power_w": e.power_w, "overridden": e.overridden, "reason": e.reason, "soc_pct": e.soc_pct}
+
+
 def _decision_attrs(snap: HemsSnapshot) -> dict[str, Any]:
     """Why this action: the trace of the decision, minus bulky fields."""
     return {k: v for k, v in snap.output.trace.items() if k not in ("status",)} | {"status": snap.output.status}
@@ -60,7 +67,11 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           value=lambda s: s.output.decision.plan.slots[0].action if s.output.decision else None, attributes=_decision_attrs),
     HemsSensorDescription(key="battery_setpoint", translation_key="battery_setpoint", device_class=SensorDeviceClass.POWER,
                           native_unit_of_measurement=UnitOfPower.WATT, state_class=SensorStateClass.MEASUREMENT,
-                          value=lambda s: s.output.decision.command.power_w if s.output.decision else None),
+                          value=lambda s: s.execution.power_w if s.output.decision else None, attributes=_execution_attrs),
+    HemsSensorDescription(key="executor", translation_key="executor", device_class=SensorDeviceClass.ENUM,
+                          options=[executor.AS_PLANNED, executor.NO_PLAN, executor.EXPIRED, executor.NO_SOC, executor.STALE_SOC, executor.AT_FLOOR,
+                                   executor.LIMITED_FLOOR, executor.AT_FULL, executor.LIMITED_FULL],
+                          value=lambda s: s.execution.code, attributes=_execution_attrs),
     HemsSensorDescription(key="expected_saving", translation_key="expected_saving", device_class=SensorDeviceClass.MONETARY,
                           native_unit_of_measurement=CURRENCY_EURO,
                           value=lambda s: round(s.output.decision.plan.saving, 2) if s.output.decision else None),
