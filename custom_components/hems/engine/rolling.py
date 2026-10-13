@@ -10,6 +10,7 @@ from typing import Mapping
 
 from .battery import BatteryConfig, Plan, Slot, plan
 from .contracts import BatteryCommand
+from .decision_log import best_later, plan_segments
 from .prices import PriceSeries
 from .slots import SLOT_H, SLOT_MINUTES
 from .trace import explain
@@ -43,6 +44,7 @@ class Decision:
     command: BatteryCommand
     plan: Plan
     trace: dict
+    slots: tuple[Slot, ...] = ()             # the slots the plan was computed from (prices, load, PV per quarter)
 
 
 def _build_slots(inputs: HorizonInputs, start: datetime) -> tuple[list[Slot], int]:
@@ -74,8 +76,16 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
         "missing_forecast_slots": missing, "import_price": round(slots[0].import_price, 4),
         "export_price": round(slots[0].export_price, 4), "power_w": command.power_w,
         **explain(result, [s.import_price for s in slots], [s.export_price for s in slots]),
+        "compare": {"code": first.reason_code, "sell": _r(first.sell_value), "buy": _r(first.buy_cost), "keep": _r(first.stored_value),
+                    "at_floor": first.at_floor, "at_full": first.at_full, **best_later(result, start)},
+        "segments": plan_segments(result, slots, start, inputs.soc_kwh, cfg.capacity_kwh),
     }
-    return Decision(start, command, result, trace)
+    return Decision(start, command, result, trace, tuple(slots))
+
+
+def _r(value: float | None) -> float | None:
+    """Round a comparison value that may be None to four decimals (EUR per kWh)."""
+    return None if value is None else round(value, 4)
 
 
 def plan_shift(previous: Decision | None, current: Decision) -> dict | None:

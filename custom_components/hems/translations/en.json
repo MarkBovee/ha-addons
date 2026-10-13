@@ -49,7 +49,8 @@
           "bonus_only_daylight": "Percentage bonus only between sunrise and sunset",
           "bonus_only_positive_price": "Percentage bonus only for a positive market price",
           "nordpool_enabled": "Fetch day-ahead prices from Nord Pool",
-          "delivery_area": "Nord Pool delivery area"
+          "delivery_area": "Nord Pool delivery area",
+          "trace_full_plan": "Log the full plan every cycle (plans.jsonl, about 1 MB per day)"
         }
       }
     }

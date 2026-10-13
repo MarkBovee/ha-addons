@@ -39,7 +39,7 @@ def _options_schema(current: dict[str, Any]) -> vol.Schema:
                "export_energy_tax": (0, 1, 0.00001)}
     fields: dict[Any, Any] = {vol.Required(k, default=current[k]): _number(*bounds) for k, bounds in numbers.items()}
     fields[vol.Required("delivery_area", default=current["delivery_area"])] = str
-    for flag in ("weather_enabled", "nordpool_enabled", "salderen", "bonus_only_daylight", "bonus_only_positive_price"):
+    for flag in ("weather_enabled", "nordpool_enabled", "trace_full_plan", "salderen", "bonus_only_daylight", "bonus_only_positive_price"):
         fields[vol.Required(flag, default=current[flag])] = bool
     return vol.Schema(fields)
 

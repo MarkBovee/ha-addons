@@ -10,6 +10,8 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 | `custom_components/hems/` | The Home Assistant integration (dry-run planner, sensors, config flow). `engine/` inside it is a **generated copy** of `hems/core`; never edit it. |
 | `scripts/sync_hems_core.py` | Regenerates `custom_components/hems/engine` from the core (`--check` verifies). |
 | `scripts/hems_collect.py`, `scripts/hems_replay.py` | Read-only data collector and the replay of recorded days. |
+| `scripts/hems_trace.py` | Reads the decision logs (`/config/hems/*.jsonl`): `--pull`, `tail`, `show`, `why`, `diff`, `events`. See `../docs/hems/install.md`. |
+| `hems/core/hems/decision_log.py` | What makes a decision followable: plan segments, best later opportunities, the compact full-plan record, settings hash. |
 | `tests/hems_ha/` | Integration tests (need the pinned Home Assistant test plugin, see below). |
 | `hems/tests/` | Tests of the deploy script. |
 | `hems/deploy.py` | Deploys `custom_components/hems` to the local Home Assistant server. |
@@ -22,6 +24,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 - Prices: the percentage Zonnebonus applies only in daylight and for a positive price (both switchable); the energy-prices add-on code applies it always, do not copy that.
 - The minimum profit margin (`min_profit_margin`, default 0.10 EUR/kWh) is a planner threshold, never a cost. Replay and sensors report cash.
 - Entity ids are set explicitly from the entity key (`sensor.hems_battery_action`, `binary_sensor.hems_tomorrow_prices_available`) because Home Assistant otherwise derives them from the instance language (a Dutch install gets `sensor.hems_batterij_actie`). Keep the keys stable; renaming one breaks dashboards.
+- Every decision must stay explainable: the planner keeps the numbers behind each slot (`sell_value`, `buy_cost`, `stored_value`, `reason_code`) and the coordinator logs them. When you add a decision step, add its inputs and outcome to the decision record or to `events.jsonl`, with a test.
 - Weather (Open-Meteo) requests carry coordinates rounded to 0.01 degrees. Keep it that way.
 
 ## Tests
@@ -70,5 +73,5 @@ echo 'HA_SSH_KEY=~/.ssh/ha_hems' >> .env
 
 1. Restart Home Assistant (user approval; or `--restart`). A new or changed integration is only loaded after a restart. `deploy.py --restart --yes` waits until the REST API answers again; after a restart the SoC sensors of battery-api appear a little later, HEMS then reports `no_soc` and replans by itself after 60 seconds.
 2. First time only: add the integration, in the UI or through the Home Assistant tools: `ha_set_integration(domain="hems", config={"soc_entity": ..., "battery_power_entity": ..., "battery_power_positive_is_discharging": true, "pv_entity": ..., "grid_entity": ..., "inverter_output_entity": ..., "ev_power_entity": ..., "price_curve_entity": ...})` with the entities from the table in `../docs/hems/install.md`. To start over (for instance after an entity-id change) remove the entry with `ha_remove_helpers_integrations(target=<entry_id>, confirm=True)` and add it again; only ever remove the HEMS entry.
-3. Verify read-only through the Home Assistant MCP tools or REST: `sensor.hems_status` is `ok`, `sensor.hems_battery_action` has a `reason`, `binary_sensor.hems_tomorrow_prices_available` matches whether Nord Pool has published, and `/config/hems/decision_trace.jsonl` gains a line per quarter.
+3. Verify read-only through the Home Assistant MCP tools or REST: `sensor.hems_status` is `ok`, `sensor.hems_battery_action` has a `reason`, `binary_sensor.hems_tomorrow_prices_available` matches whether Nord Pool has published, and the logs grow: `python3 scripts/hems_trace.py --pull tail -n 5` shows the latest cycles, `events` the fetches and status changes.
 4. Read the HA log for `custom_components.hems` errors; a failed Nord Pool or Open-Meteo fetch is a warning and the plan continues on the fallbacks.

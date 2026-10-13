@@ -224,3 +224,79 @@ async def test_a_missing_soc_after_a_restart_is_retried_within_a_minute(recorder
     await hass.async_block_till_done()
     assert hass.states.get("sensor.hems_status").state == "ok"
 
+
+def read_jsonl(hass: HomeAssistant, name: str) -> list[dict]:
+    """The lines of one HEMS log file (decision_trace.jsonl, plans.jsonl, events.jsonl) as dicts."""
+    path = Path(hass.config.path("hems", name))
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+async def test_the_decision_record_explains_inputs_comparison_and_plan_shape(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """One cycle leaves a decision line with inputs (and their ages), the comparison, the plan segments and a settings hash."""
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    record = read_jsonl(hass, "decision_trace.jsonl")[-1]
+    assert record["status"] == "ok" and len(record["settings"]) == 8
+    assert record["inputs"]["price_quarters"] == 96 and record["inputs"]["market_age_min"] == 0 and record["inputs"]["price_curve_configured"] is True
+    assert set(record["compare"]) >= {"code", "sell", "buy", "keep", "at_floor", "at_full", "best_sell_later", "best_buy_later"}
+    assert record["segments"] and record["segments"][0]["from"] == record["slot_start"]
+    assert record["previous_action"] is None and record["action_changed"] is False
+
+
+async def test_every_cycle_logs_the_full_plan_as_compact_arrays(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """plans.jsonl holds all planned quarters of the cycle, equal in number to what sensor.hems_plan reports."""
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    plan = read_jsonl(hass, "plans.jsonl")[-1]
+    assert plan["n"] == int(hass.states.get("sensor.hems_plan").state) and plan["start"] == plan["cycle"]
+    assert len(plan["a"]) == plan["n"] and all(len(plan[k]) == plan["n"] for k in ("w", "soc", "imp", "exp", "load", "pv", "keep"))
+
+
+async def test_the_full_plan_log_can_be_switched_off(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """With trace_full_plan off the decision line is still written, plans.jsonl is not."""
+    set_states(hass)
+    freezer.move_to(NOW)
+    aioclient_mock.get(OPEN_METEO_URL, json=weather_payload())
+    mock_nordpool(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=ROLES, options={**DEFAULT_OPTIONS, "trace_full_plan": False}, unique_id=DOMAIN)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert read_jsonl(hass, "decision_trace.jsonl") and read_jsonl(hass, "plans.jsonl") == []
+
+
+async def test_events_record_fetches_settings_and_the_first_status_and_action(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """events.jsonl tells how the first cycle came about: settings, history, Nord Pool, weather, PV gain, status, action."""
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    events = {e["event"]: e for e in read_jsonl(hass, "events.jsonl")}
+    assert {"settings", "history", "market", "weather", "pv_gain", "status", "action"} <= set(events)
+    assert events["settings"]["values"]["battery"]["min_profit_margin"] == 0.10 and events["settings"]["previous"] is None
+    assert events["settings"]["roles"]["soc_entity"] == "sensor.soc"
+    assert events["market"]["fetched"] == [{"day": "2026-10-06", "http": 200, "quarters": 96}] and events["market"]["known_quarters"] == 96
+    assert events["weather"]["ok"] is True and events["status"]["to"] == "ok" and events["status"]["from"] is None
+
+
+async def test_failed_fetches_and_status_changes_are_logged_with_the_reason(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """A Nord Pool outage and a missing SoC end up in the events, including the retry that follows."""
+    set_states(hass)
+    hass.states.async_set("sensor.soc", "unavailable")
+    freezer.move_to(NOW)
+    aioclient_mock.get(OPEN_METEO_URL, json=weather_payload())
+    mock_nordpool(aioclient_mock, today_status=500)
+    entry = MockConfigEntry(domain=DOMAIN, data=ROLES, options=dict(DEFAULT_OPTIONS), unique_id=DOMAIN)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    hass.states.async_set("sensor.soc", "40")
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    events = read_jsonl(hass, "events.jsonl")
+    market = next(e for e in events if e["event"] == "market")
+    assert "error" in market["fetched"][0] and market["covers_until"] is None
+    assert [(e["from"], e["to"]) for e in events if e["event"] == "status"] == [(None, "no_soc"), ("no_soc", "ok")]
+    assert any(e["event"] == "retry" and e["status"] == "no_soc" for e in events)
+    last = read_jsonl(hass, "decision_trace.jsonl")[-1]
+    assert last["status"] == "ok" and last["inputs"]["price_curve_configured"] is True and last["price_source"] == "curve"
+

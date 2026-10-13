@@ -22,7 +22,9 @@ Een HEMS-kern (`hems/core`, geen HA-imports) die per kwartier een rolling-horizo
 - **Alleen dry-run**: de integratie schrijft nooit naar een apparaat; `BatteryPort.apply` wordt in deze versie niet aangeroepen.
 - **Engine als gegenereerde kopie**: `custom_components/hems/engine` komt uit `hems/core` via `scripts/sync_hems_core.py`; een test faalt als de kopie achterloopt.
 - **Warm water (stap 4) en EV (Charge Amps) zijn niet gebouwd**; ze zijn niet nodig voor de eerste simulatie.
-- **Replay-uitkomst** (4-11 okt, bekend verbruik en PV, 8 dagen, kasbasis): planner 16,84 EUR tegenover 15,37 EUR echt, met minimale winstmarge 0,10; 22,03 EUR bij 0,05 en 24,49 EUR bij 0,00 (kas). Op 7-9 okt (dunne spreads) laadt de planner niet, waar de echte sturing verlies maakte. Zie `docs/hems/observations/replay-2026-10-13.md`.
+- **Replay-uitkomst** (4-11 okt, bekend verbruik en PV, 8 dagen, kasbasis): planner 16,76 EUR tegenover 15,37 EUR echt, met minimale winstmarge 0,10; 21,97 EUR bij 0,05 en 24,49 EUR bij 0,00 (kas). Op 7-9 okt (dunne spreads) laadt de planner niet, waar de echte sturing verlies maakte. Zie `docs/hems/observations/replay-2026-10-13.md`.
+
+- **Logging in drie lagen** (besluit Mark 13 okt: alle beslissingen en de hele plan-boom kunnen volgen): `decision_trace.jsonl` (beslissing, invoer, vergelijking, segmenten), `plans.jsonl` (elk geplande kwartier met invoer), `events.jsonl` (ophalen, statuswissels, instellingen); lezen met `scripts/hems_trace.py`. Gevonden tijdens het bouwen: de planner begrensde het vermogen aan de accu-kant, waardoor laden op 8,8 kW AC kon uitkomen bij een omvormer van 8 kW; nu AC-begrensd (replay-cijfers hieronder zijn daarmee opnieuw berekend).
 
 ## Open questions
 1. Bonus op batterijstroom: Zonneplan beschrijft de bonus voor "zonnestroom"; of avondlevering uit de batterij hem krijgt en of hij incl. btw is, is onbevestigd. Controle op een echte afrekening; tot dan dekken de schakelaars en de replay beide gevallen.

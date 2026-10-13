@@ -208,3 +208,12 @@ def test_slots_on_a_25_hour_day_repeat_the_hour_instead_of_drifting():
     out = to_slots_kwh(profile, datetime(2026, 10, 25, 0, 0, tzinfo=LOCAL_TZ), 25 * 4)
     assert len(out) == 100 and out.count(pytest.approx(0.2 * .25)) == 8     # local hour 02 occurs twice
     assert out[-1] == pytest.approx(2.3 * .25)
+
+
+def test_planned_ac_power_never_exceeds_the_inverter_limit():
+    """The limit is AC: charging at 8.8 kW AC (8 kW into the cells) would exceed an 8 kW inverter (regression)."""
+    mk_h = [0.02] * 6 + [0.40] * 6 + [0.02] * 6 + [0.40] * 6
+    p = plan(mk(hourly_to_quarters(mk_h)), 12.0, BatteryConfig())
+    peak_kw = max(abs(s.battery_kwh) for s in p.slots) / 0.25
+    assert 7.0 < peak_kw <= 8.0 + 1e-9
+

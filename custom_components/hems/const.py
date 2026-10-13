@@ -25,6 +25,7 @@ DEFAULT_OPTIONS = {
     "pv_gain_w_per_wm2": 0.0,                  # 0 = calibrate from recorded PV against the weather data
     "pv_max_ac_w": 8000.0,
     "weather_enabled": True,
+    "trace_full_plan": True,                   # also log every planned quarter each cycle (about 1 MB per day)
     "nordpool_enabled": True,                  # HEMS fetches day-ahead prices itself
     "delivery_area": "NL",
     "import_vat_multiplier": 1.21,
@@ -46,4 +47,6 @@ WEATHER_MAX_AGE = timedelta(hours=6)           # beyond this the forecast is dro
 RETRY_STATUSES = frozenset({"no_soc", "stale_soc", "no_prices"})   # inputs that usually appear within a minute after a restart
 RETRY_DELAY = timedelta(seconds=60)
 TRACE_DIR = "hems"
-TRACE_FILE = "decision_trace.jsonl"
+TRACE_FILE = "decision_trace.jsonl"      # one line per cycle: inputs, the comparison behind the action, plan segments
+PLANS_FILE = "plans.jsonl"                 # one line per cycle: every planned quarter with the inputs it came from
+EVENTS_FILE = "events.jsonl"               # fetches, status changes, action changes, settings changes

@@ -45,3 +45,4 @@ docs/hems/observations/data/snapshots.jsonl
 docs/hems/observations/data/plans.jsonl
 docs/hems/observations/data/prices_quarter.jsonl
 docs/hems/observations/data/price_curves.jsonl
+docs/hems/observations/data/trace/

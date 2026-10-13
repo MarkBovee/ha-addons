@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from .battery import BatteryConfig
 from .contracts import MarketPrices, Reading
+from .decision_log import plan_detail
 from .forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
 from .prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
 from .pvforecast import pv_kwh_per_quarter
@@ -58,6 +59,7 @@ class EngineOutput:
     load_kwh: Mapping[datetime, float]
     pv_kwh: Mapping[datetime, float]
     trace: dict
+    detail: dict | None = None               # the full plan as compact arrays (hems.decision_log.plan_detail)
 
 
 def _failure(status: str, inputs: EngineInputs, **extra) -> EngineOutput:
@@ -115,10 +117,13 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
         return EngineOutput(STATUS_NO_PRICE_NOW, None, prices, load, pv,
                             {"status": STATUS_NO_PRICE_NOW, "price_source": source, "now": inputs.now.isoformat(),
                              "prices_end": prices.starts[-1].isoformat()})
-    trace = {"status": STATUS_OK, "price_source": source, "load_source": load_source, "weather": inputs.ghi_w_m2 is not None, **decision.trace}
+    trace = {"status": STATUS_OK, "price_source": source, "load_source": load_source, "weather": inputs.ghi_w_m2 is not None,
+             "inputs": {"soc_age_s": round(inputs.soc_pct.age(inputs.now).total_seconds()), "price_quarters": len(prices.starts),
+                        "prices_until": (prices.starts[-1] + timedelta(minutes=15)).isoformat(), "load_samples": len(inputs.load_history_w)},
+             **decision.trace}
     if price_check is not None:
         trace["price_check_max_diff"] = price_check
     shift = plan_shift(previous, decision)
     if shift:
         trace["plan_shift"] = shift
-    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace)
+    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace, plan_detail(decision))

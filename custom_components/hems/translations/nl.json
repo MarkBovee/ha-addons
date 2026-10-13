@@ -49,7 +49,8 @@
           "bonus_only_daylight": "Percentagebonus alleen tussen zonsopkomst en zonsondergang",
           "bonus_only_positive_price": "Percentagebonus alleen bij een positieve marktprijs",
           "nordpool_enabled": "Dagprijzen zelf ophalen bij Nord Pool",
-          "delivery_area": "Nord Pool-biedzone"
+          "delivery_area": "Nord Pool-biedzone",
+          "trace_full_plan": "Elk kwartier het volledige plan loggen (plans.jsonl, ongeveer 1 MB per dag)"
         }
       }
     }

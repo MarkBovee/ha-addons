@@ -50,6 +50,11 @@ class PlanSlot:
     cost: float
     reason: str = ""
     stored_value: float | None = None  # EUR per kWh kept in the battery after this slot (marginal value from the DP)
+    reason_code: str = ""            # sell | buy | hold | floor | full | none
+    sell_value: float | None = None  # EUR per stored kWh when selling (or avoiding import) in this slot, net of margin and loss
+    buy_cost: float | None = None    # EUR per stored kWh when charging in this slot, net of loss
+    at_floor: bool = False           # SoC at the end of the slot sits on the floor
+    at_full: bool = False            # SoC at the end of the slot sits at the maximum
 
 
 @dataclass
@@ -77,26 +82,35 @@ def _stored_value(next_values: list[float], k: int, hi: int, step: float) -> flo
     return -(next_values[high] - next_values[low]) / step
 
 
+@dataclass(frozen=True)
+class Reasoning:
+    """The comparison behind one slot's action, in EUR per kWh stored."""
+    code: str                        # sell | buy | hold | floor | full | none
+    text: str
+    sell: float | None = None
+    buy: float | None = None
+
+
 def _reason(action: str, s: Slot, grid_kwh: float, stored_value: float | None, eff: float, cfg: BatteryConfig,
-            at_floor: bool, at_full: bool) -> str:
-    """Why the planner chose `action`, comparing EUR per kWh stored: selling net of the minimum profit margin, buying net of loss, keeping.
+            at_floor: bool, at_full: bool) -> Reasoning:
+    """Why the planner chose `action`: selling net of the minimum profit margin, buying net of loss, or keeping.
 
     The 'keep' value is what the rest of the horizon would pay for that kWh; every decision is that comparison."""
     if stored_value is None:
-        return action
+        return Reasoning("none", action)
     net = s.load_kwh - s.pv_kwh
     sell = eff * ((s.import_price if net > 0 else s.export_price) - cfg.min_profit_margin)
     buy_price = s.import_price if (grid_kwh > 0 if action == "charge" else net >= 0) else s.export_price
     buy = buy_price / eff
     if action == "discharge":
-        return f"sell {sell:.3f} > keep {stored_value:.3f}"
+        return Reasoning("sell", f"sell {sell:.3f} > keep {stored_value:.3f}", sell, buy)
     if action == "charge":
-        return f"buy {buy:.3f} < keep {stored_value:.3f}"
+        return Reasoning("buy", f"buy {buy:.3f} < keep {stored_value:.3f}", sell, buy)
     if at_floor and sell > stored_value:
-        return f"hold at reserve floor (sell {sell:.3f} > keep {stored_value:.3f})"
+        return Reasoning("floor", f"hold at reserve floor (sell {sell:.3f} > keep {stored_value:.3f})", sell, buy)
     if at_full and buy < stored_value:
-        return f"hold, battery full (buy {buy:.3f} < keep {stored_value:.3f})"
-    return f"hold: sell {sell:.3f} <= keep {stored_value:.3f} <= buy {buy:.3f}"
+        return Reasoning("full", f"hold, battery full (buy {buy:.3f} < keep {stored_value:.3f})", sell, buy)
+    return Reasoning("hold", f"hold: sell {sell:.3f} <= keep {stored_value:.3f} <= buy {buy:.3f}", sell, buy)
 
 
 def _floor_levels(slots: list[Slot], cfg: BatteryConfig) -> list[int]:
@@ -117,7 +131,9 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
     floors = _floor_levels(slots, cfg)
     hi = round(cfg.max_soc * cfg.capacity_kwh / step)
     start = min(max(round(soc_kwh / step), 0), hi)
-    max_steps = int(cfg.max_power_kw * SLOT_H / step)
+    # The inverter limit is on the AC side: charging loses energy before it reaches the cells, discharging after.
+    max_charge = int(cfg.max_power_kw * SLOT_H * eff / step)
+    max_discharge = int(cfg.max_power_kw * SLOT_H / eff / step)
     if terminal_value is None:
         terminal_value = min(s.import_price for s in slots) * eff if slots else 0.0
 
@@ -133,7 +149,7 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
         lo = floors[t]
         for k in range(hi + 1):
             best, best_d = INF, 0
-            for d in range(-max_steps, max_steps + 1):      # d>0 charge steps (SoC side)
+            for d in range(-max_discharge, max_charge + 1):      # d>0 charge steps (SoC side)
                 k2 = k + d
                 if k2 < min(lo, k) or k2 > hi:               # never discharge below the floor
                     continue
@@ -162,8 +178,9 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
         k += d
         action = "charge" if d > 0 else "discharge" if d < 0 else "idle"
         keep = _stored_value(value[t + 1], k, hi, step)
-        reason = _reason(action, s, grid, keep, eff, cfg, at_floor=k <= floors[t], at_full=k >= hi)
-        out.slots.append(PlanSlot(t, action, ac, k * step, grid, _grid_cost(grid, s), reason, keep))
+        at_floor, at_full = k <= floors[t], k >= hi
+        why = _reason(action, s, grid, keep, eff, cfg, at_floor=at_floor, at_full=at_full)
+        out.slots.append(PlanSlot(t, action, ac, k * step, grid, _grid_cost(grid, s), why.text, keep, why.code, why.sell, why.buy, at_floor, at_full))
         out.total_cost += _grid_cost(grid, s)    # cash only: the margin shapes decisions, it is not money
         out.baseline_cost += _grid_cost(net, s)
     return out

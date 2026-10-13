@@ -41,12 +41,28 @@ Alle sensoren hangen onder één apparaat "HEMS". Vermogens volgen de HEMS-conve
 | `sensor.hems_pv_forecast_24h` | PV-verwachting komende 24 uur (kWh) |
 | `sensor.hems_plan` | aantal geplande kwartieren; attribuut `slots` met de komende 12 uur |
 
-## Decision trace
+## Logging: alle beslissingen en de hele plan-boom
 
-`/config/hems/decision_trace.jsonl`: een regel per kwartier met tijdstip, SoC, prijzen, actie, vermogen, reden (`sell 0.31 > keep 0.27`: verkoopwaarde per opgeslagen kWh tegenover de waarde van bewaren), aantal kwartieren zonder verbruiks- of PV-voorspelling, en `plan_shift` wanneer het plan voor een kwartier meer dan 25 % verschoof. Roteert bij 20 MB.
+HEMS schrijft in `/config/hems/` drie bestanden, elk met roterende generaties (`.1`, `.2`). Samen laten ze zien wat er besloten is, waarom, en hoe het hele plan er op dat moment uitzag.
+
+| Bestand | Inhoud | Omvang |
+|---|---|---|
+| `decision_trace.jsonl` | Eén regel per kwartier: status, invoer met leeftijden (SoC, prijzen, weer, historie), de vergelijking achter de actie (`compare`: verkoopwaarde, bewaarwaarde, kopen, drempel/vol-vlaggen, beste latere verkoop en aankoop met tijdstip), `segments` (het hele plan als aaneengesloten runs laden/ontladen/rust met vermogen, kWh, prijs en SoC), vorige actie en `plan_shift` | ca. 3 KB per kwartier, 20 MB per generatie, 3 generaties |
+| `plans.jsonl` | Eén regel per kwartier met elk geplande kwartier als compacte arrays: actie, redencode, vermogen, SoC, net, bewaar-/verkoop-/koopwaarde, import- en exportprijs, verbruik en PV. Daarmee is elk plan achteraf te reconstrueren en te vergelijken | ca. 1 MB per dag, 30 MB per generatie, 2 generaties; uit te zetten met "volledig plan loggen" in de opties |
+| `events.jsonl` | Gebeurtenissen: `settings` (instellingen, hash, gekozen entiteiten), `history`, `market` (per dag HTTP-status en aantal kwartieren, tot wanneer bekend), `weather`, `pv_gain`, `status` (van, naar), `action` (van, naar, reden), `retry` | klein |
+
+Redencodes in `plans.jsonl`: `s` verkopen loont meer dan bewaren, `b` kopen is goedkoper dan bewaren, `h` vasthouden, `f` vasthouden op de reservevloer (verkopen zou lonen maar mag niet lager), `v` vasthouden omdat de batterij vol is. Alle waarden zijn EUR per kWh in de batterij; `keep` is wat de rest van de horizon die kWh waard is.
+
+Daarnaast schrijft HEMS per kwartier één regel in het Home Assistant-log (`custom_components.hems`, niveau INFO).
+
+Lezen met de leestool (haalt de bestanden met de SSH-sleutel van de server):
 
 ```bash
-tail -n 4 /config/hems/decision_trace.jsonl | jq '{ts, status, action: .first_action, power_w, reason}'
+python3 scripts/hems_trace.py --pull tail -n 20      # een regel per kwartier
+python3 scripts/hems_trace.py show 16:15             # dat kwartier in het geheel: invoer, vergelijking, segmenten, elk geplande kwartier
+python3 scripts/hems_trace.py why 18:30              # waarom het plan om 18:30 doet wat het doet
+python3 scripts/hems_trace.py diff 15:00 15:15       # welke kwartieren het nieuwe plan anders plant dan het vorige
+python3 scripts/hems_trace.py events --type market   # Nord Pool-ophaalacties
 ```
 
 ## Beoordelen

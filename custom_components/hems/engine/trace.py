@@ -20,20 +20,34 @@ def _utc_now() -> datetime:
 class TraceWriter:
     """Append-only JSONL trace with size-based rotation (one rotated generation, `<name>.1`)."""
 
-    def __init__(self, path: Path, clock: Callable[[], datetime] = _utc_now, max_bytes: int = 20_000_000) -> None:
-        """Remember where to write, which clock to stamp with and when to rotate."""
+    def __init__(self, path: Path, clock: Callable[[], datetime] = _utc_now, max_bytes: int = 20_000_000, compact: bool = False,
+                 generations: int = 1) -> None:
+        """Remember where to write, which clock to stamp with, when to rotate and how many rotated files to keep.
+
+        `compact` drops the spaces after separators; used for the bulky full-plan file."""
         self.path = path
         self.clock = clock
         self.max_bytes = max_bytes
+        self.compact = compact
+        self.generations = max(generations, 1)
 
     def write(self, decision: dict) -> None:
         """Append one decision, stamped with the clock; rotate first when the file is over the size limit."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists() and self.path.stat().st_size >= self.max_bytes:
-            self.path.replace(self.path.with_name(self.path.name + ".1"))
+            self._rotate()
         line = {"ts": self.clock().isoformat(timespec="seconds"), **decision}
+        separators = (",", ":") if self.compact else None
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(line, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(line, ensure_ascii=False, separators=separators) + "\n")
+
+    def _rotate(self) -> None:
+        """Shift `<name>.N` to `<name>.N+1` (dropping the oldest) and move the live file to `<name>.1`."""
+        for n in range(self.generations, 1, -1):
+            older = self.path.with_name(f"{self.path.name}.{n - 1}")
+            if older.exists():
+                older.replace(self.path.with_name(f"{self.path.name}.{n}"))
+        self.path.replace(self.path.with_name(self.path.name + ".1"))
 
 
 def explain(plan: Plan, import_prices: Sequence[float], export_prices: Sequence[float]) -> dict:
