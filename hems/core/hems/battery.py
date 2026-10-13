@@ -1,0 +1,119 @@
+"""Battery planner: dynamic programming over quarter-hour slots (rolling horizon).
+
+Why DP and not LP: one storage state, small horizon (<= 96 slots) -> exact, pure
+Python, no solver dependency, easy to trace. Sell hours are chosen over the whole
+horizon *cycle* (charge -> discharge), so "best N hours after charging" falls out
+of the optimisation instead of a calendar-day heuristic.
+"""
+from dataclasses import dataclass, field
+
+SLOT_H = 0.25
+
+
+@dataclass
+class BatteryConfig:
+    capacity_kwh: float = 25.0
+    max_power_kw: float = 8.0
+    min_soc: float = 0.30            # conservative floor (fraction)
+    max_soc: float = 1.00
+    round_trip_eff: float = 0.90
+    wear_cost: float = 0.10          # EUR per kWh discharged: fixed margin vs cycle wear
+    step_kwh: float = 0.25           # SoC grid resolution
+    allow_grid_charge: bool = True
+
+
+@dataclass
+class Slot:
+    import_price: float
+    export_price: float
+    load_kwh: float = 0.0            # house consumption in the slot
+    pv_kwh: float = 0.0              # PV production in the slot
+
+
+@dataclass
+class PlanSlot:
+    index: int
+    action: str                      # charge | discharge | idle
+    battery_kwh: float               # AC side, + charge / - discharge
+    soc_kwh: float                   # at end of slot
+    grid_kwh: float                  # + import / - export
+    cost: float
+    reason: str = ""
+
+
+@dataclass
+class Plan:
+    slots: list[PlanSlot] = field(default_factory=list)
+    total_cost: float = 0.0
+    baseline_cost: float = 0.0       # same horizon without battery
+
+    @property
+    def saving(self) -> float:
+        return self.baseline_cost - self.total_cost
+
+
+def _grid_cost(net_kwh: float, s: Slot) -> float:
+    return net_kwh * s.import_price if net_kwh > 0 else net_kwh * s.export_price
+
+
+def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
+         terminal_value: float | None = None) -> Plan:
+    """Optimal battery schedule. terminal_value: EUR/kWh credit for energy left at
+    the end of the horizon (default: cheapest import price in horizon * eff, i.e.
+    what it would cost to refill)."""
+    n = len(slots)
+    eff = cfg.round_trip_eff ** 0.5
+    step = cfg.step_kwh
+    lo = round(cfg.min_soc * cfg.capacity_kwh / step)
+    hi = round(cfg.max_soc * cfg.capacity_kwh / step)
+    start = min(max(round(soc_kwh / step), 0), hi)
+    max_steps = int(cfg.max_power_kw * SLOT_H / step)
+    if terminal_value is None:
+        terminal_value = min(s.import_price for s in slots) * eff if slots else 0.0
+
+    INF = float("inf")
+    # value[t][k]: minimal cost-to-go from slot t at SoC level k
+    value = [[INF] * (hi + 1) for _ in range(n + 1)]
+    for k in range(hi + 1):
+        value[n][k] = -terminal_value * k * step
+    choice = [[0] * (hi + 1) for _ in range(n)]
+
+    for t in range(n - 1, -1, -1):
+        s = slots[t]
+        net = s.load_kwh - s.pv_kwh
+        for k in range(hi + 1):
+            best, best_d = INF, 0
+            for d in range(-max_steps, max_steps + 1):      # d>0 charge steps (SoC side)
+                k2 = k + d
+                if k2 < min(lo, k) or k2 > hi:
+                    continue
+                if k2 < lo and d < 0:                        # never discharge below floor
+                    continue
+                dsoc = d * step
+                ac = dsoc / eff if d > 0 else dsoc * eff     # AC-side energy
+                if d > 0 and not cfg.allow_grid_charge and net + ac > 0 and net >= 0:
+                    # only allow charging from surplus PV
+                    if ac > max(0.0, -net) + 1e-9:
+                        continue
+                c = _grid_cost(net + ac, s) + (cfg.wear_cost * -ac if ac < 0 else 0.0)
+                c += value[t + 1][k2]
+                if c < best:
+                    best, best_d = c, d
+            value[t][k] = best
+            choice[t][k] = best_d
+
+    out = Plan()
+    k = start
+    for t in range(n):
+        s = slots[t]
+        net = s.load_kwh - s.pv_kwh
+        d = choice[t][k] if value[t][k] < INF else 0
+        dsoc = d * step
+        ac = dsoc / eff if d > 0 else dsoc * eff
+        grid = net + ac
+        k += d
+        action = "charge" if d > 0 else "discharge" if d < 0 else "idle"
+        out.slots.append(PlanSlot(t, action, ac, k * step, grid, _grid_cost(grid, s), ""))
+        out.total_cost += _grid_cost(grid, s) + (cfg.wear_cost * -ac if ac < 0 else 0.0)
+        out.baseline_cost += _grid_cost(net, s)
+    return out
