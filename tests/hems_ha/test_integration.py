@@ -388,3 +388,18 @@ async def test_the_plan_sensor_has_no_state_without_a_decision(recorder_mock, ha
     await setup_entry(hass, freezer, aioclient_mock)
     plan = hass.states.get("sensor.hems_plan")
     assert plan.state == "unknown" and plan.attributes["status"] != "ok"
+
+
+async def test_saving_the_settings_form_reloads_hems_and_the_planner_uses_the_new_values(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The Configure button: the form lists the settings, saving stores them, reloads the entry and logs the new settings hash."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    first = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    assert form["type"] == FlowResultType.FORM and {"reserve_soc_pct", "hold_cost_kwh_h", "import_energy_tax"} <= {str(k) for k in form["data_schema"].schema}
+    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"reserve_soc_pct": 40.0, "hold_cost_kwh_h": 0.01})
+    await hass.async_block_till_done()
+    assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["reserve_soc_pct"] == 40.0 and entry.options["hold_cost_kwh_h"] == 0.01
+    assert entry.state.value == "loaded" and hass.states.get("sensor.hems_status").state == "ok"
+    latest = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
+    assert latest["hash"] != first["hash"] and latest["values"]["battery"]["reserve_soc"] == 0.4 and latest["values"]["battery"]["hold_cost_kwh_h"] == 0.01

@@ -25,9 +25,16 @@ def _user_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(fields)
 
 
+MIN_SELECTOR_STEP = 0.001         # Home Assistant refuses a smaller step and the whole form fails to open
+
+
 def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelector:
-    """A boxed number input with unit-less bounds; units are explained in the translations."""
-    return selector.NumberSelector(selector.NumberSelectorConfig(min=minimum, max=maximum, step=step, mode=selector.NumberSelectorMode.BOX))
+    """A boxed number input with unit-less bounds; units are explained in the translations.
+
+    A step finer than Home Assistant allows becomes "any": prices and taxes need five decimals, and a rejected step
+    makes the settings form raise instead of open."""
+    return selector.NumberSelector(selector.NumberSelectorConfig(min=minimum, max=maximum, step=step if step >= MIN_SELECTOR_STEP else "any",
+                                                                 mode=selector.NumberSelectorMode.BOX))
 
 
 def _options_schema(current: dict[str, Any]) -> vol.Schema:
