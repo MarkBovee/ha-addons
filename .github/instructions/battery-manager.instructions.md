@@ -189,6 +189,8 @@ When `price_range == "adaptive"` and a discharge period is active:
 
 **Pause and sell-window detection:** A pause empties the published discharge list, so while `schedule_pause_active` is set the monitor MUST look for an active profitable sell window in the generated plan (`state.schedule`, via `_find_active_planned_sell_period`) and not only in the published schedule. Otherwise the buffer protection (`soc <= sell_buffer_required_soc`, which holds at 100% SoC on a 100% target) can never see the window it reserves energy for, and the pause never clears.
 
+**Stale buffer and sell-band fallback:** `state.sell_buffer_recompute_at` is the end of the first sell window the active buffer target counts on (`_sell_buffer_recompute_time`). Once it passes, the monitor MUST regenerate the schedule, also during a pause, because the next sell window may be beyond the activation lead and the buffer then no longer applies; a stale target would otherwise keep adaptive paused and block the rolling regeneration. A current `discharge` quarter without a running sell window gets the same adaptive fallback window as an `adaptive` quarter, and `_should_regenerate_live_schedule` covers both bands. Sell-wait holds adaptive until `state.sell_wait_until`, so the monitor MUST NOT run the rolling regeneration for those bands before then.
+
 **Fallback-mode safety:** EV and SOC pauses MUST also gate adaptive-placeholder startup and Passive Solar gap schedules. A rolling schedule regeneration during an active pause MUST preserve that pause, and failed restoration publication MUST be retried until it succeeds.
 
 ---
