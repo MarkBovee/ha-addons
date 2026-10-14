@@ -192,7 +192,8 @@ def _row(now: bool, run: Mapping, start: datetime, tz: tzinfo, words: PlanWords)
     """One table row: the cells of a plan run."""
     kind = {"charge": f"⚡ {words.charge}", "discharge": f"📤 {words.discharge}"}.get(run["action"], f"💤 {words.idle}")
     price = "–" if run["avg_price"] is None else f"€{run['avg_price']:.3f}"
-    soc = f"{run['soc_from_pct']:.0f}%" if run["soc_from_pct"] == run["soc_to_pct"] else f"{run['soc_from_pct']:.0f}→{run['soc_to_pct']:.0f}%"
+    steady = run["action"] == "idle" or run["soc_from_pct"] == run["soc_to_pct"]          # standby loss moves an idle SoC a little: still one figure
+    soc = f"{run['soc_from_pct']:.0f}%" if steady else f"{run['soc_from_pct']:.0f}→{run['soc_to_pct']:.0f}%"
     return [f"{'🔴' if now else '⏰'} {_range_text(run, start, tz, words)}", kind, f"{run['avg_w']} W", price, soc]
 
 

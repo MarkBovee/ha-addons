@@ -222,3 +222,9 @@ def test_a_plan_table_without_windows_is_a_sentence_not_an_empty_table():
     """Nothing to show: the words, like the sensor state."""
     assert plan_table([run("idle", 0, 8)], PLAN_START, LOCAL_TZ, plan_words("nl")) == "Geen laden of ontladen gepland"
     assert plan_table([], PLAN_START, LOCAL_TZ, plan_words("en")) == "No charging or discharging planned"
+
+
+def test_an_idle_row_shows_one_soc_even_when_standby_loss_moved_it_a_little():
+    """44.4% to 43.6% is 'rest at 44%', not '44→44%'."""
+    segments = [run("idle", 0, 2, soc=(44.4, 43.6)), run("charge", 2, 4)]
+    assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[2] == "|🔴 10:45–12:45|💤 Idle|0 W|–|44%|"
