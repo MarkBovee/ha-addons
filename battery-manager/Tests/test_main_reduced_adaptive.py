@@ -359,6 +359,89 @@ def test_monitor_restores_generated_windows_when_protection_clears(monkeypatch, 
     assert not state.schedule_pause_active
 
 
+# A full battery sitting on a 100% sell buffer pauses discharge; the pause hides the sell window it
+# is reserved for, so the monitor must find an active window in the plan and release the pause.
+@pytest.mark.parametrize(
+    ("window_offset_minutes", "expect_released"),
+    [(-10, True), (30, False)],
+)
+def test_sell_buffer_pause_releases_when_the_planned_sell_window_is_active(
+    monkeypatch, window_offset_minutes, expect_released
+):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 25
+    config["ev_charger"]["enabled"] = True
+
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    sell_window = {
+        "start": (now + timedelta(minutes=window_offset_minutes)).isoformat(),
+        "duration": 60,
+        "power": 8000,
+        "window_type": "discharge",
+    }
+    state = bm_main.RuntimeState(
+        schedule={"charge": [], "discharge": [sell_window]},
+        published_schedule={"charge": [], "discharge": []},
+        schedule_generated_at=now,
+        schedule_pause_active=True,
+        sell_buffer_required_soc=100.0,
+        sell_buffer_valid_until=now + timedelta(hours=12),
+    )
+    sensor_values = {
+        config["entities"]["soc_entity"]: 100.0,
+        config["entities"]["grid_power_entity"]: 100.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 400.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 15.0,
+    }
+    published = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "discharge")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: (
+            published.append(deepcopy(schedule)),
+            setattr(state, "published_schedule", deepcopy(schedule)) if state is not None else None,
+            True,
+        )[-1],
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
+    )
+
+    if expect_released:
+        assert not state.schedule_pause_active
+        assert published and published[-1]["discharge"] == [sell_window]
+    else:
+        # A sell window that has not started yet must not lift the buffer protection.
+        assert state.schedule_pause_active
+        assert not any(schedule["discharge"] for schedule in published)
+
+
 # Expire the dynamic reserve when its associated main charge begins.
 def test_sell_buffer_target_expires_at_main_charge_start():
     now = datetime.now(timezone.utc)

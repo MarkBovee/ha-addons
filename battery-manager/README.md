@@ -61,7 +61,7 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 - Current interval is checked between full schedule refreshes
 - If live interval should stay adaptive but published schedule no longer contains matching adaptive window, add-on regenerates schedule instead of going idle
 - Conservative SOC does not hard-stop all live discharge: active adaptive period can downgrade from full discharge to adaptive discharge while respecting the hard minimum and dynamic sell-buffer reserve
-- A safety pause suspends published discharge periods without discarding the generated plan; the complete plan is restored when the pause reason clears
+- A safety pause suspends published discharge periods without discarding the generated plan; the complete plan is restored when the pause reason clears. While a pause is active the monitor also checks the plan for a sell window that has started, and that releases the sell-buffer pause so a full battery still sells
 - EV and SOC protection also take precedence over adaptive-placeholder startup and Passive Solar fallback schedules
 - When SOC is below the dynamic sell-buffer target, adaptive discharge is held until the next main charge if precharging is blocked by the current price. Profitable sell windows can spend that planned buffer, but are duration-limited to preserve the configured reserve floor. The target is calculated from `soc.sell_buffer_min_soc` plus the energy required for the remaining planned sell window(s).
 
