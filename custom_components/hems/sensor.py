@@ -47,7 +47,7 @@ def _plan_preview(snap: HemsSnapshot) -> dict[str, Any]:
         return {"status": snap.output.status}
     tz = dt_util.get_default_time_zone()
     slots = d.plan.slots[:PLAN_PREVIEW_SLOTS]
-    return {"status": snap.output.status, "windows": list(snap.plan_windows), "quarters": len(d.plan.slots),
+    return {"status": snap.output.status, "markdown": snap.plan_table, "windows": list(snap.plan_windows), "quarters": len(d.plan.slots),
             "pv_gain_w_per_wm2": round(snap.pv_gain_w_per_wm2, 2), "history_hours": snap.history_hours,
             "slots": [{"start": (d.slot_start + i * QUARTER).astimezone(tz).isoformat(), "action": s.action, "power_w": round(s.battery_kwh * 4000),
                        "soc_kwh": round(s.soc_kwh, 2), "reason": s.reason} for i, s in enumerate(slots)]}

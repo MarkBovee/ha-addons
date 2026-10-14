@@ -375,6 +375,8 @@ async def test_the_plan_sensor_says_in_words_what_happens_when(recorder_mock, ha
     assert plan.state.startswith(("Laden ", "Ontladen ")) and plan.state.count("–") >= 1 and len(plan.state) <= 255
     window = plan.attributes["windows"][0]
     assert window["from"].endswith(("+01:00", "+02:00")) and window["action"] in ("charge", "discharge") and plan.attributes["quarters"] > 48
+    table = plan.attributes["markdown"].splitlines()
+    assert table[0] == "|Tijd|Type|Vermogen|Prijs|SoC|" and table[2].startswith("|🔴 ") and len(table) >= 4
     first_slot = plan.attributes["slots"][0]
     assert set(first_slot) == {"start", "action", "power_w", "soc_kwh", "reason"} and first_slot["start"].endswith(("+01:00", "+02:00"))
 

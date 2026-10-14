@@ -123,10 +123,12 @@ class PlanWords:
     discharge: str
     tomorrow: str
     nothing: str
+    idle: str
+    headers: tuple[str, str, str, str, str]       # the columns of the table: time, type, power, price, SoC
 
 
-PLAN_WORDS = {"en": PlanWords("Charge", "Discharge", "tomorrow", "No charging or discharging planned"),
-              "nl": PlanWords("Laden", "Ontladen", "morgen", "Geen laden of ontladen gepland")}
+PLAN_WORDS = {"en": PlanWords("Charge", "Discharge", "tomorrow", "No charging or discharging planned", "Idle", ("Time", "Type", "Power", "Price", "SoC")),
+              "nl": PlanWords("Laden", "Ontladen", "morgen", "Geen laden of ontladen gepland", "Rust", ("Tijd", "Type", "Vermogen", "Prijs", "SoC"))}
 
 
 def plan_words(language: str | None) -> PlanWords:
@@ -143,6 +145,13 @@ def _clock(moment: datetime, start: datetime, tz: tzinfo, words: PlanWords) -> s
     return f"{words.tomorrow if days == 1 else f'{days:+d}d'} {local:%H:%M}"
 
 
+def _range_text(run: Mapping, start: datetime, tz: tzinfo, words: PlanWords) -> str:
+    """'10:45–13:15' in local time; the day is named when the run starts on another day than the plan or ends on another day than it starts."""
+    begin, end = datetime.fromisoformat(run["from"]), datetime.fromisoformat(run["to"])
+    same_day = begin.astimezone(tz).date() == end.astimezone(tz).date()
+    return f"{_clock(begin, start, tz, words)}–{end.astimezone(tz):%H:%M}" if same_day else f"{_clock(begin, start, tz, words)}–{_clock(end, start, tz, words)}"
+
+
 def _windows(segments: Sequence[Mapping]) -> list[Mapping]:
     """The charge and discharge runs of the plan; idle runs and the 'truncated' marker are not windows."""
     return [s for s in segments if s.get("action") in ("charge", "discharge")]
@@ -156,12 +165,7 @@ def plan_summary(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words
     windows = _windows(segments)
     if not windows:
         return words.nothing
-    parts = []
-    for run in windows:
-        begin, end = datetime.fromisoformat(run["from"]), datetime.fromisoformat(run["to"])
-        same_day = begin.astimezone(tz).date() == end.astimezone(tz).date()
-        end_text = f"{end.astimezone(tz):%H:%M}" if same_day else _clock(end, start, tz, words)
-        parts.append(f"{words.charge if run['action'] == 'charge' else words.discharge} {_clock(begin, start, tz, words)}–{end_text}")
+    parts = [f"{words.charge if run['action'] == 'charge' else words.discharge} {_range_text(run, start, tz, words)}" for run in windows]
     cut = any("truncated" in s for s in segments)           # the plan has more runs than the trace carries
     text = WINDOW_SEPARATOR.join(parts)
     while len(text) + (len(MORE) if cut else 0) > limit and len(parts) > 1:
@@ -169,6 +173,34 @@ def plan_summary(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words
         cut = True
         text = WINDOW_SEPARATOR.join(parts)
     return text + (MORE if cut else "")
+
+
+def plan_table(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words: PlanWords) -> str:
+    """The plan as a Markdown table for a dashboard card: one row per charge or discharge window, local times.
+
+    The run that is going on now comes first and is marked 🔴 (also when it is idle, so the table says what happens
+    now); later windows are marked ⏰. Columns: time, type, average power, average price, SoC at both ends."""
+    runs = [s for s in segments if "action" in s]
+    if not _windows(runs):
+        return words.nothing
+    rows = [_row(i == 0, run, start, tz, words) for i, run in enumerate(runs) if i == 0 or run["action"] != "idle"]
+    if any("truncated" in s for s in segments):
+        rows.append(["…", "", "", "", ""])
+    return _table(rows, words)
+
+
+def _row(now: bool, run: Mapping, start: datetime, tz: tzinfo, words: PlanWords) -> list[str]:
+    """One table row: the cells of a plan run."""
+    kind = {"charge": f"⚡ {words.charge}", "discharge": f"📤 {words.discharge}"}.get(run["action"], f"💤 {words.idle}")
+    price = "–" if run["avg_price"] is None else f"€{run['avg_price']:.3f}"
+    soc = f"{run['soc_from_pct']:.0f}%" if run["soc_from_pct"] == run["soc_to_pct"] else f"{run['soc_from_pct']:.0f}→{run['soc_to_pct']:.0f}%"
+    return [f"{'🔴' if now else '⏰'} {_range_text(run, start, tz, words)}", kind, f"{run['avg_w']} W", price, soc]
+
+
+def _table(rows: Sequence[Sequence[str]], words: PlanWords) -> str:
+    """Markdown table text: the header of the words, then the rows."""
+    lines = ["|" + "|".join(words.headers) + "|", "|" + "|".join("---" for _ in words.headers) + "|"]
+    return "\n".join(lines + ["|" + "|".join(cells) + "|" for cells in rows])
 
 
 def plan_windows(segments: Sequence[Mapping], tz: tzinfo) -> list[dict]:

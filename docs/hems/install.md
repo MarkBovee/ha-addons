@@ -40,7 +40,20 @@ Alle sensoren hangen onder één apparaat "HEMS". Vermogens volgen de HEMS-conve
 | `binary_sensor.hems_tomorrow_prices_available` | aan zodra (een deel van) de prijzen van morgen bekend zijn; attributen `tomorrow_intervals`, `prices_until`, `price_source` |
 | `sensor.hems_import_price`, `sensor.hems_export_price` | prijs van het huidige kwartier; export met bonus alleen overdag en bij positieve prijs |
 | `sensor.hems_pv_forecast_24h` | PV-verwachting komende 24 uur (kWh) |
-| `sensor.hems_plan` | het plan als zin, in de taal van Home Assistant en lokale tijd: `Laden 10:45–13:15 · Ontladen 15:45–18:15 · Laden morgen 00:45–03:45`; attributen `windows` (dezelfde vensters met kWh, vermogen, SoC en gemiddelde prijs), `quarters` (aantal geplande kwartieren) en `slots` (de komende 12 uur per kwartier met `start`, `action`, `power_w`, `soc_kwh`, `reason`) |
+| `sensor.hems_plan` | het plan als zin, in de taal van Home Assistant en lokale tijd: `Laden 10:45–13:15 · Ontladen 15:45–18:15 · Laden morgen 00:45–03:45`; attributen `markdown` (het plan als tabel voor een dashboardkaart, zie hieronder), `windows` (dezelfde vensters met kWh, vermogen, SoC en gemiddelde prijs), `quarters` (aantal geplande kwartieren) en `slots` (de komende 12 uur per kwartier met `start`, `action`, `power_w`, `soc_kwh`, `reason`) |
+
+### Plan als tabel op een dashboard
+
+`sensor.hems_plan` heeft het attribuut `markdown`: het plan als tabel, in de taal van Home Assistant en lokale tijd. De eerste rij is wat er nu gebeurt (🔴, ook bij rust), daarna volgen de komende laad- en ontlaadvensters (⏰) met gemiddeld vermogen, gemiddelde prijs en de SoC aan begin en einde. Een venster van morgen noemt de dag. Toon het met een Markdown-kaart:
+
+```yaml
+type: markdown
+title: HEMS-plan
+content: |
+  Nu: {{ states('sensor.hems_battery_action') }} · import €{{ states('sensor.hems_import_price') }}/kWh · verwachte besparing €{{ states('sensor.hems_expected_saving') }}
+
+  {{ state_attr('sensor.hems_plan', 'markdown') }}
+```
 
 ## Logging: alle beslissingen en de hele plan-boom
 

@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 from test_rolling import recorded_day
 
 from hems.battery import BatteryConfig
-from hems.decision_log import (STATE_LIMIT, best_later, cycle_line, event_line, plan_detail, plan_segments, plan_summary, plan_tree, plan_windows,
-                               plan_words, settings_snapshot, when)
+from hems.decision_log import (STATE_LIMIT, best_later, cycle_line, event_line, plan_detail, plan_segments, plan_summary, plan_table, plan_tree,
+                               plan_windows, plan_words, settings_snapshot, when)
 from hems.forecast import LOCAL_TZ
 from hems.prices import PriceModel
 from hems.rolling import HorizonInputs, plan_next
@@ -192,3 +192,26 @@ def test_the_summary_of_a_real_plan_names_every_window_the_tree_names():
     first = windows[0]
     assert first["from"].endswith("+02:00") and set(first) == {"action", "from", "to", "kwh", "power_w", "soc_from_pct", "soc_to_pct", "avg_price_eur_kwh"}
     assert all(w["action"] in ("charge", "discharge") for w in windows)
+
+
+def test_the_plan_table_starts_with_what_happens_now_and_lists_the_windows_after_it():
+    """A dashboard card: now (also when idle), then each charge or discharge window with power, price and SoC."""
+    segments = [dict(run("idle", 0, 2), avg_w=0, avg_price=None, soc_from_pct=44.0, soc_to_pct=44.0), dict(run("charge", 2, 4.5), avg_w=2688, avg_price=0.262, soc_from_pct=44.0, soc_to_pct=100.0),
+                run("idle", 4.5, 9.5), dict(run("discharge", 9.5, 11.5), avg_w=8000, avg_price=0.519, soc_from_pct=100.0, soc_to_pct=31.0)]
+    assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("nl")).splitlines() == [
+        "|Tijd|Type|Vermogen|Prijs|SoC|", "|---|---|---|---|---|",
+        "|🔴 10:45–12:45|💤 Rust|0 W|–|44%|", "|⏰ 12:45–15:15|⚡ Laden|2688 W|€0.262|44→100%|", "|⏰ 20:15–22:15|📤 Ontladen|8000 W|€0.519|100→31%|"]
+    assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[0] == "|Time|Type|Power|Price|SoC|"
+
+
+def test_the_plan_table_marks_the_current_window_names_tomorrow_and_the_cut():
+    """A window going on now is 🔴 with its own power; a window of tomorrow carries the day; a cut plan ends in a row with an ellipsis."""
+    segments = [run("charge", 0, 1.5), run("idle", 1.5, 14), run("discharge", 14, 15), {"truncated": 2}]
+    rows = plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[2:]
+    assert rows == ["|🔴 10:45–12:15|⚡ Charge|5000 W|€0.250|30→70%|", "|⏰ tomorrow 00:45–01:45|📤 Discharge|5000 W|€0.250|30→70%|", "|…|||||"]
+
+
+def test_a_plan_table_without_windows_is_a_sentence_not_an_empty_table():
+    """Nothing to show: the words, like the sensor state."""
+    assert plan_table([run("idle", 0, 8)], PLAN_START, LOCAL_TZ, plan_words("nl")) == "Geen laden of ontladen gepland"
+    assert plan_table([], PLAN_START, LOCAL_TZ, plan_words("en")) == "No charging or discharging planned"
