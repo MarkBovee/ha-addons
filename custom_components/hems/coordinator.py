@@ -51,6 +51,7 @@ class HemsSnapshot:
     plan_text: str = ""                    # the charge and discharge windows as one readable line, in the language of Home Assistant
     plan_windows: tuple[dict, ...] = ()    # the same windows with local times, for the plan sensor's attributes
     plan_table: str = ""                   # the plan as a Markdown table for a dashboard card
+    weather: Weather | None = None         # the irradiance and temperature forecast the PV forecast was computed from
 
 
 def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -> EngineSettings:
@@ -309,7 +310,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         known = set(self._market.starts if self._market else ()) | {t for t, _ in inputs.import_curve}
         prices_until = max(known) + timedelta(minutes=15) if known else None
         text, windows, table = self._plan_for_users(output)
-        return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table)
+        return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table,
+                            self._weather)
 
     def _plan_for_users(self, output: EngineOutput) -> tuple[str, tuple[dict, ...], str]:
         """The plan's windows as a sentence, as local-time records and as a Markdown table; empty when this cycle has no plan."""

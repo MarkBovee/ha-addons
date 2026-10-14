@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
-from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfPower
+from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfIrradiance, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -13,6 +13,7 @@ from homeassistant.util import dt as dt_util
 from . import HemsConfigEntry
 from .coordinator import HemsCoordinator, HemsSnapshot
 from .engine import executor
+from .engine.outlook import first_window, forecast_series, hour_mean, hour_total, price_curve, window_total
 from .entity import HemsEntity
 
 QUARTER = timedelta(minutes=15)
@@ -64,6 +65,57 @@ def _decision_attrs(snap: HemsSnapshot) -> dict[str, Any]:
     return {k: v for k, v in snap.output.trace.items() if k not in ("status",)} | {"status": snap.output.status}
 
 
+def _start(snap: HemsSnapshot):
+    """Start of the current quarter, the reference for every 'coming hour' and curve; None without a decision."""
+    return snap.output.decision.slot_start if snap.output.decision else None
+
+
+def _hour_total(snap: HemsSnapshot, series) -> float | None:
+    """The coming hour of an energy forecast (kWh), or None when the forecast does not cover the whole hour."""
+    start = _start(snap)
+    return hour_total(series, start) if start and series else None
+
+
+def _hour_mean(snap: HemsSnapshot, series) -> float | None:
+    """The coming hour of a rate forecast (irradiance, temperature) as its mean, or None when it does not cover the whole hour."""
+    start = _start(snap)
+    return hour_mean(series, start) if start and series else None
+
+
+def _forecast_attrs(snap: HemsSnapshot, series, key: str) -> dict[str, Any]:
+    """The next 24 hours of a forecast, per quarter in local time, for a dashboard chart."""
+    start = _start(snap)
+    return {"forecast": forecast_series(series, start, dt_util.get_default_time_zone(), key)} if start and series else {}
+
+
+def _weather_series(snap: HemsSnapshot, field: str):
+    """One series of the weather forecast ('ghi_w_m2' or 'temperature_c'), or an empty one without weather."""
+    return getattr(snap.weather, field) if snap.weather else {}
+
+
+def _price_attrs(snap: HemsSnapshot, field: str) -> dict[str, Any]:
+    """Every known price from this quarter on (today and, once published, tomorrow), in local time."""
+    start, prices = _start(snap), snap.output.prices
+    return {"curve": price_curve(prices, field, start, dt_util.get_default_time_zone())} if start and prices else {}
+
+
+def _window_start(snap: HemsSnapshot, action: str):
+    """Start of the first planned run of `action` (it may be going on now), or None when the plan has none."""
+    window = first_window(snap.output.trace.get("segments") or [], action)
+    return window["begin"] if window else None
+
+
+def _window_attrs(snap: HemsSnapshot, action: str) -> dict[str, Any]:
+    """The first window of `action` in numbers: end, energy, power, price, SoC at both ends, and the PV and house load expected inside it."""
+    window = first_window(snap.output.trace.get("segments") or [], action)
+    if not window:
+        return {}
+    begin, end = window["begin"], window["end"]
+    return {"end": end.astimezone(dt_util.get_default_time_zone()).isoformat(), "kwh": window["kwh"], "power_w": window["avg_w"],
+            "avg_price_eur_kwh": window["avg_price"], "soc_from_pct": window["soc_from_pct"], "soc_to_pct": window["soc_to_pct"],
+            "pv_kwh": window_total(snap.output.pv_kwh, begin, end), "load_kwh": window_total(snap.output.load_kwh, begin, end)}
+
+
 SENSORS: tuple[HemsSensorDescription, ...] = (
     HemsSensorDescription(key="battery_action", translation_key="battery_action", device_class=SensorDeviceClass.ENUM,
                           options=["charge", "discharge", "idle"],
@@ -83,9 +135,28 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           attributes=lambda s: {"price_source": s.output.trace.get("price_source"), "weather_age_min": None if s.weather_age_min is None else round(s.weather_age_min),
                                                 "history_hours": s.history_hours}),
     HemsSensorDescription(key="import_price", translation_key="import_price", native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
-                          state_class=SensorStateClass.MEASUREMENT, value=lambda s: _first_price(s, "import_eur_kwh")),
+                          state_class=SensorStateClass.MEASUREMENT, value=lambda s: _first_price(s, "import_eur_kwh"),
+                          attributes=lambda s: _price_attrs(s, "import")),
     HemsSensorDescription(key="export_price", translation_key="export_price", native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
-                          state_class=SensorStateClass.MEASUREMENT, value=lambda s: _first_price(s, "export_eur_kwh")),
+                          state_class=SensorStateClass.MEASUREMENT, value=lambda s: _first_price(s, "export_eur_kwh"),
+                          attributes=lambda s: _price_attrs(s, "export")),
+    HemsSensorDescription(key="pv_forecast_next_hour", translation_key="pv_forecast_next_hour", device_class=SensorDeviceClass.ENERGY,
+                          native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, value=lambda s: _hour_total(s, s.output.pv_kwh),
+                          attributes=lambda s: _forecast_attrs(s, s.output.pv_kwh, "kwh")),
+    HemsSensorDescription(key="load_forecast_next_hour", translation_key="load_forecast_next_hour", device_class=SensorDeviceClass.ENERGY,
+                          native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, value=lambda s: _hour_total(s, s.output.load_kwh),
+                          attributes=lambda s: _forecast_attrs(s, s.output.load_kwh, "kwh")),
+    HemsSensorDescription(key="irradiance_forecast", translation_key="irradiance_forecast", device_class=SensorDeviceClass.IRRADIANCE,
+                          native_unit_of_measurement=UnitOfIrradiance.WATTS_PER_SQUARE_METER,
+                          value=lambda s: _hour_mean(s, _weather_series(s, "ghi_w_m2")),
+                          attributes=lambda s: _forecast_attrs(s, _weather_series(s, "ghi_w_m2"), "w_m2")),
+    HemsSensorDescription(key="temperature_forecast", translation_key="temperature_forecast", device_class=SensorDeviceClass.TEMPERATURE,
+                          native_unit_of_measurement=UnitOfTemperature.CELSIUS, value=lambda s: _hour_mean(s, _weather_series(s, "temperature_c")),
+                          attributes=lambda s: _forecast_attrs(s, _weather_series(s, "temperature_c"), "celsius")),
+    HemsSensorDescription(key="charge_window", translation_key="charge_window", device_class=SensorDeviceClass.TIMESTAMP,
+                          value=lambda s: _window_start(s, "charge"), attributes=lambda s: _window_attrs(s, "charge")),
+    HemsSensorDescription(key="discharge_window", translation_key="discharge_window", device_class=SensorDeviceClass.TIMESTAMP,
+                          value=lambda s: _window_start(s, "discharge"), attributes=lambda s: _window_attrs(s, "discharge")),
     HemsSensorDescription(key="pv_forecast_24h", translation_key="pv_forecast_24h", device_class=SensorDeviceClass.ENERGY,
                           native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
                           value=lambda s: round(sum(v for t, v in s.output.pv_kwh.items() if s.output.decision and
@@ -103,6 +174,9 @@ class HemsSensor(HemsEntity, SensorEntity):
     """A read-only view of one aspect of the latest dry-run cycle."""
 
     entity_description: HemsSensorDescription
+
+    # Series of up to a few thousand characters change every quarter and say nothing in history: keep them out of the recorder.
+    _unrecorded_attributes = frozenset({"slots", "curve", "forecast", "windows", "markdown"})
 
     def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry, description: HemsSensorDescription) -> None:
         """Bind to the coordinator under the shared device."""

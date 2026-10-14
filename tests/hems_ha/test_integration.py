@@ -403,3 +403,34 @@ async def test_saving_the_settings_form_reloads_hems_and_the_planner_uses_the_ne
     assert entry.state.value == "loaded" and hass.states.get("sensor.hems_status").state == "ok"
     latest = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
     assert latest["hash"] != first["hash"] and latest["values"]["battery"]["reserve_soc"] == 0.4 and latest["values"]["battery"]["hold_cost_kwh_h"] == 0.01
+
+
+async def test_the_core_values_are_entities_with_series_for_a_chart(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Prices, PV, house load, irradiance, temperature and the first charge and discharge window are visible without reading the logs."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    pv = hass.states.get("sensor.hems_pv_forecast_next_hour")
+    assert float(pv.state) >= 0 and pv.attributes["unit_of_measurement"] == "kWh" and len(pv.attributes["forecast"]) > 4
+    assert float(pv.state) == pytest.approx(sum(p["kwh"] for p in pv.attributes["forecast"][:4]), abs=0.005)
+    assert float(hass.states.get("sensor.hems_load_forecast_next_hour").state) > 0
+    sun, temperature = hass.states.get("sensor.hems_irradiance_forecast"), hass.states.get("sensor.hems_temperature_forecast")
+    assert float(sun.state) == 300.0 and sun.attributes["unit_of_measurement"] == "W/m²" and sun.attributes["forecast"][0] == {"start": "2026-10-06T11:00:00+02:00", "w_m2": 300.0}
+    assert float(temperature.state) == 12.0 and temperature.attributes["unit_of_measurement"] == "°C" and temperature.attributes["forecast"][0]["celsius"] == 12.0
+    for entity in ("sensor.hems_import_price", "sensor.hems_export_price"):
+        curve = hass.states.get(entity).attributes["curve"]
+        assert len(curve) > 48 and curve[0]["start"] == "2026-10-06T11:00:00+02:00" and curve[0]["price"] == pytest.approx(float(hass.states.get(entity).state), abs=1e-9)
+    charge, discharge = hass.states.get("sensor.hems_charge_window"), hass.states.get("sensor.hems_discharge_window")
+    assert charge.state not in ("unknown", "unavailable") and datetime.fromisoformat(charge.attributes["end"]) > datetime.fromisoformat(charge.state)
+    assert charge.attributes["kwh"] > 0 and charge.attributes["pv_kwh"] >= 0 and charge.attributes["load_kwh"] > 0
+    assert {"power_w", "avg_price_eur_kwh", "soc_from_pct", "soc_to_pct", "pv_kwh", "load_kwh"} <= set(charge.attributes)
+    assert discharge.state not in ("unknown", "unavailable") and discharge.attributes["avg_price_eur_kwh"] > 0
+
+
+async def test_the_window_sensors_are_unknown_when_the_plan_has_no_such_window(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Without a SoC there is no plan: the windows and forecasts say unknown instead of showing stale values."""
+    set_states(hass)
+    hass.states.async_remove("sensor.soc")
+    await setup_entry(hass, freezer, aioclient_mock)
+    assert hass.states.get("sensor.hems_charge_window").state == "unknown" and hass.states.get("sensor.hems_pv_forecast_next_hour").state == "unknown"
+    assert hass.states.get("sensor.hems_irradiance_forecast").state == "unknown"

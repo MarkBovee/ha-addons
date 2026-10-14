@@ -107,6 +107,24 @@
           "at_full": "Vastgehouden, batterij vol",
           "limited_full": "Vertraagd, batterij bijna vol"
         }
+      },
+      "pv_forecast_next_hour": {
+        "name": "PV-verwachting komend uur"
+      },
+      "load_forecast_next_hour": {
+        "name": "Huisverbruik-verwachting komend uur"
+      },
+      "irradiance_forecast": {
+        "name": "Zoninstraling komend uur"
+      },
+      "temperature_forecast": {
+        "name": "Temperatuur komend uur"
+      },
+      "charge_window": {
+        "name": "Laadvenster"
+      },
+      "discharge_window": {
+        "name": "Ontlaadvenster"
       }
     },
     "binary_sensor": {

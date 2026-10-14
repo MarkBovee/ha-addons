@@ -38,7 +38,11 @@ Alle sensoren hangen onder één apparaat "HEMS". Vermogens volgen de HEMS-conve
 | `sensor.hems_expected_saving` | verwachte besparing over de horizon (EUR kas; de minimale winstmarge telt niet als kost mee) |
 | `sensor.hems_status` | ok, no_soc, stale_soc, no_prices of no_price_for_now; attribuut `price_source` (market of curve) |
 | `binary_sensor.hems_tomorrow_prices_available` | aan zodra (een deel van) de prijzen van morgen bekend zijn; attributen `tomorrow_intervals`, `prices_until`, `price_source` |
-| `sensor.hems_import_price`, `sensor.hems_export_price` | prijs van het huidige kwartier; export met bonus alleen overdag en bij positieve prijs |
+| `sensor.hems_import_price`, `sensor.hems_export_price` | prijs van het huidige kwartier; export met bonus alleen overdag en bij positieve prijs; attribuut `curve` met alle bekende prijzen vanaf nu (`start` in lokale tijd, `price` in EUR/kWh), dus morgen erbij zodra Nord Pool die publiceert |
+| `sensor.hems_pv_forecast_next_hour` | PV-opbrengst van het komende uur (kWh) zoals het plan die gebruikt; attribuut `forecast` met de komende 24 uur per kwartier |
+| `sensor.hems_load_forecast_next_hour` | verwacht huisverbruik komend uur (kWh, zonder EV); attribuut `forecast` per kwartier |
+| `sensor.hems_irradiance_forecast`, `sensor.hems_temperature_forecast` | gemiddelde zoninstraling (W/m²) en buitentemperatuur (°C) van het komende uur uit Open-Meteo; attribuut `forecast` per kwartier. Onbekend zolang het weer niet binnen is of uit staat |
+| `sensor.hems_charge_window`, `sensor.hems_discharge_window` | begin van het eerste geplande laad- of ontlaadvenster (tijdstip, Home Assistant toont het als "over 2 uur"); attributen `end`, `kwh`, `power_w`, `avg_price_eur_kwh`, `soc_from_pct`, `soc_to_pct` en `pv_kwh` en `load_kwh` die in dat venster verwacht worden. Onbekend als het plan zo'n venster niet heeft; loopt het venster al, dan is het begin het huidige kwartier |
 | `sensor.hems_pv_forecast_24h` | PV-verwachting komende 24 uur (kWh) |
 | `sensor.hems_plan` | het plan als zin, in de taal van Home Assistant en lokale tijd: `Laden 10:45–13:15 · Ontladen 15:45–18:15 · Laden morgen 00:45–03:45`; attributen `markdown` (het plan als tabel voor een dashboardkaart, zie hieronder), `windows` (dezelfde vensters met kWh, vermogen, SoC en gemiddelde prijs), `quarters` (aantal geplande kwartieren) en `slots` (de komende 12 uur per kwartier met `start`, `action`, `power_w`, `soc_kwh`, `reason`) |
 
@@ -54,6 +58,44 @@ content: |
 
   {{ state_attr('sensor.hems_plan', 'markdown') }}
 ```
+
+### Prijzen en verwachting als grafiek
+
+De reeksen staan in attributen (`curve`, `forecast`) en worden niet in de recorder bewaard (ze veranderen elk kwartier en zouden de database vullen). Voor een grafiek kun je de aangepaste kaart ApexCharts (via HACS) gebruiken:
+
+```yaml
+type: custom:apexcharts-card
+header: {show: true, title: Prijzen en PV}
+graph_span: 24h
+span: {start: hour}
+yaxis:
+  - id: price
+    decimals: 2
+  - id: kwh
+    opposite: true
+    decimals: 2
+series:
+  - entity: sensor.hems_import_price
+    name: Import
+    yaxis_id: price
+    type: line
+    data_generator: |
+      return entity.attributes.curve.map(p => [new Date(p.start).getTime(), p.price]);
+  - entity: sensor.hems_export_price
+    name: Export
+    yaxis_id: price
+    type: line
+    data_generator: |
+      return entity.attributes.curve.map(p => [new Date(p.start).getTime(), p.price]);
+  - entity: sensor.hems_pv_forecast_next_hour
+    name: PV per kwartier
+    yaxis_id: kwh
+    type: area
+    data_generator: |
+      return entity.attributes.forecast.map(p => [new Date(p.start).getTime(), p.kwh]);
+```
+
+Zonder aangepaste kaart toont een Markdown-kaart de eerste vensters: `{{ states('sensor.hems_charge_window') }}` en de attributen erbij.
 
 ## Logging: alle beslissingen en de hele plan-boom
 
