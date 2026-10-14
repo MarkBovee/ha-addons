@@ -187,6 +187,8 @@ When `price_range == "adaptive"` and a discharge period is active:
 
 **Zero-power adaptive placeholders:** A current `adaptive` fallback window at `0W` is a waiting placeholder, not an actively discharging period. Monitor-mode pause logic MUST NOT treat that placeholder as an active discharge window. SOC, sell-buffer, and EV protection MUST suspend published discharges without discarding the generated plan, which is restored when the pause reason clears. A dynamic sell-buffer target expires at the associated main charge start.
 
+**Pause and sell-window detection:** A pause empties the published discharge list, so while `schedule_pause_active` is set the monitor MUST look for an active profitable sell window in the generated plan (`state.schedule`, via `_find_active_planned_sell_period`) and not only in the published schedule. Otherwise the buffer protection (`soc <= sell_buffer_required_soc`, which holds at 100% SoC on a 100% target) can never see the window it reserves energy for, and the pause never clears.
+
 **Fallback-mode safety:** EV and SOC pauses MUST also gate adaptive-placeholder startup and Passive Solar gap schedules. A rolling schedule regeneration during an active pause MUST preserve that pause, and failed restoration publication MUST be retried until it succeeds.
 
 ---

@@ -1656,6 +1656,27 @@ def _get_active_period_power(
     return None
 
 
+# Find the sell window running right now in the generated plan, ignoring what is published.
+def _find_active_planned_sell_period(
+    schedule: Dict[str, Any],
+    now: datetime,
+) -> Optional[Dict[str, Any]]:
+    """Return the active profitable sell window of the generated plan, if any.
+
+    A protective pause strips every discharge window from the published
+    schedule, so the plan is the only place a sell window that has just
+    started is still visible.
+    """
+    return next(
+        (
+            period
+            for period in schedule.get("discharge", [])
+            if period.get("window_type", "discharge") == "discharge" and _is_period_active(period, now)
+        ),
+        None,
+    )
+
+
 # Suspend published discharge while the generated plan remains in runtime state.
 def _build_pause_schedule(
     schedule: Dict[str, Any],
@@ -3532,9 +3553,15 @@ def monitor_and_adjust_active_period(
         min_soc = config["soc"]["min_soc"]
         dynamic_buffer_soc = _get_active_sell_buffer_soc(state, now)
         low_soc_discharge_mode = active_discharge and soc <= conservative_soc
+        sell_window_period = active_discharge_period
+        if sell_window_period is None and state.schedule_pause_active:
+            # The pause itself removed the sell window from the published schedule. Without
+            # looking at the plan the buffer protection could never see the window it is
+            # reserved for, and a full battery on a 100% buffer would stay paused for good.
+            sell_window_period = _find_active_planned_sell_period(state.schedule, now)
         is_profitable_sell_window = (
-            active_discharge_period is not None
-            and active_discharge_period.get("window_type", "discharge") == "discharge"
+            sell_window_period is not None
+            and sell_window_period.get("window_type", "discharge") == "discharge"
             and runtime_price_range == "discharge"
         )
         if is_profitable_sell_window:
