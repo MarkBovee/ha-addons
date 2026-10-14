@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Mapping, Sequence
 
 from .battery import Plan, Slot
+from .outlook import periods
 from .slots import SLOT_H
 
 if TYPE_CHECKING:
@@ -153,17 +154,12 @@ def _range_text(run: Mapping, start: datetime, tz: tzinfo, words: PlanWords) -> 
     return f"{_clock(begin, start, tz, words)}–{end.astimezone(tz):%H:%M}" if same_day else f"{_clock(begin, start, tz, words)}–{_clock(end, start, tz, words)}"
 
 
-def _windows(segments: Sequence[Mapping]) -> list[Mapping]:
-    """The charge and discharge runs of the plan; idle runs and the 'truncated' marker are not windows."""
-    return [s for s in segments if s.get("action") in ("charge", "discharge")]
-
-
 def plan_summary(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words: PlanWords, limit: int = STATE_LIMIT) -> str:
     """The plan as one readable line for a sensor state: 'Laden 10:45–13:15 · Ontladen 15:45–18:15'.
 
     Times are local; a window that starts on another day than the plan says so ('Laden morgen 02:00–05:00'). When the
     windows do not fit in `limit` characters the line ends with an ellipsis after the last whole window."""
-    windows = _windows(segments)
+    windows = periods(segments)
     if not windows:
         return words.nothing
     parts = [f"{words.charge if run['action'] == 'charge' else words.discharge} {_range_text(run, start, tz, words)}" for run in windows]
@@ -177,14 +173,16 @@ def plan_summary(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words
 
 
 def plan_table(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words: PlanWords) -> str:
-    """The plan as a Markdown table for a dashboard card: one row per charge or discharge window, local times.
+    """The plan as a Markdown table for a dashboard card: one row per charge or discharge period, local times.
 
-    The run that is going on now comes first and is marked 🔴 (also when it is idle, so the table says what happens
-    now); later windows are marked ⏰. Columns: time, type, average power, average price, SoC at both ends."""
+    What is going on now comes first and is marked 🔴 (also when it is idle, so the table says what happens now); later
+    periods are marked ⏰. Columns: time, type, average power, average price, SoC at both ends."""
     runs = [s for s in segments if "action" in s]
-    if not _windows(runs):
+    found = periods(runs)
+    if not found:
         return words.nothing
-    rows = [_row(i == 0, run, start, tz, words) for i, run in enumerate(runs) if i == 0 or run["action"] != "idle"]
+    rows = [_row(True, runs[0], start, tz, words)] if runs[0]["action"] == "idle" else []
+    rows += [_row(period["begin"] <= start, period, start, tz, words) for period in found]
     if any("truncated" in s for s in segments):
         rows.append(["…", "", "", "", ""])
     return _table(rows, words)
@@ -205,10 +203,10 @@ def _table(rows: Sequence[Sequence[str]], words: PlanWords) -> str:
 
 
 def plan_windows(segments: Sequence[Mapping], tz: tzinfo) -> list[dict]:
-    """The charge and discharge windows with readable names and local times, for a sensor attribute."""
+    """The charge and discharge periods (see outlook.periods) with readable names and local times, for a sensor attribute."""
     return [{"action": s["action"], "from": datetime.fromisoformat(s["from"]).astimezone(tz).isoformat(),
              "to": datetime.fromisoformat(s["to"]).astimezone(tz).isoformat(), "kwh": s["kwh"], "power_w": s["avg_w"],
-             "soc_from_pct": s["soc_from_pct"], "soc_to_pct": s["soc_to_pct"], "avg_price_eur_kwh": s["avg_price"]} for s in _windows(segments)]
+             "soc_from_pct": s["soc_from_pct"], "soc_to_pct": s["soc_to_pct"], "avg_price_eur_kwh": s["avg_price"]} for s in periods(segments)]
 
 
 def _compare_text(compare: Mapping, start: datetime, tz: tzinfo) -> str:

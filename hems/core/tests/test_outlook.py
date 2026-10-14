@@ -95,3 +95,10 @@ def test_the_period_that_is_going_on_starts_at_the_current_quarter():
     segments = [segment("charge", 0, 3, 1.5, 0.2, (30, 36)), segment("idle", 3, 8), segment("discharge", 8, 12, 2.0, 0.5, (36, 28)), segment("charge", 20, 24, 3.0, 0.2, (28, 40))]
     now = first_window(segments, "charge")
     assert now["begin"] == START and now["end"] == START + 3 * QUARTER and now["kwh"] == 1.5
+
+
+def test_a_rest_of_more_than_an_hour_splits_a_period_so_the_window_is_not_a_whole_morning():
+    """The night charge is the first charge window; the midday top-up three hours later is a period of its own."""
+    segments = [segment("charge", 0, 8, 5.0, 0.20, (30, 60)), segment("idle", 8, 20), segment("charge", 20, 24, 2.0, 0.25, (60, 70))]
+    first = first_window(segments, "charge")
+    assert first["end"] == START + 8 * QUARTER and first["kwh"] == 5.0

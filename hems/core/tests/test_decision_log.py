@@ -145,11 +145,12 @@ def test_an_event_line_stays_one_readable_line_however_large_the_event_is():
 PLAN_START = datetime(2026, 10, 14, 8, 45, tzinfo=timezone.utc)      # 10:45 local
 
 
-def run(action: str, begin_h: float, end_h: float) -> dict:
-    """A plan segment from `begin_h` to `end_h` hours after PLAN_START."""
+def run(action: str, begin_h: float, end_h: float, power_w: int = 5000, price: float | None = 0.25, soc: tuple[float, float] = (30.0, 70.0)) -> dict:
+    """A plan segment from `begin_h` to `end_h` hours after PLAN_START; the energy follows from power and duration, as in a real plan."""
     begin, end = PLAN_START + timedelta(hours=begin_h), PLAN_START + timedelta(hours=end_h)
-    return {"from": begin.isoformat(), "to": end.isoformat(), "action": action, "kwh": 10.0, "avg_w": 5000,
-            "soc_from_pct": 30.0, "soc_to_pct": 70.0, "avg_price": 0.25}
+    moving = action != "idle"
+    return {"from": begin.isoformat(), "to": end.isoformat(), "action": action, "kwh": round(power_w / 1000 * (end_h - begin_h), 2) if moving else 0.0,
+            "avg_w": power_w if moving else 0, "soc_from_pct": soc[0], "soc_to_pct": soc[1], "avg_price": price if moving else None}
 
 
 def test_the_plan_summary_reads_as_windows_in_local_time_with_the_day_for_tomorrow():
@@ -194,13 +195,13 @@ def test_the_summary_of_a_real_plan_names_every_window_the_tree_names():
     assert all(w["action"] in ("charge", "discharge") for w in windows)
 
 
-def test_the_plan_table_starts_with_what_happens_now_and_lists_the_windows_after_it():
-    """A dashboard card: now (also when idle), then each charge or discharge window with power, price and SoC."""
-    segments = [dict(run("idle", 0, 2), avg_w=0, avg_price=None, soc_from_pct=44.0, soc_to_pct=44.0), dict(run("charge", 2, 4.5), avg_w=2688, avg_price=0.262, soc_from_pct=44.0, soc_to_pct=100.0),
-                run("idle", 4.5, 9.5), dict(run("discharge", 9.5, 11.5), avg_w=8000, avg_price=0.519, soc_from_pct=100.0, soc_to_pct=31.0)]
+def test_the_plan_table_starts_with_what_happens_now_and_lists_the_periods_after_it():
+    """A dashboard card: now (also when idle), then each charge or discharge period with power, price and SoC; a rest quarter inside charging does not split it."""
+    segments = [run("idle", 0, 2, soc=(44.0, 44.0)), run("charge", 2, 3.5, 2800, 0.262, (44.0, 70.0)), run("idle", 3.5, 3.75, soc=(70.0, 70.0)),
+                run("charge", 3.75, 4.5, 2800, 0.262, (70.0, 100.0)), run("idle", 4.5, 9.5, soc=(100.0, 100.0)), run("discharge", 9.5, 11.5, 8000, 0.519, (100.0, 31.0))]
     assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("nl")).splitlines() == [
         "|Tijd|Type|Vermogen|Prijs|SoC|", "|---|---|---|---|---|",
-        "|🔴 10:45–12:45|💤 Rust|0 W|–|44%|", "|⏰ 12:45–15:15|⚡ Laden|2688 W|€0.262|44→100%|", "|⏰ 20:15–22:15|📤 Ontladen|8000 W|€0.519|100→31%|"]
+        "|🔴 10:45–12:45|💤 Rust|0 W|–|44%|", "|⏰ 12:45–15:15|⚡ Laden|2800 W|€0.262|44→100%|", "|⏰ 20:15–22:15|📤 Ontladen|8000 W|€0.519|100→31%|"]
     assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[0] == "|Time|Type|Power|Price|SoC|"
 
 
@@ -209,6 +210,12 @@ def test_the_plan_table_marks_the_current_window_names_tomorrow_and_the_cut():
     segments = [run("charge", 0, 1.5), run("idle", 1.5, 14), run("discharge", 14, 15), {"truncated": 2}]
     rows = plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[2:]
     assert rows == ["|🔴 10:45–12:15|⚡ Charge|5000 W|€0.250|30→70%|", "|⏰ tomorrow 00:45–01:45|📤 Discharge|5000 W|€0.250|30→70%|", "|…|||||"]
+
+
+def test_a_night_charge_and_a_midday_top_up_stay_two_rows():
+    """A rest of more than an hour ends the period: they are two charge sessions, not one that lasts all morning."""
+    segments = [run("charge", 0, 2), run("idle", 2, 10), run("charge", 10, 11), run("discharge", 15, 17)]
+    assert plan_summary(segments, PLAN_START, LOCAL_TZ, plan_words("en")) == "Charge 10:45–12:45 · Charge 20:45–21:45 · Discharge 01:45–03:45".replace("01:45–03:45", "tomorrow 01:45–03:45")
 
 
 def test_a_plan_table_without_windows_is_a_sentence_not_an_empty_table():

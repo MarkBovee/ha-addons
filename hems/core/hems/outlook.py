@@ -12,6 +12,7 @@ from hems.prices import PriceSeries
 QUARTER = timedelta(minutes=15)
 HOUR_QUARTERS = 4
 DAY_QUARTERS = 96
+MAX_PERIOD_GAP = timedelta(hours=1)    # rest between two runs of the same action that still counts as one period
 
 
 def _hour(series: Mapping[datetime, float], start: datetime) -> list[float] | None:
@@ -58,27 +59,44 @@ def price_curve(prices: PriceSeries, field: str, start: datetime, tz: tzinfo) ->
     return [{"start": t.astimezone(tz).isoformat(), "price": round(v, 4)} for t, v in zip(prices.starts, values) if t >= start]
 
 
-def first_window(segments: Sequence[Mapping], action: str) -> dict | None:
-    """The first period of `action` ('charge' or 'discharge'), with real datetimes; None when the plan has none.
-
-    A period runs from the first quarter of the action to the last one before the opposite action starts: idle
-    quarters inside it (the plan charges in pieces when prices bump up for a quarter) do not end it, so 'charge
-    period' means all the charging before the next sale. A period that is going on now starts at the current quarter.
-    Energy adds up, power is the mean over the quarters that actually move energy, price is weighted by energy."""
-    opposite = "discharge" if action == "charge" else "charge"
-    runs: list[Mapping] = []
-    for run in segments:
-        kind = run.get("action")
-        if kind == action:
-            runs.append(run)
-        elif kind == opposite and runs:
-            break
-    if not runs:
-        return None
-    begin, end = datetime.fromisoformat(runs[0]["from"]), datetime.fromisoformat(runs[-1]["to"])
+def _merge(runs: Sequence[Mapping]) -> dict:
+    """One period from consecutive runs of the same action: energy adds up, power is the mean over the quarters that move
+    energy, price is weighted by energy, SoC runs from the start of the first run to the end of the last."""
     kwh = sum(r["kwh"] for r in runs)
     active_h = sum((datetime.fromisoformat(r["to"]) - datetime.fromisoformat(r["from"])).total_seconds() for r in runs) / 3600
     priced = [(r["kwh"], r["avg_price"]) for r in runs if r.get("avg_price") is not None and r["kwh"]]
-    return {"begin": begin, "end": end, "from": runs[0]["from"], "to": runs[-1]["to"], "action": action, "kwh": round(kwh, 2),
-            "avg_w": round(kwh * 1000 / active_h) if active_h else 0, "soc_from_pct": runs[0]["soc_from_pct"], "soc_to_pct": runs[-1]["soc_to_pct"],
+    return {"begin": datetime.fromisoformat(runs[0]["from"]), "end": datetime.fromisoformat(runs[-1]["to"]), "from": runs[0]["from"], "to": runs[-1]["to"],
+            "action": runs[0]["action"], "kwh": round(kwh, 2), "avg_w": round(kwh * 1000 / active_h) if active_h else 0,
+            "soc_from_pct": runs[0]["soc_from_pct"], "soc_to_pct": runs[-1]["soc_to_pct"],
             "avg_price": round(sum(k * p for k, p in priced) / sum(k for k, _ in priced), 4) if priced else None}
+
+
+def periods(segments: Sequence[Mapping]) -> list[dict]:
+    """The charge and discharge periods of the plan, in order, with real datetimes.
+
+    The plan moves energy in pieces (a quarter of rest where the price bumps up), which would read as a string of
+    short windows. Runs of the same action with at most MAX_PERIOD_GAP of rest between them are one period; the
+    opposite action, or a longer rest, starts a new one (a night charge and a midday top-up stay two periods)."""
+    found: list[dict] = []
+    current: list[Mapping] = []
+    for run in segments:
+        kind = run.get("action")
+        if kind not in ("charge", "discharge"):
+            continue
+        rest = datetime.fromisoformat(run["from"]) - datetime.fromisoformat(current[-1]["to"]) if current else None
+        if current and current[0]["action"] == kind and rest <= MAX_PERIOD_GAP:
+            current.append(run)
+            continue
+        if current:
+            found.append(_merge(current))
+        current = [run]
+    if current:
+        found.append(_merge(current))
+    return found
+
+
+def first_window(segments: Sequence[Mapping], action: str) -> dict | None:
+    """The first period of `action` ('charge' or 'discharge'); None when the plan has none.
+
+    A period that is going on now starts at the current quarter."""
+    return next((period for period in periods(segments) if period["action"] == action), None)
