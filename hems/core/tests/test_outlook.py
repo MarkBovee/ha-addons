@@ -69,3 +69,29 @@ def test_a_plan_without_the_action_has_no_window():
     """Nothing planned: None, so a sensor can say unknown instead of inventing a time."""
     assert first_window([{"action": "idle", "from": START.isoformat(), "to": (START + QUARTER).isoformat()}], "charge") is None
     assert first_window([], "discharge") is None
+
+
+def segment(action: str, begin_q: int, end_q: int, kwh: float = 0.0, price: float | None = None, soc: tuple[float, float] = (50.0, 50.0)) -> dict:
+    """A plan segment between two quarters counted from START."""
+    return {"action": action, "from": (START + begin_q * QUARTER).isoformat(), "to": (START + end_q * QUARTER).isoformat(), "kwh": kwh,
+            "avg_w": round(kwh * 4000 / (end_q - begin_q)) if kwh else 0, "avg_price": price, "soc_from_pct": soc[0], "soc_to_pct": soc[1]}
+
+
+def test_a_period_continues_over_idle_quarters_and_ends_where_the_opposite_action_starts():
+    """The plan charges in pieces (an idle quarter where the price bumps): that is still one charge period, up to the next sale."""
+    segments = [segment("idle", 0, 2), segment("charge", 2, 10, 4.0, 0.20, (40, 56)), segment("idle", 10, 11), segment("charge", 11, 13, 1.0, 0.30, (56, 60)),
+                segment("idle", 13, 20), segment("discharge", 20, 24, 3.0, 0.50, (60, 48)), segment("idle", 24, 26), segment("discharge", 26, 28, 1.0, 0.40, (48, 44)),
+                segment("charge", 40, 44, 2.0, 0.25, (44, 52))]
+    charge, discharge = first_window(segments, "charge"), first_window(segments, "discharge")
+    assert (charge["begin"], charge["end"]) == (START + 2 * QUARTER, START + 13 * QUARTER) and charge["kwh"] == 5.0
+    assert charge["avg_price"] == 0.22 and (charge["soc_from_pct"], charge["soc_to_pct"]) == (40, 60)
+    assert charge["avg_w"] == round(5.0 * 1000 / (10 * 0.25))                 # 10 active quarters, the idle one does not count
+    assert (discharge["begin"], discharge["end"]) == (START + 20 * QUARTER, START + 28 * QUARTER) and discharge["kwh"] == 4.0
+    assert discharge["avg_price"] == 0.475 and (discharge["soc_from_pct"], discharge["soc_to_pct"]) == (60, 44), "the later charge is another period"
+
+
+def test_the_period_that_is_going_on_starts_at_the_current_quarter():
+    """The first segment is the quarter now: a charge in progress is the first charge period, not a later one."""
+    segments = [segment("charge", 0, 3, 1.5, 0.2, (30, 36)), segment("idle", 3, 8), segment("discharge", 8, 12, 2.0, 0.5, (36, 28)), segment("charge", 20, 24, 3.0, 0.2, (28, 40))]
+    now = first_window(segments, "charge")
+    assert now["begin"] == START and now["end"] == START + 3 * QUARTER and now["kwh"] == 1.5

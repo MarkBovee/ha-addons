@@ -60,10 +60,26 @@ def price_curve(prices: PriceSeries, field: str, start: datetime, tz: tzinfo) ->
 
 
 def first_window(segments: Sequence[Mapping], action: str) -> dict | None:
-    """The first run of `action` ('charge' or 'discharge') in the plan, with real datetimes; None when the plan has none.
+    """The first period of `action` ('charge' or 'discharge'), with real datetimes; None when the plan has none.
 
-    A window that is going on now is the first one: its start is the start of the current quarter."""
+    A period runs from the first quarter of the action to the last one before the opposite action starts: idle
+    quarters inside it (the plan charges in pieces when prices bump up for a quarter) do not end it, so 'charge
+    period' means all the charging before the next sale. A period that is going on now starts at the current quarter.
+    Energy adds up, power is the mean over the quarters that actually move energy, price is weighted by energy."""
+    opposite = "discharge" if action == "charge" else "charge"
+    runs: list[Mapping] = []
     for run in segments:
-        if run.get("action") == action:
-            return {**run, "begin": datetime.fromisoformat(run["from"]), "end": datetime.fromisoformat(run["to"])}
-    return None
+        kind = run.get("action")
+        if kind == action:
+            runs.append(run)
+        elif kind == opposite and runs:
+            break
+    if not runs:
+        return None
+    begin, end = datetime.fromisoformat(runs[0]["from"]), datetime.fromisoformat(runs[-1]["to"])
+    kwh = sum(r["kwh"] for r in runs)
+    active_h = sum((datetime.fromisoformat(r["to"]) - datetime.fromisoformat(r["from"])).total_seconds() for r in runs) / 3600
+    priced = [(r["kwh"], r["avg_price"]) for r in runs if r.get("avg_price") is not None and r["kwh"]]
+    return {"begin": begin, "end": end, "from": runs[0]["from"], "to": runs[-1]["to"], "action": action, "kwh": round(kwh, 2),
+            "avg_w": round(kwh * 1000 / active_h) if active_h else 0, "soc_from_pct": runs[0]["soc_from_pct"], "soc_to_pct": runs[-1]["soc_to_pct"],
+            "avg_price": round(sum(k * p for k, p in priced) / sum(k for k, _ in priced), 4) if priced else None}
