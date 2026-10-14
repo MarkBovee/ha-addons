@@ -219,6 +219,10 @@ class RuntimeState:
     sell_buffer_required_soc: Optional[float] = None
     sell_buffer_discharge_hours: float = 0.0
     sell_buffer_valid_until: Optional[datetime] = None
+    # When the first sell window the buffer target counts on ends, the target is stale and must be recomputed.
+    sell_buffer_recompute_at: Optional[datetime] = None
+    # Sell-wait postpones selling and holds adaptive until this moment (None when no wait is active).
+    sell_wait_until: Optional[datetime] = None
     schedule_pause_active: bool = False
     passive_gap_active: bool = False
     reduced_override_active: bool = False
@@ -827,7 +831,9 @@ def _should_regenerate_live_schedule(
             return "load"
         return None
 
-    if runtime_price_range != "adaptive" or active_charge or active_discharge or soc is None:
+    # A sell-band quarter that no sell window covers (the energy is reserved for later
+    # windows) needs the adaptive fallback just like an adaptive quarter does.
+    if runtime_price_range not in ("adaptive", "discharge") or active_charge or active_discharge or soc is None:
         return None
 
     min_soc = float(config["soc"].get("min_soc", 5))
@@ -836,7 +842,7 @@ def _should_regenerate_live_schedule(
     # below conservative_soc. The dynamic sell-buffer floor is enforced later
     # by the monitor loop once the regenerated schedule is available.
     if can_discharge(soc, min_soc, conservative_soc, False):
-        return "adaptive"
+        return runtime_price_range
 
     return None
 
@@ -1500,6 +1506,32 @@ def _calculate_dynamic_sell_buffer_soc(
     )
 
     return required_soc, discharge_hours, main_charge_start
+
+
+# Return when an active sell-buffer target goes stale: the end of the first sell window it counts on.
+def _sell_buffer_recompute_time(
+    windows: Dict[str, List[Dict[str, Any]]],
+    now: datetime,
+    main_charge_start: Optional[datetime],
+    buffer_required_soc: Optional[float],
+) -> Optional[datetime]:
+    """Return when the sell-buffer target must be recomputed, or None without an active buffer.
+
+    The buffer is activated by the first sell window before the main charge
+    (``_calculate_dynamic_sell_buffer_soc``). Once that window is over, the next
+    window may be far enough away for the buffer to be deferred, so the cached
+    target must not outlive it.
+    """
+    if buffer_required_soc is None or main_charge_start is None:
+        return None
+    relevant_windows = sorted(
+        [
+            w for w in windows.get("discharge", [])
+            if w.get("end") and w["end"] > now and w.get("start") and w["start"] < main_charge_start
+        ],
+        key=lambda w: w["start"],
+    )
+    return relevant_windows[0]["end"] if relevant_windows else None
 
 
 def _build_display_windows_from_schedule(schedule: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
@@ -2413,6 +2445,9 @@ def generate_schedule(
         "wait_until": sell_wait_decision["wait_until"].astimezone().isoformat() if sell_wait_decision else None,
         "detail": sell_wait_diagnostics or None,
     }
+    if state:
+        # The monitor mirrors this hold so it does not regenerate every cooldown while adaptive is held.
+        state.sell_wait_until = sell_wait_decision["wait_until"] if sell_wait_decision else None
 
     margin_gate_records: List[Dict[str, Any]] = []
     upcoming_windows["charge"] = _apply_grid_charge_margin_gate(
@@ -2439,6 +2474,12 @@ def generate_schedule(
         state.sell_buffer_required_soc = buffer_required_soc
         state.sell_buffer_discharge_hours = buffer_discharge_hours
         state.sell_buffer_valid_until = main_charge_start
+        state.sell_buffer_recompute_at = _sell_buffer_recompute_time(
+            upcoming_windows,
+            now,
+            main_charge_start,
+            buffer_required_soc,
+        )
 
     precharge_until: Optional[datetime] = None
     precharge_trace: Dict[str, Any] = {"decision": "none"}
@@ -3036,9 +3077,11 @@ def generate_schedule(
 
     has_active_charge_period = any(_is_period_active(period, now) for period in charge_schedule)
     has_active_discharge_period = any(_is_period_active(period, now) for period in discharge_schedule)
+    # A sell-band quarter without a running sell window (pruned for energy, the energy goes to later
+    # windows) also falls back to adaptive; holds are already part of adaptive_fallback_not_before.
     if (
         adaptive_enabled
-        and effective_price_range == "adaptive"
+        and effective_price_range in ("adaptive", "discharge")
         and not has_active_charge_period
         and not has_active_discharge_period
         and len(discharge_schedule) < max_discharge_periods
@@ -3639,6 +3682,22 @@ def monitor_and_adjust_active_period(
         return
 
     regen_cooldown = config["timing"].get("schedule_regen_cooldown_seconds", 60)
+    # The sell-buffer target counts on the first sell window; when it is over, the cached target
+    # is stale and would keep adaptive paused until the next hourly refresh (or a restart).
+    sell_buffer_stale = (
+        state.sell_buffer_recompute_at is not None
+        and now >= state.sell_buffer_recompute_at
+    )
+    if sell_buffer_stale and not passive_active and (
+        not state.last_schedule_publish
+        or (now - state.last_schedule_publish).total_seconds() >= regen_cooldown
+    ):
+        logger.info("🔄 Sell window over - recomputing the sell-buffer target")
+        state.schedule = generate_schedule(config, ha_api, mqtt_client, state)
+        state.schedule_generated_at = now
+        state.last_schedule_publish = now
+        return
+
     regen_price_range = _should_regenerate_live_schedule(
         runtime_price_range,
         active_charge,
@@ -3647,6 +3706,13 @@ def monitor_and_adjust_active_period(
         soc,
         config,
     )
+    # Sell-wait holds adaptive on purpose, so a regeneration would only repeat the same hold.
+    if (
+        regen_price_range in ("adaptive", "discharge")
+        and state.sell_wait_until is not None
+        and now < state.sell_wait_until
+    ):
+        regen_price_range = None
     # While Passive Solar is active the inverter must stay free of discharge windows
     # so surplus solar charges the battery; the expired 0W gap must not be replaced
     # by the adaptive 0W placeholder from a rolling regeneration.
