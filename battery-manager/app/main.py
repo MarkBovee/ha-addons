@@ -37,6 +37,7 @@ from .price_analyzer import (
     expand_charge_starts_within_price_delta,
     filter_curve_from,
     find_main_charge_window,
+    find_pre_window_sell_starts,
     find_profitable_discharge_starts,
     find_top_x_charge_starts,
     get_current_period_rank,
@@ -1142,6 +1143,56 @@ def _period_energy_kwh(power_watts: float, duration_minutes: int) -> float:
     return (float(power_watts) / 1000.0) * (duration_minutes / 60.0)
 
 
+def _pre_window_sell_energy_kwh(
+    discharge_windows: List[Dict[str, Any]],
+    now: datetime,
+    main_charge_start: Optional[datetime],
+    config: Dict[str, Any],
+) -> float:
+    """Energy (kWh) the sell windows before the main charge window take out of the battery.
+
+    Every kWh sold in the morning has to be charged again before the evening, so the
+    charge deficit is the gap to full plus this energy. The result cannot exceed what
+    fits between the sell reserve floor and ``max_soc``."""
+
+    if main_charge_start is None:
+        return 0.0
+    power_w = float(config["power"].get("max_discharge_power", 8000))
+    total = 0.0
+    for window in discharge_windows:
+        start, end = window.get("start"), window.get("end")
+        if not isinstance(start, datetime) or not isinstance(end, datetime) or start >= main_charge_start:
+            continue
+        minutes = int((min(end, main_charge_start) - max(start, now)).total_seconds() / 60)
+        total += _period_energy_kwh(power_w, minutes)
+    capacity = float(config["soc"].get("battery_capacity_kwh", 25))
+    usable_span = max(0.0, float(config["soc"].get("max_soc", 100)) - _get_sell_window_reserve_floor_soc(config)) / 100.0 * capacity
+    return min(total, usable_span)
+
+
+def _charge_deficit_with_pre_window_sells(
+    soc: float,
+    max_soc: float,
+    config: Dict[str, Any],
+    upcoming_windows: Dict[str, List[Dict[str, Any]]],
+    day_plan: "DayPlan",
+    now: datetime,
+    precharge_kwh: float,
+) -> float:
+    """Grid + PV energy the day's charge windows must supply to end the day full.
+
+    The gap to ``max_soc`` from the current SoC, plus what the sell windows before the
+    main charge window will take out again (a morning peak), minus a pre-sell charge
+    that already feeds them. Sized on the current SoC alone, the midday charge was too
+    small after a morning sale and the evening sell was cut short."""
+
+    capacity = float(config["soc"].get("battery_capacity_kwh", 25))
+    deficit = calculate_charge_deficit_kwh(soc, max_soc, capacity)
+    main_charge_start = day_plan.charge_window[0] if day_plan.charge_window else None
+    morning_kwh = _pre_window_sell_energy_kwh(upcoming_windows.get("discharge", []), now, main_charge_start, config)
+    return max(0.0, deficit + morning_kwh - precharge_kwh)
+
+
 def _sum_discharge_hours_before_main_charge(
     discharge_windows: List[Dict[str, Any]],
     main_charge_start: datetime,
@@ -1796,6 +1847,7 @@ class DayPlan:
     cost_basis: Optional[float]
     day_min_import: Optional[float]
     basis_source: str
+    pre_window_sell_starts: set = field(default_factory=set)  # sell quarters before the main charge window (a morning peak)
 
 
 def _resolve_cost_basis(
@@ -1844,9 +1896,11 @@ def _plan_day(
 ) -> DayPlan:
     """Select charge slots, the charge window and profitable sell slots for one day.
 
-    With ``discharge_after_charge_only`` the top-X sell quarters are picked only
-    from quarters after the end of the day's main charge window; quarters before
-    it never use the sell budget (and so never drive pre-charging).
+    With ``discharge_after_charge_only`` the top-X sell quarters are picked from
+    quarters after the end of the day's main charge window. The morning peak before
+    that window gets the same budget of its own (``find_pre_window_sell_starts``):
+    ``top_x_discharge_hours`` is per peak, not per day. On 2026-10-14 the morning
+    export price reached 0.62 against 0.52 in the evening and was missed.
     """
 
     heur = config["heuristics"]
@@ -1869,15 +1923,6 @@ def _plan_day(
     basis, day_min_import, source = _resolve_cost_basis(
         config, import_day, export_day, charge_window, state, day_key
     )
-    load_range, discharge_range, adaptive_range = calculate_price_ranges(
-        import_day,
-        export_day,
-        top_x_charge_count,
-        top_x_discharge_count,
-        min_profit,
-        cost_basis=basis,
-        discharge_export_curve=discharge_export,
-    )
     discharge_starts = find_profitable_discharge_starts(
         import_day,
         export_day if discharge_export is None else discharge_export,
@@ -1885,6 +1930,24 @@ def _plan_day(
         min_profit,
         cost_basis=basis,
     )
+    pre_window_starts: set = set()
+    if sell_from is not None and charge_window is not None:
+        pre_window_starts = find_pre_window_sell_starts(
+            import_day, export_day, charge_window[0], top_x_discharge_count, min_profit, cost_basis=basis
+        )
+        if pre_window_starts:
+            # The discharge band covers the morning peak as well as the evening sells.
+            discharge_export = discharge_export + [e for e in export_day if e.get("start") in pre_window_starts]
+    load_range, discharge_range, adaptive_range = calculate_price_ranges(
+        import_day,
+        export_day,
+        top_x_charge_count,
+        top_x_discharge_count + len(pre_window_starts),
+        min_profit,
+        cost_basis=basis,
+        discharge_export_curve=discharge_export,
+    )
+    discharge_starts = discharge_starts | pre_window_starts
     return DayPlan(
         load_range=load_range,
         discharge_range=discharge_range,
@@ -1898,7 +1961,18 @@ def _plan_day(
         cost_basis=basis,
         day_min_import=day_min_import,
         basis_source=source,
+        pre_window_sell_starts=pre_window_starts,
     )
+
+
+def _sell_band_applies(plan: DayPlan, now: datetime, export_entry: Optional[Dict[str, Any]]) -> bool:
+    """Whether the discharge band may classify the current interval as ``discharge``.
+
+    Before the main charge window ends no sell window exists, except for a morning
+    peak that was selected for selling (``pre_window_sell_starts``)."""
+    if plan.sell_from is None or now >= plan.sell_from:
+        return True
+    return bool(export_entry) and export_entry.get("start") in plan.pre_window_sell_starts
 
 
 def _local_period(period: Dict[str, Any]) -> Dict[str, Any]:
@@ -2135,7 +2209,7 @@ def generate_schedule(
     # band must not classify the current interval as "discharge".
     discharge_range_now = (
         discharge_range
-        if today_plan.sell_from is None or now >= today_plan.sell_from
+        if _sell_band_applies(today_plan, now, current_export_entry)
         else None
     )
     price_range = _determine_price_range(
@@ -2350,12 +2424,32 @@ def generate_schedule(
     ):
         sell_buffer_floor_soc = float(config["soc"].get("sell_buffer_min_soc", 20))
         is_below_sell_buffer_floor = soc < sell_buffer_floor_soc
-        # Prevent emergency precharge from buying at expensive prices.
-        if (
-            precharge_price_ceiling is not None
-            and import_price > precharge_price_ceiling
-            and not is_below_sell_buffer_floor
-        ):
+        over_price_ceiling = precharge_price_ceiling is not None and import_price > precharge_price_ceiling
+        verdict: Optional[Dict[str, Any]] = None
+        if not is_below_sell_buffer_floor:
+            driving_windows = [
+                w for w in upcoming_windows.get("discharge", [])
+                if w.get("end") and w["end"] > now
+                and (main_charge_start is None or w["start"] < main_charge_start)
+            ]
+            gate_heur = config["heuristics"]
+            gate_margin = gate_heur.get("grid_charge_min_margin")
+            gate_margin = float(
+                gate_heur.get("min_profit_threshold", 0.1) if gate_margin is None else gate_margin
+            )
+            verdict = evaluate_grid_charge(
+                charge_price=import_price,
+                charge_end=min((w["start"] for w in driving_windows), default=interval_end),
+                discharge_windows=driving_windows,
+                charge_windows=[],
+                efficiency=float(gate_heur.get("round_trip_efficiency", DEFAULT_ROUND_TRIP_EFFICIENCY)),
+                min_margin=gate_margin,
+            )
+            margin_gate_records.append({"kind": "precharge", "charge_price": round(import_price, 4), **verdict})
+        # The fixed price ceiling stops an emergency precharge from buying at expensive prices. A precharge that
+        # the margin gate approves (sell x efficiency - charge >= margin for the windows it feeds) is not an
+        # emergency: on 2026-10-14 the 0.25 ceiling blocked the charge for a 0.56-0.62 morning peak at 0.33.
+        if over_price_ceiling and not is_below_sell_buffer_floor and not (verdict and verdict["allowed"]):
             logger.warning(
                 "🚫 Skipping pre-sell precharge: current price €%.3f above ceiling €%.3f",
                 import_price,
@@ -2366,11 +2460,7 @@ def generate_schedule(
                 "reason": f"price {import_price:.3f} above ceiling {precharge_price_ceiling:.3f}",
             }
         else:
-            if (
-                precharge_price_ceiling is not None
-                and import_price > precharge_price_ceiling
-                and is_below_sell_buffer_floor
-            ):
+            if over_price_ceiling and is_below_sell_buffer_floor:
                 logger.warning(
                     "⚠️ Forcing sell-buffer floor precharge: SOC %.1f%% below floor %.1f%% despite price €%.3f > €%.3f",
                     soc,
@@ -2378,33 +2468,19 @@ def generate_schedule(
                     import_price,
                     precharge_price_ceiling,
                 )
+            elif over_price_ceiling:
+                logger.info(
+                    "✅ Pre-sell precharge @€%.3f above ceiling €%.3f approved by the margin gate",
+                    import_price,
+                    precharge_price_ceiling,
+                )
             capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
             charge_power_watts = float(config["power"].get("max_charge_power", 8000))
             soc_per_hour_charge = max(0.0, (charge_power_watts / 1000.0) / max(capacity_kwh, 0.1) * 100.0)
-            if not is_below_sell_buffer_floor:
-                driving_windows = [
-                    w for w in upcoming_windows.get("discharge", [])
-                    if w.get("end") and w["end"] > now
-                    and (main_charge_start is None or w["start"] < main_charge_start)
-                ]
-                gate_heur = config["heuristics"]
-                gate_margin = gate_heur.get("grid_charge_min_margin")
-                gate_margin = float(
-                    gate_heur.get("min_profit_threshold", 0.1) if gate_margin is None else gate_margin
-                )
-                verdict = evaluate_grid_charge(
-                    charge_price=import_price,
-                    charge_end=min((w["start"] for w in driving_windows), default=interval_end),
-                    discharge_windows=driving_windows,
-                    charge_windows=[],
-                    efficiency=float(gate_heur.get("round_trip_efficiency", DEFAULT_ROUND_TRIP_EFFICIENCY)),
-                    min_margin=gate_margin,
-                )
-                margin_gate_records.append({"kind": "precharge", "charge_price": round(import_price, 4), **verdict})
-                if not verdict["allowed"]:
-                    logger.info("🚫 Skipping pre-sell precharge @€%.3f: %s", import_price, verdict["reason"])
-                    precharge_trace = {"decision": "skipped_margin", "reason": verdict["reason"]}
-                    soc_per_hour_charge = 0.0
+            if verdict is not None and not verdict["allowed"]:
+                logger.info("🚫 Skipping pre-sell precharge @€%.3f: %s", import_price, verdict["reason"])
+                precharge_trace = {"decision": "skipped_margin", "reason": verdict["reason"]}
+                soc_per_hour_charge = 0.0
             if soc_per_hour_charge > 0:
                 deficit_soc = buffer_required_soc - soc
                 required_minutes = int(math.ceil((deficit_soc / soc_per_hour_charge) * 60.0))
@@ -2453,9 +2529,11 @@ def generate_schedule(
     solar_aware_remaining_kwh: Optional[float] = None
     solar_charge_deficit_kwh = 0.0
 
+    precharge_kwh = 0.0
     if precharge_until is not None:
         precharge_minutes = int((precharge_until - interval_start).total_seconds() / 60)
         if precharge_minutes > 0:
+            precharge_kwh = _period_energy_kwh(float(config["power"]["max_charge_power"]), precharge_minutes)
             charge_schedule.append({
                 "start": interval_start.isoformat(),
                 "power": config["power"]["max_charge_power"],
@@ -2619,10 +2697,8 @@ def generate_schedule(
             ha_api,
             config.get("entities", {}).get("remaining_solar_energy_entity"),
         )
-        solar_charge_deficit_kwh = calculate_charge_deficit_kwh(
-            soc,
-            float(max_soc),
-            float(config["soc"].get("battery_capacity_kwh", 25)),
+        solar_charge_deficit_kwh = _charge_deficit_with_pre_window_sells(
+            soc, float(max_soc), config, upcoming_windows, today_plan, now, precharge_kwh
         )
         # Exclude negative-price slots from solar-aware reduction:
         # we always charge at max power when the grid pays us to consume.
@@ -2673,10 +2749,8 @@ def generate_schedule(
             if not record.get("is_negative_price", False)
             and record["start"].astimezone().date() == now.astimezone().date()
         ]
-        solar_charge_deficit_kwh = calculate_charge_deficit_kwh(
-            soc,
-            float(max_soc),
-            float(config["soc"].get("battery_capacity_kwh", 25)),
+        solar_charge_deficit_kwh = _charge_deficit_with_pre_window_sells(
+            soc, float(max_soc), config, upcoming_windows, today_plan, now, precharge_kwh
         )
         if solar_charge_deficit_kwh > 0 and today_charge_slot_records:
             spread_charge_slot_powers = allocate_charge_powers(
@@ -3402,7 +3476,7 @@ def monitor_and_adjust_active_period(
         )
     price_range = _determine_price_range(
         import_price, export_price, load_range,
-        discharge_range if day_plan.sell_from is None or now >= day_plan.sell_from else None,
+        discharge_range if _sell_band_applies(day_plan, now, current_export_entry) else None,
         adaptive_price_threshold,
         adaptive_enabled=adaptive_enabled,
     )

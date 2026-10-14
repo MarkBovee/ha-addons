@@ -1135,7 +1135,9 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     assert schedule["discharge"]
     assert all(period["window_type"] == "discharge" for period in schedule["discharge"])
     if not expect_sell:
-        assert schedule["charge"][0]["start"] == (curve_start + timedelta(minutes=45)).isoformat()
+        # The 0.25 price ceiling no longer blocks this: selling at 0.60 against charging at 0.30 passes the margin gate,
+        # so the sell buffer is topped up now instead of waiting for the 08:00 main charge.
+        assert schedule["charge"][0]["window_type"] == "precharge"
 
 
 # Cap emergency precharge duration and fit it to provider charge-slot limits.

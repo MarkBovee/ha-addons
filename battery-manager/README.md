@@ -51,7 +51,8 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 - Mid-range profitable periods can become adaptive discharge windows
 - Low-value periods stay passive unless heuristics promote them
 - Future sell windows are pruned when the SOC projected at their start (current SOC + planned grid charge + forecast PV share − earlier sells) cannot support them
-- Top-X sell hours are picked from quarters after the day's main charge window (`heuristics.discharge_after_charge_only`); quarters before it never use the sell budget or trigger grid precharging
+- Top-X sell hours are picked per price peak: from the quarters after the day's main charge window (the evening) and, with their own budget, from the profitable quarters before it (the morning) (`heuristics.discharge_after_charge_only`); `top_x_discharge_hours` applies to each peak, not to the whole day
+- The day's charge is sized to refill what the morning sale takes out, so the evening keeps its full budget; a pre-sell charge above the price ceiling is allowed when the margin gate approves it
 - Grid charging outside the cheapest top-X slots (spread-only windows, sell-buffer precharge) must earn `sell × round_trip_efficiency − charge ≥ grid_charge_min_margin`
 - The power of a charge window is held for an hour unless SoC or the solar forecast moves noticeably; the schedule is only re-sent to battery-api when its periods change
 
@@ -120,7 +121,7 @@ Defaults live in `battery-manager/config.yaml`.
 | `heuristics.grid_charge_min_margin` | Minimum net margin for grid charging outside the top-X slots (default: `min_profit_threshold`) |
 | `heuristics.round_trip_efficiency` | Efficiency applied to the sell price in the margin check (default 0.90) |
 | `heuristics.margin_basis` | Cost basis for the profit margin: `day_min_import` (default) or `solar_export` (lowest export price in the PV charge window) |
-| `heuristics.discharge_after_charge_only` | Pick top-X sell hours only after the main charge window (default true) |
+| `heuristics.discharge_after_charge_only` | Pick top-X sell hours per peak: after the main charge window, and separately from the profitable quarters before it (default true); false ranks the whole day with one budget |
 | `decision_trace.enabled` | Write `/data/decision_trace.jsonl` and update `sensor.battery_manager_decision` (default true) |
 | `temperature_based_discharge.*` | Temperature-to-discharge-hour mapping |
 | `ev_charger.*` | EV integration |

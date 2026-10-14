@@ -139,6 +139,32 @@ def find_profitable_discharge_starts(
     return starts
 
 
+def find_pre_window_sell_starts(
+    import_curve: Sequence[dict],
+    export_curve: Sequence[dict],
+    window_start: datetime,
+    top_x_discharge: int,
+    min_profit: float,
+    cost_basis: Optional[float] = None,
+) -> Set[str]:
+    """Return the sell quarter starts of the peak before the main charge window.
+
+    A day can have two price peaks, one before the midday charge window (the morning)
+    and one after it (the evening). ``top_x_discharge`` is the budget of each peak,
+    not of the whole day: the evening keeps its own top-X quarters after the window
+    and this picks the top-X profitable quarters before it. Profitability is the same
+    test as everywhere else (``cost_basis + min_profit``), so an unremarkable morning
+    price stays unsold.
+    """
+
+    before: List[dict] = []
+    for entry in export_curve:
+        bounds = _entry_bounds(entry, 15)
+        if bounds is not None and bounds[0] < window_start:
+            before.append(entry)
+    return find_profitable_discharge_starts(import_curve, before, top_x_discharge, min_profit, cost_basis)
+
+
 def calculate_price_ranges(
     import_curve: Sequence[dict],
     export_curve: Sequence[dict],

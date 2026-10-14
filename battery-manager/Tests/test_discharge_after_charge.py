@@ -31,18 +31,19 @@ def test_charge_window_and_sell_hours_on_2026_10_07(monkeypatch, amsterdam_tz):
     assert sum(p["duration"] for p in today) <= 120  # X = 2h
 
 
-def test_morning_peak_neither_sells_from_the_budget_nor_precharges_at_night(monkeypatch, amsterdam_tz):
+def test_morning_peak_has_its_own_budget_but_a_thin_margin_never_precharges_at_night(monkeypatch, amsterdam_tz):
     config = make_config(**{"heuristics.min_profit_threshold": 0.05})
     schedule = replay(monkeypatch, "21:30", soc=46, remaining_solar=0.0, config=config)
 
     tomorrow_sells = [p for p in _sells(schedule) if local_start(p).day == 8]
     morning = [p for p in tomorrow_sells if local_start(p).hour < 11]
-    assert morning == []  # 08:00 @0.401 is before tomorrow's 11:30 charge window
+    assert morning, "tomorrow's 08:00 peak is sold from the energy already in the battery"
+    assert [p for p in tomorrow_sells if local_start(p).hour >= 16], "the evening keeps its own budget"
     night_charge = [
         p for p in schedule["charge"]
         if local_start(p).day == 7 and local_start(p).hour >= 21
     ]
-    assert night_charge == []  # no 21:45 / 22:45 charge
+    assert night_charge == []  # 0.396 x efficiency - 0.31 is below the margin: no 21:45 / 22:45 grid charge
 
 
 def test_legacy_mode_still_picks_the_morning_peak(monkeypatch, amsterdam_tz):
@@ -77,8 +78,10 @@ def test_sell_budget_is_not_used_up_by_quarters_before_the_charge_window(amsterd
 
     legacy_hours = sorted({s[11:13] for s in legacy.discharge_slot_starts})
     plan_hours = sorted({s[11:13] for s in plan.discharge_slot_starts})
-    assert legacy_hours == ["07", "08"]  # all 8 quarters go to the morning
-    assert plan_hours == ["18", "19"]  # sold after the 11:00-14:00 charge window
+    assert legacy_hours == ["07", "08"]  # whole-day ranking: all 8 quarters go to the morning, the evening gets none
+    # X hours per peak: the evening keeps its 8 quarters after the 11:00-14:00 charge window, the morning has 8 of its own.
+    assert plan_hours == ["07", "08", "18", "19"]
+    assert len(plan.discharge_slot_starts) == 16 and len(plan.pre_window_sell_starts) == 8
     assert plan.sell_from is not None and plan.sell_from.hour == 14
 
 
