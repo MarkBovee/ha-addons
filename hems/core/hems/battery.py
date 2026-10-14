@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from hems.slots import SLOT_H
 
 INF = float("inf")
+EXPLAIN_TOLERANCE = 0.005        # EUR per kWh: the SoC grid makes 'keep' a finite difference, so smaller gaps are rounding
 
 
 @dataclass
@@ -99,13 +100,23 @@ def _reason(action: str, s: Slot, grid_kwh: float, stored_value: float | None, e
     if stored_value is None:
         return Reasoning("none", action)
     net = s.load_kwh - s.pv_kwh
-    sell = eff * ((s.import_price if net > 0 else s.export_price) - cfg.min_profit_margin)
+    # The marginal kWh sold is priced where it lands: a discharge that exceeds the house load is exported, so it earns the
+    # export price even while the house is a net consumer (the planner's own cost uses the grid flow after the discharge).
+    lands_on_import = grid_kwh > 0 if action == "discharge" else net > 0
+    sell = eff * ((s.import_price if lands_on_import else s.export_price) - cfg.min_profit_margin)
     buy_price = s.import_price if (grid_kwh > 0 if action == "charge" else net >= 0) else s.export_price
     buy = buy_price / eff
+    # The marginal comparison explains most choices. The value function is not convex (the margin only applies to
+    # discharging), so now and then the plan sells below or buys above the end-of-slot 'keep' because the whole path
+    # pays; then the text says so instead of printing a comparison that is false on its face.
     if action == "discharge":
-        return Reasoning("sell", f"sell {sell:.3f} > keep {stored_value:.3f}", sell, buy)
+        text = f"sell {sell:.3f} > keep {stored_value:.3f}" if sell + EXPLAIN_TOLERANCE >= stored_value else \
+            f"plan-level sale: sell {sell:.3f} < keep {stored_value:.3f} at the margin"
+        return Reasoning("sell", text, sell, buy)
     if action == "charge":
-        return Reasoning("buy", f"buy {buy:.3f} < keep {stored_value:.3f}", sell, buy)
+        text = f"buy {buy:.3f} < keep {stored_value:.3f}" if buy <= stored_value + EXPLAIN_TOLERANCE else \
+            f"plan-level charge: buy {buy:.3f} > keep {stored_value:.3f} at the margin"
+        return Reasoning("buy", text, sell, buy)
     if at_floor and sell > stored_value:
         return Reasoning("floor", f"hold at reserve floor (sell {sell:.3f} > keep {stored_value:.3f})", sell, buy)
     if at_full and buy < stored_value:

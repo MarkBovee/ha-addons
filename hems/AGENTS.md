@@ -28,6 +28,8 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 - Planner and executor are separate (`hems/core/hems/executor.py`). The planner decides the shape of the day from forecasts; the executor re-checks the live SoC before anything is sent and on every SoC update. Any code that will write to a device must take its power from `Execution.power_w`, never from the plan's command, and the planner and executor share the floor (`battery.floor_fraction`).
 - Times in logs and readers always say the day when it is not the plan's first day (`decision_log.when`, `+1d 07:30`): plans run 48 h and an unlabelled 07:30 reads as today.
 - The HA log must show the decisions: the integration sets its own logger to INFO at setup (the server runs `logger: default: warning`). Do not move per-cycle lines to DEBUG.
+- The planner has one economic objective over the whole horizon. Do not add hour budgets, fixed price ceilings, or "only after X" candidate filters: a rule that silently removes quarters hides a profitable peak (battery-manager missed the morning peak of 2026-10-14 this way, see `docs/hems/intake-decisions.md`). A constraint is a priced term and shows up in the trace with its reason.
+- The text that explains a decision must be true: sell value is priced where the kWh lands (import price only while the discharge stays below the house load), and when the marginal comparison does not confirm the choice the reason says "plan-level". `tests/test_two_peaks.py` guards both.
 - Weather (Open-Meteo) requests carry coordinates rounded to 0.01 degrees. Keep it that way.
 
 ## Tests
