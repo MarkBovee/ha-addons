@@ -40,7 +40,7 @@ Alle sensoren hangen onder één apparaat "HEMS". Vermogens volgen de HEMS-conve
 | `binary_sensor.hems_tomorrow_prices_available` | aan zodra (een deel van) de prijzen van morgen bekend zijn; attributen `tomorrow_intervals`, `prices_until`, `price_source` |
 | `sensor.hems_import_price`, `sensor.hems_export_price` | prijs van het huidige kwartier; export met bonus alleen overdag en bij positieve prijs |
 | `sensor.hems_pv_forecast_24h` | PV-verwachting komende 24 uur (kWh) |
-| `sensor.hems_plan` | aantal geplande kwartieren; attribuut `slots` met de komende 12 uur |
+| `sensor.hems_plan` | het plan als zin, in de taal van Home Assistant en lokale tijd: `Laden 10:45–13:15 · Ontladen 15:45–18:15 · Laden morgen 00:45–03:45`; attributen `windows` (dezelfde vensters met kWh, vermogen, SoC en gemiddelde prijs), `quarters` (aantal geplande kwartieren) en `slots` (de komende 12 uur per kwartier met `start`, `action`, `power_w`, `soc_kwh`, `reason`) |
 
 ## Logging: alle beslissingen en de hele plan-boom
 

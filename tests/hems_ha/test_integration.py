@@ -101,7 +101,8 @@ async def test_plans_in_dry_run_and_publishes_sensors_with_a_reason(recorder_moc
     assert action.attributes["weather"] is True and action.attributes["load_source"] == "default"
     assert action.attributes["price_source"] == "market" and action.attributes["price_check_max_diff"] < 0.00015   # Nord Pool agrees with the price sensor
     assert float(hass.states.get("sensor.hems_import_price").state) == pytest.approx(0.3375, abs=0.2)
-    assert int(hass.states.get("sensor.hems_plan").state) > 0 and hass.states.get("sensor.hems_plan").attributes["slots"]
+    plan = hass.states.get("sensor.hems_plan")
+    assert plan.state[:6] in ("Charge", "Discha") and "–" in plan.state and plan.attributes["slots"] and plan.attributes["windows"]
     assert float(hass.states.get("sensor.hems_pv_forecast_24h").state) > 0
     trace = (Path(hass.config.path("hems", "decision_trace.jsonl"))).read_text().splitlines()
     assert json.loads(trace[-1])["dry_run"] is True and json.loads(trace[-1])["status"] == "ok"
@@ -250,11 +251,11 @@ async def test_the_decision_record_explains_inputs_comparison_and_plan_shape(rec
 
 
 async def test_every_cycle_logs_the_full_plan_as_compact_arrays(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
-    """plans.jsonl holds all planned quarters of the cycle, equal in number to what sensor.hems_plan reports."""
+    """plans.jsonl holds all planned quarters of the cycle, equal in number to what sensor.hems_plan reports as `quarters`."""
     set_states(hass)
     await setup_entry(hass, freezer, aioclient_mock)
     plan = read_jsonl(hass, "plans.jsonl")[-1]
-    assert plan["n"] == int(hass.states.get("sensor.hems_plan").state) and plan["start"] == plan["cycle"]
+    assert plan["n"] == hass.states.get("sensor.hems_plan").attributes["quarters"] and plan["start"] == plan["cycle"]
     assert len(plan["a"]) == plan["n"] and all(len(plan[k]) == plan["n"] for k in ("w", "soc", "imp", "exp", "load", "pv", "keep"))
 
 
@@ -362,3 +363,26 @@ async def test_the_integration_makes_its_info_lines_visible_but_leaves_a_configu
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert package.level == logging.DEBUG
+
+
+async def test_the_plan_sensor_says_in_words_what_happens_when(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The state is read by a person: windows in local time in the language of Home Assistant, the quarter count is an attribute."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
+    hass.config.language = "nl"
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    plan = hass.states.get("sensor.hems_plan")
+    assert plan.state.startswith(("Laden ", "Ontladen ")) and plan.state.count("–") >= 1 and len(plan.state) <= 255
+    window = plan.attributes["windows"][0]
+    assert window["from"].endswith(("+01:00", "+02:00")) and window["action"] in ("charge", "discharge") and plan.attributes["quarters"] > 48
+    first_slot = plan.attributes["slots"][0]
+    assert set(first_slot) == {"start", "action", "power_w", "soc_kwh", "reason"} and first_slot["start"].endswith(("+01:00", "+02:00"))
+
+
+async def test_the_plan_sensor_has_no_state_without_a_decision(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """No SoC means no plan: the state is unknown, not a misleading '0'."""
+    set_states(hass)
+    hass.states.async_remove("sensor.soc")
+    await setup_entry(hass, freezer, aioclient_mock)
+    plan = hass.states.get("sensor.hems_plan")
+    assert plan.state == "unknown" and plan.attributes["status"] != "ok"

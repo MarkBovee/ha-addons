@@ -25,7 +25,7 @@ from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_
                     PLANS_FILE, RETRY_DELAY, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.contracts import MarketPrices
-from .engine.decision_log import cycle_line, event_line, plan_tree, settings_snapshot
+from .engine.decision_log import cycle_line, event_line, plan_summary, plan_tree, plan_windows, plan_words, settings_snapshot
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
 from .engine.dryrun import EngineInputs, EngineOutput, EngineSettings, step
 from .engine.executor import AS_PLANNED, Execution, execute
@@ -48,6 +48,8 @@ class HemsSnapshot:
     tomorrow_quarters: int                 # quarters of tomorrow's delivery day that are known (0 = not published)
     prices_until: datetime | None          # end of the last known price quarter
     execution: Execution                   # what the executor would send now, after checking the live SoC
+    plan_text: str = ""                    # the charge and discharge windows as one readable line, in the language of Home Assistant
+    plan_windows: tuple[dict, ...] = ()    # the same windows with local times, for the plan sensor's attributes
 
 
 def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -> EngineSettings:
@@ -305,4 +307,13 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             await self._log_event("retry", in_seconds=RETRY_DELAY.total_seconds(), status=output.status)
         known = set(self._market.starts if self._market else ()) | {t for t, _ in inputs.import_curve}
         prices_until = max(known) + timedelta(minutes=15) if known else None
-        return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution)
+        text, windows = self._plan_for_users(output)
+        return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows)
+
+    def _plan_for_users(self, output: EngineOutput) -> tuple[str, tuple[dict, ...]]:
+        """The plan's windows as a sentence and as local-time records; empty when this cycle has no plan."""
+        segments, slot_start = output.trace.get("segments"), output.trace.get("slot_start")
+        if not segments or not slot_start:
+            return "", ()
+        tz, start = dt_util.get_default_time_zone(), datetime.fromisoformat(slot_start)
+        return plan_summary(segments, start, tz, plan_words(self.hass.config.language)), tuple(plan_windows(segments, tz))

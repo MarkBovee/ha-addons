@@ -8,6 +8,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, Sen
 from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from . import HemsConfigEntry
 from .coordinator import HemsCoordinator, HemsSnapshot
@@ -40,14 +41,16 @@ def _first_price(snap: HemsSnapshot, series_name: str) -> float | None:
 
 
 def _plan_preview(snap: HemsSnapshot) -> dict[str, Any]:
-    """Compact attribute with the next quarters of the plan: start, action, AC watts, SoC after."""
+    """The plan for a dashboard: the windows, the number of planned quarters, and the next quarters one by one (local times)."""
     d = snap.output.decision
     if not d:
         return {"status": snap.output.status}
+    tz = dt_util.get_default_time_zone()
     slots = d.plan.slots[:PLAN_PREVIEW_SLOTS]
-    return {"status": snap.output.status, "pv_gain_w_per_wm2": round(snap.pv_gain_w_per_wm2, 2), "history_hours": snap.history_hours,
-            "slots": [{"t": (d.slot_start + i * QUARTER).isoformat(), "a": s.action, "w": round(s.battery_kwh * 4000), "soc_kwh": round(s.soc_kwh, 2),
-                       "why": s.reason} for i, s in enumerate(slots)]}
+    return {"status": snap.output.status, "windows": list(snap.plan_windows), "quarters": len(d.plan.slots),
+            "pv_gain_w_per_wm2": round(snap.pv_gain_w_per_wm2, 2), "history_hours": snap.history_hours,
+            "slots": [{"start": (d.slot_start + i * QUARTER).astimezone(tz).isoformat(), "action": s.action, "power_w": round(s.battery_kwh * 4000),
+                       "soc_kwh": round(s.soc_kwh, 2), "reason": s.reason} for i, s in enumerate(slots)]}
 
 
 def _execution_attrs(snap: HemsSnapshot) -> dict[str, Any]:
@@ -87,8 +90,7 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
                           value=lambda s: round(sum(v for t, v in s.output.pv_kwh.items() if s.output.decision and
                                                     s.output.decision.slot_start <= t < s.output.decision.slot_start + 96 * QUARTER), 1) if s.output.pv_kwh else None),
-    HemsSensorDescription(key="plan", translation_key="plan",
-                          value=lambda s: len(s.output.decision.plan.slots) if s.output.decision else 0, attributes=_plan_preview),
+    HemsSensorDescription(key="plan", translation_key="plan", value=lambda s: s.plan_text or None, attributes=_plan_preview),
 )
 
 

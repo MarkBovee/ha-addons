@@ -30,6 +30,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 - The HA log must show the decisions: the integration sets its own logger to INFO at setup (the server runs `logger: default: warning`). Do not move per-cycle lines to DEBUG.
 - The planner has one economic objective over the whole horizon. Do not add hour budgets, fixed price ceilings, or "only after X" candidate filters: a rule that silently removes quarters hides a profitable peak (battery-manager missed the morning peak of 2026-10-14 this way, see `docs/hems/intake-decisions.md`). A constraint is a priced term and shows up in the trace with its reason.
 - The text that explains a decision must be true: sell value is priced where the kWh lands (import price only while the discharge stays below the house load), and when the marginal comparison does not confirm the choice the reason says "plan-level". `tests/test_two_peaks.py` guards both.
+- A state that a user reads must make sense without this code: no bare counts or codes (the plan sensor said `57`, the number of quarters). Say what happens when, in local time and the language of Home Assistant; put the numbers in attributes. Attributes use readable names, not one-letter keys.
 - Weather (Open-Meteo) requests carry coordinates rounded to 0.01 degrees. Keep it that way.
 
 ## Tests

@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from test_rolling import recorded_day
 
 from hems.battery import BatteryConfig
-from hems.decision_log import best_later, cycle_line, event_line, plan_detail, plan_segments, plan_tree, settings_snapshot, when
+from hems.decision_log import (STATE_LIMIT, best_later, cycle_line, event_line, plan_detail, plan_segments, plan_summary, plan_tree, plan_windows,
+                               plan_words, settings_snapshot, when)
 from hems.forecast import LOCAL_TZ
 from hems.prices import PriceModel
 from hems.rolling import HorizonInputs, plan_next
@@ -139,3 +140,55 @@ def test_an_event_line_stays_one_readable_line_however_large_the_event_is():
     line = event_line("settings", {"hash": "ab12cd34", "values": {"battery": {"x": "y" * 500}}, "previous": None})
     assert line.startswith("HEMS event settings hash=\"ab12cd34\"") and "previous=null" in line and line.count("\n") == 0 and len(line) < 720
     assert event_line("retry", {"in_seconds": 60.0, "status": "no_soc"}) == 'HEMS event retry in_seconds=60.0 status="no_soc"'
+
+
+PLAN_START = datetime(2026, 10, 14, 8, 45, tzinfo=timezone.utc)      # 10:45 local
+
+
+def run(action: str, begin_h: float, end_h: float) -> dict:
+    """A plan segment from `begin_h` to `end_h` hours after PLAN_START."""
+    begin, end = PLAN_START + timedelta(hours=begin_h), PLAN_START + timedelta(hours=end_h)
+    return {"from": begin.isoformat(), "to": end.isoformat(), "action": action, "kwh": 10.0, "avg_w": 5000,
+            "soc_from_pct": 30.0, "soc_to_pct": 70.0, "avg_price": 0.25}
+
+
+def test_the_plan_summary_reads_as_windows_in_local_time_with_the_day_for_tomorrow():
+    """What a user sees as the plan's state: what happens when, and 'tomorrow' for what is not today."""
+    segments = [run("charge", 0, 2.5), run("idle", 2.5, 5), run("discharge", 5, 7.5), run("idle", 7.5, 14), run("charge", 14, 17)]
+    assert plan_summary(segments, PLAN_START, LOCAL_TZ, plan_words("en")) == "Charge 10:45–13:15 · Discharge 15:45–18:15 · Charge tomorrow 00:45–03:45"
+    assert plan_summary(segments, PLAN_START, LOCAL_TZ, plan_words("nl-NL")).startswith("Laden 10:45–13:15 · Ontladen 15:45–18:15 · Laden morgen 00:45")
+    assert plan_words("fr") == plan_words("en") and plan_words(None) == plan_words("en")
+
+
+def test_a_window_that_crosses_midnight_says_which_day_it_ends_on():
+    """Discharging from 23:30 to 00:30 must not read as a window that ends before it starts."""
+    text = plan_summary([run("discharge", 12.75, 13.75)], PLAN_START, LOCAL_TZ, plan_words("nl"))
+    assert text == "Ontladen 23:30–morgen 00:30"
+
+
+def test_a_plan_without_windows_says_so_in_words():
+    """Idle all day: a sentence, not an empty state."""
+    assert plan_summary([run("idle", 0, 8)], PLAN_START, LOCAL_TZ, plan_words("nl")) == "Geen laden of ontladen gepland"
+    assert plan_summary([], PLAN_START, LOCAL_TZ, plan_words("en")) == "No charging or discharging planned"
+
+
+def test_a_long_plan_is_cut_after_a_whole_window_and_fits_the_state_limit():
+    """Home Assistant refuses a state over 255 characters; the line ends in an ellipsis instead of mid-window."""
+    segments = [run("charge" if i % 2 == 0 else "discharge", i * 1.0, i * 1.0 + 0.5) for i in range(40)]
+    text = plan_summary(segments, PLAN_START, LOCAL_TZ, plan_words("nl"))
+    assert len(text) <= STATE_LIMIT and text.endswith(" …") and text.startswith("Laden 10:45–11:15 · Ontladen 11:45–12:15")
+    assert all(part.split(" ")[0] in ("Laden", "Ontladen") and "–" in part for part in text[: -len(" …")].split(" · "))
+    truncated = plan_summary([run("charge", 0, 1), {"truncated": 3}], PLAN_START, LOCAL_TZ, plan_words("en"))
+    assert truncated == "Charge 10:45–11:45 …"
+
+
+def test_the_summary_of_a_real_plan_names_every_window_the_tree_names():
+    """The sentence and the log tree describe the same plan: same windows, same times."""
+    record = record_at(0)
+    start = datetime.fromisoformat(record["slot_start"])
+    text = plan_summary(record["segments"], start, LOCAL_TZ, plan_words("en"))
+    windows = plan_windows(record["segments"], LOCAL_TZ)
+    assert len(text.split(" · ")) == len(windows) >= 2 and "Charge" in text and "Discharge" in text
+    first = windows[0]
+    assert first["from"].endswith("+02:00") and set(first) == {"action", "from", "to", "kwh", "power_w", "soc_from_pct", "soc_to_pct", "avg_price_eur_kwh"}
+    assert all(w["action"] in ("charge", "discharge") for w in windows)

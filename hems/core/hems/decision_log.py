@@ -7,7 +7,7 @@ was computed from, so a past plan can be rebuilt and compared line by line.
 """
 import hashlib
 import json
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Mapping, Sequence
 
@@ -109,6 +109,73 @@ def when(moment: datetime, reference: datetime, tz: tzinfo) -> str:
     local, ref = moment.astimezone(tz), reference.astimezone(tz)
     days = (local.date() - ref.date()).days
     return f"{local:%H:%M}" if days == 0 else f"{days:+d}d {local:%H:%M}"
+
+
+STATE_LIMIT = 255                 # Home Assistant refuses a state longer than this
+WINDOW_SEPARATOR = " · "
+MORE = " …"
+
+
+@dataclass(frozen=True)
+class PlanWords:
+    """The words of the plan summary in one language: it is read by the user, unlike the log lines."""
+    charge: str
+    discharge: str
+    tomorrow: str
+    nothing: str
+
+
+PLAN_WORDS = {"en": PlanWords("Charge", "Discharge", "tomorrow", "No charging or discharging planned"),
+              "nl": PlanWords("Laden", "Ontladen", "morgen", "Geen laden of ontladen gepland")}
+
+
+def plan_words(language: str | None) -> PlanWords:
+    """The words for a Home Assistant language code ('nl', 'nl-NL'); English when the language is unknown."""
+    return PLAN_WORDS.get((language or "en").split("-")[0].lower(), PLAN_WORDS["en"])
+
+
+def _clock(moment: datetime, start: datetime, tz: tzinfo, words: PlanWords) -> str:
+    """Local HH:MM; a moment on a later local day than the plan start gets the day in words ('morgen 02:00', '+2d 02:00')."""
+    local = moment.astimezone(tz)
+    days = (local.date() - start.astimezone(tz).date()).days
+    if days == 0:
+        return f"{local:%H:%M}"
+    return f"{words.tomorrow if days == 1 else f'{days:+d}d'} {local:%H:%M}"
+
+
+def _windows(segments: Sequence[Mapping]) -> list[Mapping]:
+    """The charge and discharge runs of the plan; idle runs and the 'truncated' marker are not windows."""
+    return [s for s in segments if s.get("action") in ("charge", "discharge")]
+
+
+def plan_summary(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words: PlanWords, limit: int = STATE_LIMIT) -> str:
+    """The plan as one readable line for a sensor state: 'Laden 10:45–13:15 · Ontladen 15:45–18:15'.
+
+    Times are local; a window that starts on another day than the plan says so ('Laden morgen 02:00–05:00'). When the
+    windows do not fit in `limit` characters the line ends with an ellipsis after the last whole window."""
+    windows = _windows(segments)
+    if not windows:
+        return words.nothing
+    parts = []
+    for run in windows:
+        begin, end = datetime.fromisoformat(run["from"]), datetime.fromisoformat(run["to"])
+        same_day = begin.astimezone(tz).date() == end.astimezone(tz).date()
+        end_text = f"{end.astimezone(tz):%H:%M}" if same_day else _clock(end, start, tz, words)
+        parts.append(f"{words.charge if run['action'] == 'charge' else words.discharge} {_clock(begin, start, tz, words)}–{end_text}")
+    cut = any("truncated" in s for s in segments)           # the plan has more runs than the trace carries
+    text = WINDOW_SEPARATOR.join(parts)
+    while len(text) + (len(MORE) if cut else 0) > limit and len(parts) > 1:
+        parts.pop()
+        cut = True
+        text = WINDOW_SEPARATOR.join(parts)
+    return text + (MORE if cut else "")
+
+
+def plan_windows(segments: Sequence[Mapping], tz: tzinfo) -> list[dict]:
+    """The charge and discharge windows with readable names and local times, for a sensor attribute."""
+    return [{"action": s["action"], "from": datetime.fromisoformat(s["from"]).astimezone(tz).isoformat(),
+             "to": datetime.fromisoformat(s["to"]).astimezone(tz).isoformat(), "kwh": s["kwh"], "power_w": s["avg_w"],
+             "soc_from_pct": s["soc_from_pct"], "soc_to_pct": s["soc_to_pct"], "avg_price_eur_kwh": s["avg_price"]} for s in _windows(segments)]
 
 
 def _compare_text(compare: Mapping, start: datetime, tz: tzinfo) -> str:
