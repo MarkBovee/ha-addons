@@ -2305,6 +2305,51 @@ def test_supported_discharge_skip_log_includes_energy_budget_breakdown(caplog):
     assert feasible[2]["end"] - feasible[2]["start"] == timedelta(minutes=45)
 
 
+# An energy-empty note for a window more than 12 hours out rests on a speculative projection, so it stays out of the INFO log.
+def test_empty_battery_skip_note_is_not_logged_at_info_for_windows_beyond_the_horizon(caplog):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["battery_capacity_kwh"] = 25
+    config["soc"]["min_soc"] = 5
+    config["power"]["max_discharge_power"] = 8000
+    # At 6 kW the 0.07 kWh left after the first window is under a minute of discharge, so later windows drop instead of truncating.
+    config["power"]["min_scaled_power"] = 6000
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    near_start = now + timedelta(hours=4)
+    far_start = now + timedelta(hours=13)
+    discharge_windows = [
+        {"start": now + timedelta(hours=1), "end": now + timedelta(hours=3), "avg_price": 0.474},
+        {"start": near_start, "end": near_start + timedelta(hours=1), "avg_price": 0.457},
+        {"start": far_start, "end": far_start + timedelta(hours=1), "avg_price": 0.457},
+    ]
+    trace: list = []
+
+    with caplog.at_level(logging.DEBUG):
+        feasible = bm_main._filter_supported_discharge_windows(
+            discharge_windows,
+            [],
+            soc=100.0,
+            config=config,
+            not_before=now,
+            top_x_discharge_count=3,
+            min_scaled_power=6000,
+            trace=trace,
+        )
+
+    skip_levels = {
+        record.getMessage().split("window ")[1][:5]: record.levelno
+        for record in caplog.records
+        if "Skipping discharge window" in record.getMessage()
+    }
+    assert len(feasible) == 1
+    assert skip_levels == {
+        near_start.astimezone().strftime("%H:%M"): logging.INFO,
+        far_start.astimezone().strftime("%H:%M"): logging.DEBUG,
+    }
+    # The decision trace keeps both drops; only the INFO log goes quiet.
+    assert [entry["decision"] for entry in trace] == ["truncated", "dropped", "dropped"]
+
+
 def test_generate_schedule_scales_charge_power_per_slot(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["heuristics"]["adaptive_price_threshold"] = 0.27
