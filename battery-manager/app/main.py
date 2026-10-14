@@ -1225,6 +1225,8 @@ def _sum_discharge_hours_before_main_charge(
 # below the SOC floor, so the pre-check is deliberately non-conservative here.
 MIN_DISCHARGE_TRUNCATE_MINUTES = 1
 MIN_DISCHARGE_ENERGY_KWH = 0.1
+# Energy-empty notes for windows further out than this stay out of the INFO log: the SOC projection that far ahead is speculative.
+SKIP_NOTE_HORIZON_HOURS = 12
 
 
 def _filter_supported_discharge_windows(
@@ -1395,7 +1397,14 @@ def _filter_supported_discharge_windows(
             _period_energy_kwh(planned_power, MIN_DISCHARGE_TRUNCATE_MINUTES),
         )
         if available_before_window_kwh < minimum_window_energy_kwh - 1e-6:
-            logger.info(
+            # The drop itself still applies and is recorded in the decision trace; only the log level changes.
+            skip_log_level = (
+                logging.INFO
+                if effective_start - not_before <= timedelta(hours=SKIP_NOTE_HORIZON_HOURS)
+                else logging.DEBUG
+            )
+            logger.log(
+                skip_log_level,
                 "⛔ Skipping discharge window %s @€%.3f: battery effectively empty for this window (needs %.2fkWh, only %.2fkWh available before start)",
                 effective_start.astimezone().strftime("%H:%M"),
                 float(window.get("avg_price", 0.0)),
