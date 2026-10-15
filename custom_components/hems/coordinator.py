@@ -25,7 +25,7 @@ from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_
                     PLANS_FILE, RETRY_DELAY, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.contracts import MarketPrices
-from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot
+from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot, window_tree
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
 from .engine.dryrun import EngineInputs, EngineOutput, EngineSettings, step
 from .engine.executor import AS_PLANNED, Execution, execute
@@ -33,6 +33,7 @@ from .engine.pvforecast import fit_gain_from_history
 from .engine.prices import PriceModel
 from .engine.rolling import Decision
 from .engine.trace import TraceWriter
+from .engine.windows import UNSOLD
 from .engine.weather import OPEN_METEO_URL, Weather, open_meteo_params, parse_open_meteo
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,6 +92,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._pv_history: list[tuple[datetime, float]] = []
         self._history_at: datetime | None = None
         self._weather: Weather | None = None
+        self._last_windows: tuple | None = None
         self.build = "unknown"                      # set by async_setup_entry before the first cycle
         self._market_prices: dict[datetime, float] = {}
         self._market: MarketPrices | None = None
@@ -230,6 +232,25 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             _LOGGER.warning("HEMS executor overrides the plan: %s (planned %s W, now %s W)", execution.reason, execution.planned_w, execution.power_w)
         self._last_execution_code = execution.code
 
+    async def _note_windows(self, output: EngineOutput) -> None:
+        """Log the sell windows when what the plan does with them changes, and warn about a window that pays but is not sold.
+
+        'unsold' (energy is there, the window pays, no better window explains it) and sales outside every window are what a
+        reviewer would otherwise have to find by hand: a missed peak, or a plan that sells where the prices do not say so."""
+        windows = output.trace.get("windows")
+        if windows is None:
+            return
+        outside = output.trace.get("windows_outside_kwh", 0.0)
+        signature = (tuple((w["from"], w["status"]) for w in windows), outside > 0)
+        if signature == self._last_windows:
+            return
+        self._last_windows = signature
+        compact = [{k: w[k] for k in ("from", "to", "peak", "viable", "status", "sold_kwh", "from_stock_kwh")} for w in windows]
+        await self._log_event("windows", windows=compact, outside_kwh=outside)
+        unsold = [w for w in windows if w["status"] == UNSOLD]
+        if unsold or outside >= 0.5:
+            _LOGGER.warning("HEMS window check: %s unsold window(s) %s, %.1f kWh sold outside every window", len(unsold), [(w["from"], w["peak"]) for w in unsold], outside)
+
     async def async_recheck_execution(self) -> None:
         """Check the plan's command against the live SoC again inside the quarter; publish and log when the outcome changes.
 
@@ -275,9 +296,10 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         if execution.code != AS_PLANNED:
             suffix = f" | executor {execution.code}" + (f": {execution.power_w} W instead of {execution.planned_w} W" if execution.overridden else "")
         _LOGGER.info("%s%s", cycle_line(record, tz), suffix)
-        tree = plan_tree(record, tz)
+        tree = plan_tree(record, tz) + window_tree(record, tz)
         if tree:
             _LOGGER.info("%s", "\n".join(tree))
+        await self._note_windows(output)
 
     async def _async_update_data(self) -> HemsSnapshot:
         """One planning cycle: inputs -> engine -> trace -> snapshot for the sensors."""
@@ -320,4 +342,4 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         if not segments or not slot_start:
             return "", (), ""
         tz, start, words = dt_util.get_default_time_zone(), datetime.fromisoformat(slot_start), plan_words(self.hass.config.language)
-        return plan_summary(segments, start, tz, words), tuple(plan_windows(segments, tz)), plan_table(segments, start, tz, words)
+        return plan_summary(segments, start, tz, words), tuple(plan_windows(segments, tz)), plan_table(segments, start, tz, words, output.decision.analysis if output.decision else None)

@@ -1,5 +1,7 @@
+import csv
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from test_rolling import recorded_day
 
@@ -200,16 +202,16 @@ def test_the_plan_table_starts_with_what_happens_now_and_lists_the_periods_after
     segments = [run("idle", 0, 2, soc=(44.0, 44.0)), run("charge", 2, 3.5, 2800, 0.262, (44.0, 70.0)), run("idle", 3.5, 3.75, soc=(70.0, 70.0)),
                 run("charge", 3.75, 4.5, 2800, 0.262, (70.0, 100.0)), run("idle", 4.5, 9.5, soc=(100.0, 100.0)), run("discharge", 9.5, 11.5, 8000, 0.519, (100.0, 31.0))]
     assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("nl")).splitlines() == [
-        "|Tijd|Type|Vermogen|Prijs|SoC|", "|---|---|---|---|---|",
-        "|🔴 10:45–12:45|💤 Rust|0 W|–|44%|", "|⏰ 12:45–15:15|⚡ Laden|2800 W|€0.262|44→100%|", "|⏰ 20:15–22:15|📤 Ontladen|8000 W|€0.519|100→31%|"]
-    assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[0] == "|Time|Type|Power|Price|SoC|"
+        "|Tijd|Type|Vermogen|Prijs|SoC|Doel|", "|---|---|---|---|---|---|",
+        "|🔴 10:45–12:45|💤 Rust|0 W|–|44%||", "|⏰ 12:45–15:15|⚡ Laden|2800 W|€0.262|44→100%||", "|⏰ 20:15–22:15|📤 Ontladen|8000 W|€0.519|100→31%||"]
+    assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[0] == "|Time|Type|Power|Price|SoC|Purpose|"
 
 
 def test_the_plan_table_marks_the_current_window_names_tomorrow_and_the_cut():
     """A window going on now is 🔴 with its own power; a window of tomorrow carries the day; a cut plan ends in a row with an ellipsis."""
     segments = [run("charge", 0, 1.5), run("idle", 1.5, 14), run("discharge", 14, 15), {"truncated": 2}]
     rows = plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[2:]
-    assert rows == ["|🔴 10:45–12:15|⚡ Charge|5000 W|€0.250|30→70%|", "|⏰ tomorrow 00:45–01:45|📤 Discharge|5000 W|€0.250|30→70%|", "|…|||||"]
+    assert rows == ["|🔴 10:45–12:15|⚡ Charge|5000 W|€0.250|30→70%||", "|⏰ tomorrow 00:45–01:45|📤 Discharge|5000 W|€0.250|30→70%||", "|…||||||"]
 
 
 def test_a_night_charge_and_a_midday_top_up_stay_two_rows():
@@ -227,4 +229,44 @@ def test_a_plan_table_without_windows_is_a_sentence_not_an_empty_table():
 def test_an_idle_row_shows_one_soc_even_when_standby_loss_moved_it_a_little():
     """44.4% to 43.6% is 'rest at 44%', not '44→44%'."""
     segments = [run("idle", 0, 2, soc=(44.4, 43.6)), run("charge", 2, 4)]
-    assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[2] == "|🔴 10:45–12:45|💤 Idle|0 W|–|44%|"
+    assert plan_table(segments, PLAN_START, LOCAL_TZ, plan_words("en")).splitlines()[2] == "|🔴 10:45–12:45|💤 Idle|0 W|–|44%||"
+
+
+def real_plan(day: int, soc: float):
+    """A real day planned from `soc`: (plan start, plan segments, window analysis)."""
+    from hems.battery import Slot, plan
+    from hems.decision_log import plan_segments
+    from hems.windows import analyse
+    cfg = BatteryConfig()
+    with (Path(__file__).parent / "fixtures" / f"real_prices_2026_10_{day}.csv").open(newline="") as f:
+        rows = [(datetime.fromisoformat(r["quarter_utc"]), float(r["import_price_eur_kwh"]), float(r["export_price_eur_kwh"])) for r in csv.DictReader(f)]
+    starts, slots = [r[0] for r in rows], [Slot(r[1], r[2], 0.1, 0.0) for r in rows]
+    result = plan(slots, soc * cfg.capacity_kwh, cfg)
+    return starts[0], plan_segments(result, slots, starts[0], soc * cfg.capacity_kwh, cfg.capacity_kwh), analyse(starts, slots, result, soc * cfg.capacity_kwh, cfg)
+
+
+def test_the_table_says_which_sale_a_charge_is_for_and_which_peak_a_sale_takes():
+    """15 Oct from 30%: the midday charge is for the evening sale, the evening sale takes the 0.467 peak, the morning has nothing to sell."""
+    start, segments, analysis = real_plan(15, 0.30)
+    rows = plan_table(segments, start, LOCAL_TZ, plan_words("nl"), analysis).splitlines()[2:]
+    assert any("⚡ Laden" in r and r.endswith("|voor verkoop 17:15–19:30|") for r in rows)
+    assert any("📤 Ontladen" in r and r.endswith("|piek 0.467|") for r in rows)
+    start, segments, analysis = real_plan(15, 0.83)
+    rows = plan_table(segments, start, LOCAL_TZ, plan_words("en"), analysis).splitlines()[2:]
+    assert any("📤 Discharge" in r and r.endswith("|peak 0.489 (from stock)|") for r in rows)
+
+
+def test_the_window_lines_for_the_log_give_the_thresholds_and_the_status():
+    """What `halog` shows: the 15 Oct morning peak needs 0.514 after a night charge (has 0.489) or 0.382 when bought back at 14:00."""
+    from hems.prices import PriceSeries
+    from hems.rolling import HorizonInputs, plan_next
+    with (Path(__file__).parent / "fixtures" / "real_prices_2026_10_15.csv").open(newline="") as f:
+        rows = [(datetime.fromisoformat(r["quarter_utc"]), float(r["import_price_eur_kwh"]), float(r["export_price_eur_kwh"])) for r in csv.DictReader(f)]
+    prices = PriceSeries(tuple(r[0] for r in rows), tuple(r[1] for r in rows), tuple(r[2] for r in rows))
+    from hems.decision_log import window_tree
+    decision = plan_next(HorizonInputs(datetime(2026, 10, 15, 0, 7, tzinfo=LOCAL_TZ), 0.30 * 25, prices, {}, {}), BatteryConfig())
+    lines = window_tree(decision.trace, LOCAL_TZ)
+    assert lines[0].startswith("HEMS sell windows") and len(lines) == 3
+    assert "06:30 - 10:30 no_stock" in lines[1] and "needs 0.514 (-0.025)" in lines[1] and "bought back at 14:00 needs 0.382 (+0.107)" in lines[1] and "nothing sold" in lines[1]
+    assert "planned" in lines[2] and "sold 17:15 - 19:30" in lines[2]
+    assert window_tree({"status": "no_soc"}, LOCAL_TZ) == []

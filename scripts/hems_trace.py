@@ -13,6 +13,7 @@ Usage:
   python3 scripts/hems_trace.py why TIME [--cycle T]   # why the plan does what it does at TIME (default: latest plan)
   python3 scripts/hems_trace.py diff A B               # how the plan of cycle B differs from the plan of cycle A
   python3 scripts/hems_trace.py events [-n 30] [--type market]
+  python3 scripts/hems_trace.py windows [TIME]         # the sell windows of one cycle (default latest) and how each window's status moved over the cycles
   python3 scripts/hems_trace.py halog [-n 3000]        # the HEMS lines of the Home Assistant core log (REST proxy, read-only)
 TIME is HH:MM (today, local), 'YYYY-MM-DD HH:MM' (local) or an ISO timestamp.
 """
@@ -29,7 +30,7 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "hems" / "core"))
-from hems.decision_log import when  # noqa: E402  (one day-aware time format for the log and for this reader)
+from hems.decision_log import when, window_tree  # noqa: E402  (one day-aware time format and one window text for the log and for this reader)
 
 DEFAULT_DIR = ROOT / "docs" / "hems" / "observations" / "data" / "trace"
 REMOTE_DIR = "/config/hems"
@@ -188,6 +189,28 @@ def format_events(events: list[dict], count: int = 30, kind: str | None = None) 
     return [f"{local(e['ts'], '%d %H:%M:%S')}  {e['event']:<9} " + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)[:90]}" for k, v in e.items() if k not in ("ts", "event")) for e in chosen]
 
 
+def format_windows(records: list[dict], moment: datetime | None = None) -> list[str]:
+    """The windows of one cycle as the log shows them, then per window the statuses it went through over all cycles that saw it.
+
+    A window whose status flips between 'planned' and 'unsold' from one cycle to the next is a plan that does not hold."""
+    ok = [r for r in records if r.get("windows") is not None and "slot_start" in r]
+    if not ok:
+        return ["no cycle with sell windows logged (a build before the window analysis?)"]
+    record = cycle_at(ok, moment, "slot_start") if moment else ok[-1]
+    lines = window_tree(record, TZ) or ["no sell window in the horizon of that cycle"]
+    history: dict[str, list[tuple[str, str]]] = {}
+    for r in ok:
+        for w in r["windows"]:
+            steps = history.setdefault(w["from"], [])
+            if not steps or steps[-1][1] != w["status"]:
+                steps.append((r["slot_start"], w["status"]))
+    if history:
+        lines += ["", "status per window over the cycles (cycle in which it began):"]
+    for start, steps in history.items():
+        lines.append(f"  {local_when(start, steps[0][0])}: " + " -> ".join(f"{status} ({local_when(at, steps[0][0])})" for at, status in steps))
+    return lines
+
+
 def pull(directory: Path) -> list[str]:
     """Copy the logs (and their rotated generations) from the server, using the SSH key and sudo of hems/deploy.py."""
     spec = importlib.util.spec_from_file_location("hems_deploy", ROOT / "hems" / "deploy.py")
@@ -255,6 +278,8 @@ def main() -> int:
     events = sub.add_parser("events")
     events.add_argument("-n", type=int, default=30)
     events.add_argument("--type")
+    windows = sub.add_parser("windows")
+    windows.add_argument("time", nargs="?")
     halog = sub.add_parser("halog")
     halog.add_argument("-n", type=int, default=3000, help="how many core-log lines to look through")
     args = parser.parse_args()
@@ -282,6 +307,8 @@ def main() -> int:
         print("\n".join(diff_plans(first, second)) if first and second else "plan not found")
     elif args.command == "events":
         print("\n".join(format_events(evs, args.n, args.type)))
+    elif args.command == "windows":
+        print("\n".join(format_windows(decisions, parse_time(args.time) if args.time else None)))
     return 0
 
 

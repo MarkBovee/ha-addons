@@ -14,6 +14,7 @@ from . import HemsConfigEntry
 from .coordinator import HemsCoordinator, HemsSnapshot
 from .engine import executor
 from .engine.outlook import first_window, forecast_series, hour_mean, hour_total, price_curve, window_total
+from .engine.windows import record
 from .entity import HemsEntity
 
 QUARTER = timedelta(minutes=15)
@@ -52,6 +53,22 @@ def _plan_preview(snap: HemsSnapshot) -> dict[str, Any]:
             "pv_gain_w_per_wm2": round(snap.pv_gain_w_per_wm2, 2), "history_hours": snap.history_hours,
             "slots": [{"start": (d.slot_start + i * QUARTER).astimezone(tz).isoformat(), "action": s.action, "power_w": round(s.battery_kwh * 4000),
                        "soc_kwh": round(s.soc_kwh, 2), "reason": s.reason} for i, s in enumerate(slots)]}
+
+
+def _sell_window_start(snap: HemsSnapshot):
+    """Start of the next sell window as the plan sells it (the band's start when the plan sells nothing in it); None without a window."""
+    analysis = snap.output.decision.analysis if snap.output.decision else None
+    return (analysis.reports[0].sold_from or analysis.reports[0].window.start) if analysis and analysis.reports else None
+
+
+def _sell_window_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """All sell windows of the horizon in local time with their thresholds, status and the charges that feed them."""
+    analysis = snap.output.decision.analysis if snap.output.decision else None
+    if not analysis:
+        return {}
+    tz = dt_util.get_default_time_zone()
+    return {"status": analysis.reports[0].status if analysis.reports else None, "outside_kwh": analysis.outside_kwh,
+            "windows": [record(r, tz) for r in analysis.reports]}
 
 
 def _execution_attrs(snap: HemsSnapshot) -> dict[str, Any]:
@@ -153,6 +170,8 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
     HemsSensorDescription(key="temperature_forecast", translation_key="temperature_forecast", device_class=SensorDeviceClass.TEMPERATURE,
                           native_unit_of_measurement=UnitOfTemperature.CELSIUS, value=lambda s: _hour_mean(s, _weather_series(s, "temperature_c")),
                           attributes=lambda s: _forecast_attrs(s, _weather_series(s, "temperature_c"), "celsius")),
+    HemsSensorDescription(key="sell_window", translation_key="sell_window", device_class=SensorDeviceClass.TIMESTAMP,
+                          value=_sell_window_start, attributes=_sell_window_attrs),
     HemsSensorDescription(key="charge_window", translation_key="charge_window", device_class=SensorDeviceClass.TIMESTAMP,
                           value=lambda s: _window_start(s, "charge"), attributes=lambda s: _window_attrs(s, "charge")),
     HemsSensorDescription(key="discharge_window", translation_key="discharge_window", device_class=SensorDeviceClass.TIMESTAMP,

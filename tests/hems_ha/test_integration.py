@@ -376,7 +376,7 @@ async def test_the_plan_sensor_says_in_words_what_happens_when(recorder_mock, ha
     window = plan.attributes["windows"][0]
     assert window["from"].endswith(("+01:00", "+02:00")) and window["action"] in ("charge", "discharge") and plan.attributes["quarters"] > 48
     table = plan.attributes["markdown"].splitlines()
-    assert table[0] == "|Tijd|Type|Vermogen|Prijs|SoC|" and table[2].startswith("|🔴 ") and len(table) >= 4
+    assert table[0] == "|Tijd|Type|Vermogen|Prijs|SoC|Doel|" and table[2].startswith("|🔴 ") and len(table) >= 4
     first_slot = plan.attributes["slots"][0]
     assert set(first_slot) == {"start", "action", "power_w", "soc_kwh", "reason"} and first_slot["start"].endswith(("+01:00", "+02:00"))
 
@@ -461,8 +461,42 @@ async def test_every_record_and_the_device_say_which_build_made_them(recorder_mo
     assert dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)[0].sw_version == "abc1234"
 
 
-async def test_a_copy_without_a_stamp_reports_unknown(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
-    """Nothing breaks when BUILD is missing (a hand-copied integration, the test suite): the build is 'unknown'."""
+async def test_a_copy_without_a_stamp_reports_unknown(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock, monkeypatch):
+    """Nothing breaks when BUILD is missing (a hand-copied integration): the build is 'unknown'."""
+    monkeypatch.setattr("custom_components.hems.BUILD_FILE", "NO_SUCH_STAMP")
     set_states(hass)
     await setup_entry(hass, freezer, aioclient_mock)
     assert read_jsonl(hass, "decision_trace.jsonl")[-1]["build"] == "unknown"
+
+
+async def test_the_sell_windows_are_a_sensor_a_trace_field_and_an_event(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Detected windows are visible three ways: the next window as a sensor, every window in the decision record, a `windows` event when they change."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    sensor = hass.states.get("sensor.hems_sell_window")
+    windows = sensor.attributes["windows"]
+    assert windows and sensor.state not in ("unknown", "unavailable") and sensor.attributes["status"] == windows[0]["status"]
+    assert windows[0]["from"].endswith("+02:00") and {"peak", "viable", "need_fresh", "room_fresh", "need_replace", "room_replace", "sold_kwh", "charges"} <= set(windows[0])
+    record = read_jsonl(hass, "decision_trace.jsonl")[-1]
+    assert [w["status"] for w in record["windows"]] == [w["status"] for w in windows] and "windows_outside_kwh" in record
+    event = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "windows"][-1]
+    assert [w["from"] for w in event["windows"]] == [w["from"] for w in record["windows"]] and event["outside_kwh"] == record["windows_outside_kwh"]
+    table = hass.states.get("sensor.hems_plan").attributes["markdown"].splitlines()
+    assert table[0].endswith("|Doel|") or table[0].endswith("|Purpose|")
+
+
+async def test_an_unsold_window_is_warned_once_and_only_again_when_the_picture_changes(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock, caplog):
+    """A window that pays, has energy and is not sold is what a reviewer would hunt for: one warning per change, not one per quarter."""
+    from types import SimpleNamespace
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    coordinator = entry.runtime_data
+    window = {"from": "2026-10-06T06:00:00+00:00", "to": "2026-10-06T08:00:00+00:00", "peak": 0.55, "viable": "fresh", "status": "unsold", "sold_kwh": 0.0, "from_stock_kwh": 0.0}
+    caplog.clear()
+    await coordinator._note_windows(SimpleNamespace(trace={"windows": [window], "windows_outside_kwh": 0.0}))
+    await coordinator._note_windows(SimpleNamespace(trace={"windows": [window], "windows_outside_kwh": 0.0}))
+    assert sum("HEMS window check" in r.getMessage() for r in caplog.records) == 1
+    await coordinator._note_windows(SimpleNamespace(trace={"windows": [{**window, "status": "planned", "sold_kwh": 3.0}], "windows_outside_kwh": 0.0}))
+    assert sum("HEMS window check" in r.getMessage() for r in caplog.records) == 1                      # now fine: no new warning
+    assert [e["windows"][0]["status"] for e in read_jsonl(hass, "events.jsonl") if e["event"] == "windows"][-2:] == ["unsold", "planned"]

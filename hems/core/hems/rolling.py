@@ -13,6 +13,7 @@ from hems.decision_log import best_later, plan_segments
 from hems.prices import PriceSeries
 from hems.slots import SLOT_H, SLOT_MINUTES
 from hems.trace import explain
+from hems.windows import WindowAnalysis, analyse, record
 
 QUARTER = timedelta(minutes=SLOT_MINUTES)
 SHIFT_POWER_FRACTION = 0.25          # a replanned quarter that moves more than this share of its power is logged
@@ -44,6 +45,7 @@ class Decision:
     plan: Plan
     trace: dict
     slots: tuple[Slot, ...] = ()             # the slots the plan was computed from (prices, load, PV per quarter)
+    analysis: WindowAnalysis | None = None   # the sell windows of the horizon and what the plan does with them (read-only, hems.windows)
 
 
 def _build_slots(inputs: HorizonInputs, start: datetime) -> tuple[list[Slot], int]:
@@ -79,7 +81,10 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
                     "at_floor": first.at_floor, "at_full": first.at_full, **best_later(result, start)},
         "segments": plan_segments(result, slots, start, inputs.soc_kwh, cfg.capacity_kwh),
     }
-    return Decision(start, command, result, trace, tuple(slots))
+    analysis = analyse([start + n * QUARTER for n in range(len(slots))], slots, result, inputs.soc_kwh, cfg)
+    trace["windows"] = [record(r) for r in analysis.reports]
+    trace["windows_outside_kwh"] = analysis.outside_kwh
+    return Decision(start, command, result, trace, tuple(slots), analysis)
 
 
 def _r(value: float | None) -> float | None:

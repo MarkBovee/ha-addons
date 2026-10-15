@@ -123,3 +123,14 @@ def test_the_core_log_reader_keeps_hems_entries_with_their_plan_tree_and_drops_t
     assert [line[:23] for line in lines if line[:2] == "20"] == ["2026-10-13 14:11:56.036"] * 2 + ["2026-10-13 14:15:20.277"]
     assert "  charge    +1d 00:00 - +1d 01:00   7730 W    7.7 kWh  soc 30% -> 61%  @0.263" in lines
     assert all("\x1b" not in line and "other" not in line for line in lines) and len(lines) == 4
+
+
+def test_windows_shows_the_cycle_in_full_and_how_each_window_changed_over_the_cycles():
+    """One line per window with what it needs and what the plan does; then the statuses a window went through, to spot a plan that flips."""
+    first = {**decision().trace}
+    second = {**decision(offset=4).trace}
+    flipped = {**second, "windows": [{**w, "status": "unsold"} for w in second["windows"]]}
+    lines = tool.format_windows([first, flipped, second])
+    assert lines[0].startswith("HEMS sell windows") and any("peak" in line and "needs" in line for line in lines)
+    assert any(" -> " in line and "unsold" in line and "planned" in line for line in lines)
+    assert tool.format_windows([{"status": "no_soc"}])[0].startswith("no cycle with sell windows")

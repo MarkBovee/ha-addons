@@ -11,6 +11,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 | `scripts/sync_hems_core.py` | Regenerates `custom_components/hems/engine` from the core (`--check` verifies). |
 | `scripts/hems_collect.py`, `scripts/hems_replay.py` | Read-only data collector and the replay of recorded days. |
 | `scripts/hems_trace.py` | Reads the decision logs (`/config/hems/*.jsonl`): `--pull`, `tail`, `show`, `why`, `diff`, `events`. See `../docs/hems/install.md`. |
+| `hems/core/hems/windows.py` | Read-only analysis of sell windows: detection (two cost bases), which charge feeds which sale, status per window, kWh sold outside any window. |
 | `hems/core/hems/decision_log.py` | What makes a decision followable: plan segments, best later opportunities, the compact full-plan record, settings hash. |
 | `tests/hems_ha/` | Integration tests (need the pinned Home Assistant test plugin, see below). |
 | `hems/tests/` | Tests of the deploy script. |
@@ -32,6 +33,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 - The text that explains a decision must be true: sell value is priced where the kWh lands (import price only while the discharge stays below the house load), and when the marginal comparison does not confirm the choice the reason says "plan-level". `tests/test_two_peaks.py` guards both.
 - A reason text is judged on the numbers it prints (rounded to three decimals): `sell 0.313 > keep 0.313` is false, so equal printed numbers get `>=` / `<=` and reversed ones get "plan-level". Every log line carries the `build` that wrote it; check it before calling a line an open bug.
 - The executor measures the room left from the moment the SoC value last changed (`Reading.changed_at`), never from the moment of the last repeat of the same value; a limit that rises with the clock flaps.
+- Sell windows (`hems/core/hems/windows.py`) are an analysis of the prices and the finished plan, never an input of the planner: no candidate filter, no budget per window, no minimum start SoC (decision of 15 Oct 2026 and its numbers in `docs/hems/intake-decisions.md`, lesson 7). If a preference needs a window it becomes a priced term with the window as the unit of accounting. A test keeps the layer honest: over 48 hours every planned sale lies inside a detected window.
 - A state that a user reads must make sense without this code: no bare counts or codes (the plan sensor said `57`, the number of quarters). Say what happens when, in local time and the language of Home Assistant; put the numbers in attributes. Attributes use readable names, not one-letter keys.
 - Weather (Open-Meteo) requests carry coordinates rounded to 0.01 degrees. Keep it that way.
 

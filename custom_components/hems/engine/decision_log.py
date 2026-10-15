@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 
 from .battery import Plan, Slot
 from .outlook import periods
+from .windows import WindowAnalysis, WindowReport
 from .slots import SLOT_H
 
 if TYPE_CHECKING:
@@ -126,11 +127,16 @@ class PlanWords:
     tomorrow: str
     nothing: str
     idle: str
-    headers: tuple[str, str, str, str, str]       # the columns of the table: time, type, power, price, SoC
+    headers: tuple[str, str, str, str, str, str]  # the columns of the table: time, type, power, price, SoC, purpose
+    for_sale: str                                 # 'for sale 17:15-19:30': what a charge is for
+    peak: str                                     # 'peak 0.489': what a sale is for
+    from_stock: str                               # a sale from energy that was in the battery already
 
 
-PLAN_WORDS = {"en": PlanWords("Charge", "Discharge", "tomorrow", "No charging or discharging planned", "Idle", ("Time", "Type", "Power", "Price", "SoC")),
-              "nl": PlanWords("Laden", "Ontladen", "morgen", "Geen laden of ontladen gepland", "Rust", ("Tijd", "Type", "Vermogen", "Prijs", "SoC"))}
+PLAN_WORDS = {"en": PlanWords("Charge", "Discharge", "tomorrow", "No charging or discharging planned", "Idle", ("Time", "Type", "Power", "Price", "SoC", "Purpose"),
+                              "for sale", "peak", "from stock"),
+              "nl": PlanWords("Laden", "Ontladen", "morgen", "Geen laden of ontladen gepland", "Rust", ("Tijd", "Type", "Vermogen", "Prijs", "SoC", "Doel"),
+                              "voor verkoop", "piek", "uit voorraad")}
 
 
 def plan_words(language: str | None) -> PlanWords:
@@ -172,29 +178,50 @@ def plan_summary(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words
     return text + (MORE if cut else "")
 
 
-def plan_table(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words: PlanWords) -> str:
+def plan_table(segments: Sequence[Mapping], start: datetime, tz: tzinfo, words: PlanWords, analysis: WindowAnalysis | None = None) -> str:
     """The plan as a Markdown table for a dashboard card: one row per charge or discharge period, local times.
 
     What is going on now comes first and is marked 🔴 (also when it is idle, so the table says what happens now); later
-    periods are marked ⏰. Columns: time, type, average power, average price, SoC at both ends."""
+    periods are marked ⏰. Columns: time, type, average power, average price, SoC at both ends and, when the window analysis
+    is given, the purpose: which sale a charge is for, which peak a sale takes."""
     runs = [s for s in segments if "action" in s]
     found = periods(runs)
     if not found:
         return words.nothing
-    rows = [_row(True, runs[0], start, tz, words)] if runs[0]["action"] == "idle" else []
-    rows += [_row(period["begin"] <= start, period, start, tz, words) for period in found]
+    rows = [_row(True, runs[0], start, tz, words, "")] if runs[0]["action"] == "idle" else []
+    rows += [_row(period["begin"] <= start, period, start, tz, words, _purpose(period, analysis, start, tz, words)) for period in found]
     if any("truncated" in s for s in segments):
-        rows.append(["…", "", "", "", ""])
+        rows.append(["…", "", "", "", "", ""])
     return _table(rows, words)
 
 
-def _row(now: bool, run: Mapping, start: datetime, tz: tzinfo, words: PlanWords) -> list[str]:
+def _span(report: WindowReport, start: datetime, tz: tzinfo, words: PlanWords) -> str:
+    """Where a window is sold ('17:15–19:30'): the sale when the plan has one, the band otherwise."""
+    begin, end = (report.sold_from, report.sold_to) if report.sold_from else (report.window.start, report.window.end)
+    return _range_text({"from": begin.isoformat(), "to": end.isoformat()}, start, tz, words)
+
+
+def _purpose(period: Mapping, analysis: WindowAnalysis | None, start: datetime, tz: tzinfo, words: PlanWords) -> str:
+    """What a period is for: the sales a charge feeds, or the peak (and the stock) a sale takes; empty without an analysis."""
+    if analysis is None:
+        return ""
+    if period["action"] == "charge":
+        fed, moment = set(), period["begin"]
+        while moment < period["end"]:
+            fed.update(analysis.serves.get(moment, ()))
+            moment += QUARTER
+        return ", ".join(f"{words.for_sale} {_span(r, start, tz, words)}" for r in analysis.reports if r.window.start in fed)
+    inside = [r for r in analysis.reports if r.sold_from and r.sold_from < period["end"] and period["begin"] < r.sold_to]
+    return ", ".join(f"{words.peak} {r.window.peak_price:.3f}" + (f" ({words.from_stock})" if r.from_stock_kwh * 2 >= r.sold_kwh else "") for r in inside)
+
+
+def _row(now: bool, run: Mapping, start: datetime, tz: tzinfo, words: PlanWords, purpose: str) -> list[str]:
     """One table row: the cells of a plan run."""
     kind = {"charge": f"⚡ {words.charge}", "discharge": f"📤 {words.discharge}"}.get(run["action"], f"💤 {words.idle}")
     price = "–" if run["avg_price"] is None else f"€{run['avg_price']:.3f}"
     steady = run["action"] == "idle" or run["soc_from_pct"] == run["soc_to_pct"]          # standby loss moves an idle SoC a little: still one figure
     soc = f"{run['soc_from_pct']:.0f}%" if steady else f"{run['soc_from_pct']:.0f}→{run['soc_to_pct']:.0f}%"
-    return [f"{'🔴' if now else '⏰'} {_range_text(run, start, tz, words)}", kind, f"{run['avg_w']} W", price, soc]
+    return [f"{'🔴' if now else '⏰'} {_range_text(run, start, tz, words)}", kind, f"{run['avg_w']} W", price, soc, purpose]
 
 
 def _table(rows: Sequence[Sequence[str]], words: PlanWords) -> str:
@@ -244,6 +271,28 @@ def plan_tree(trace: Mapping, tz: tzinfo) -> list[str]:
                          f"{s['avg_w']:>5} W  {s['kwh']:>5.1f} kWh  soc {s['soc_from_pct']:.0f}% -> {s['soc_to_pct']:.0f}%  @{s['avg_price']}")
     if len(lines) == 1:
         lines.append("  no charge or discharge planned")
+    return lines
+
+
+def window_tree(trace: Mapping, tz: tzinfo) -> list[str]:
+    """The sell windows of the horizon for the Home Assistant log: where each is sold, what it needs, and what the plan does with it."""
+    reports = trace.get("windows")
+    if not reports or "slot_start" not in trace:
+        return []
+    start = datetime.fromisoformat(trace["slot_start"])
+    at = lambda iso: when(datetime.fromisoformat(iso), start, tz)
+    lines = ["HEMS sell windows (what the prices offer; the plan decides):"]
+    for w in reports:
+        sold = f"sold {at(w['sold_from'])} - {at(w['sold_to'])} {w['sold_kwh']:.1f} kWh" + (f" (stock {w['from_stock_kwh']:.1f})" if w["from_stock_kwh"] else "") if w["sold_from"] \
+            else "nothing sold"
+        needs = []
+        if w["need_fresh"] is not None:
+            needs.append(f"after a charge at {at(w['charge_at'])} needs {w['need_fresh']:.3f} ({w['room_fresh']:+.3f})")
+        if w["need_replace"] is not None:
+            needs.append(f"bought back at {at(w['refill_at'])} needs {w['need_replace']:.3f} ({w['room_replace']:+.3f})")
+        lines.append(f"  {at(w['from'])} - {at(w['to'])} {w['status']:<14} peak {w['peak']:.3f} at {at(w['peak_at'])}; {sold}; {'; '.join(needs)}")
+    if trace.get("windows_outside_kwh"):
+        lines.append(f"  {trace['windows_outside_kwh']:.1f} kWh sold outside every window")
     return lines
 
 
