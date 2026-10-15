@@ -816,13 +816,13 @@ def test_discharge_feasibility_respects_conservative_soc_floor():
     assert feasible[0]["end"] - feasible[0]["start"] == timedelta(minutes=48)
 
 
-# A saturated dynamic target still permits profitable selling while preserving sell_buffer_min_soc.
-def test_saturated_sell_buffer_truncates_sales_at_configured_safety_floor():
+# A profitable sale runs down to the conservative SOC, where adaptive takes over.
+def test_sell_windows_are_truncated_at_the_conservative_soc():
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["battery_capacity_kwh"] = 25
     config["soc"]["min_soc"] = 5
-    config["soc"]["conservative_soc"] = 30
-    config["soc"]["sell_buffer_min_soc"] = 40
+    config["soc"]["conservative_soc"] = 40
+    config["soc"]["sell_buffer_min_soc"] = 60  # the start SOC of a sale is not where the sale stops
     config["soc"]["sell_buffer_enabled"] = True
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_scaled_power"] = 8000
@@ -849,8 +849,8 @@ def test_saturated_sell_buffer_truncates_sales_at_configured_safety_floor():
     assert feasible[0]["end"] - feasible[0]["start"] == timedelta(minutes=112)
 
 
-# Schedule the affordable portion of a profitable sell when the buffer target saturates at 100%.
-def test_generate_schedule_allows_profitable_sell_when_saturated_buffer_equals_full_soc(monkeypatch):
+# Schedule the affordable portion of a profitable sell: down to the conservative SOC.
+def test_generate_schedule_sells_a_full_battery_down_to_the_conservative_soc(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
@@ -861,8 +861,8 @@ def test_generate_schedule_allows_profitable_sell_when_saturated_buffer_equals_f
     config["temperature_based_discharge"]["enabled"] = False
     config["soc"]["battery_capacity_kwh"] = 25
     config["soc"]["min_soc"] = 5
-    config["soc"]["conservative_soc"] = 30
-    config["soc"]["sell_buffer_min_soc"] = 40
+    config["soc"]["conservative_soc"] = 40
+    config["soc"]["sell_buffer_min_soc"] = 60
     config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
@@ -1089,8 +1089,8 @@ def test_generate_schedule_uses_exact_top_discharge_hours_when_soc_supports_them
     assert discharge[0]["window_type"] == "discharge"
 
 
-# Allow a profitable sell down to the configured reserve when precharge is costly.
-def test_generate_schedule_limits_sell_to_safety_floor_when_precharge_is_too_expensive(monkeypatch):
+# A battery above the start SOC is not charged for the sale, and the sale is limited to the energy above the conservative SOC.
+def test_generate_schedule_limits_sell_to_the_conservative_soc_without_precharging_above_the_start_soc(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
@@ -1100,7 +1100,7 @@ def test_generate_schedule_limits_sell_to_safety_floor_when_precharge_is_too_exp
     config["passive_solar"]["enabled"] = False
     config["temperature_based_discharge"]["enabled"] = False
     config["soc"]["min_soc"] = 5
-    config["soc"]["conservative_soc"] = 25
+    config["soc"]["conservative_soc"] = 40
     config["soc"]["sell_buffer_min_soc"] = 40
     config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
@@ -1140,10 +1140,8 @@ def test_generate_schedule_limits_sell_to_safety_floor_when_precharge_is_too_exp
 
     schedule = bm_main.generate_schedule(config, cast(Any, object()), None)
 
-    # 40% safety + the remaining 54 minutes at 8kW on a 25kWh battery
-    # rounds to a 70% target.
-    # The current price blocks precharging, but the profitable sell is still
-    # scheduled and runtime SOC protection preserves the configured floor.
+    # 43% is above the 40% start SOC: nothing is bought for the sale at 0.40, the profitable sell is still
+    # scheduled and limited to the 3 points above the conservative SOC (0.75 kWh = 5 minutes at 8 kW).
     assert schedule["charge"]
     assert schedule["charge"][0]["start"] == (curve_start + timedelta(hours=1)).isoformat()
     sell = next(
@@ -1170,7 +1168,7 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     config["temperature_based_discharge"]["enabled"] = False
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 25
-    config["soc"]["sell_buffer_min_soc"] = 40
+    config["soc"]["sell_buffer_min_soc"] = 50
     config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
@@ -1218,7 +1216,10 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     assert schedule["discharge"]
     assert all(period["window_type"] == "discharge" for period in schedule["discharge"])
     if not expect_sell:
-        # 43% is above the 40% floor and 0.30 is above the 0.25 ceiling: no precharge, the charge waits for the main window.
+        # 43% is under the 50% start SOC: it is charged back up to it first, whatever the price (0.30 is above the 0.25 ceiling).
+        assert schedule["charge"][0]["window_type"] == "precharge"
+    else:
+        # exactly at the start SOC nothing is bought: the charge waits for the main window.
         assert schedule["charge"][0]["window_type"] == "charge"
         assert schedule["charge"][0]["start"] == (curve_start + timedelta(minutes=45)).isoformat()
 
@@ -2932,9 +2933,9 @@ def test_expired_passive_gap_is_not_replaced_by_rolling_regeneration(monkeypatch
     assert state.passive_gap_active is True
 
 
-# A saturated target allows selling above the configured floor and pauses at that floor.
-@pytest.mark.parametrize(("soc", "expect_pause"), [(100.0, False), (40.0, True), (39.0, True)])
-def test_active_discharge_respects_safety_floor_with_saturated_sell_buffer(monkeypatch, soc, expect_pause):
+# A sell window may spend the buffer target and pauses at the conservative SOC, where adaptive takes over.
+@pytest.mark.parametrize(("soc", "expect_pause"), [(100.0, False), (35.0, False), (30.0, True), (29.0, True)])
+def test_active_discharge_runs_down_to_the_conservative_soc_with_a_sell_buffer_target(monkeypatch, soc, expect_pause):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["conservative_soc"] = 30
     config["soc"]["min_soc"] = 5

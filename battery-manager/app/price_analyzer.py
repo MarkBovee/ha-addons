@@ -467,3 +467,43 @@ def min_price_between(curve: Sequence[dict], start: datetime, end: datetime) -> 
         if start <= bounds[0] < end:
             prices.append(float(entry["price"]))
     return min(prices) if prices else None
+
+
+# Find when a charge of ``minutes`` is cheapest before ``deadline``, so a pre-sell charge is not bought at the first price on offer.
+def find_cheapest_block_start(
+    curve: Sequence[dict],
+    earliest: datetime,
+    deadline: datetime,
+    minutes: int,
+    interval_minutes: int,
+) -> Optional[datetime]:
+    """Return the start of the cheapest run of whole intervals that holds ``minutes`` and ends by ``deadline``.
+
+    Candidates start on an interval of ``curve`` at or after ``earliest``. The cheapest run (lowest
+    summed price) wins and the earliest run wins a tie, so a flat price curve charges right away.
+    Returns None when no run of consecutive intervals fits before ``deadline``.
+    """
+
+    if minutes <= 0 or interval_minutes <= 0:
+        return None
+    intervals_needed = math.ceil(minutes / interval_minutes)
+
+    slots: List[Tuple[datetime, datetime, float]] = []
+    for entry in curve:
+        bounds = _entry_bounds(entry, interval_minutes)
+        if bounds is None or entry.get("price") is None or bounds[0] < earliest:
+            continue
+        slots.append((bounds[0], bounds[1], float(entry["price"])))
+    slots.sort(key=lambda slot: slot[0])
+
+    best_start: Optional[datetime] = None
+    best_cost = math.inf
+    for index in range(len(slots) - intervals_needed + 1):
+        run = slots[index:index + intervals_needed]
+        is_consecutive = all(run[i][1] == run[i + 1][0] for i in range(len(run) - 1))
+        if not is_consecutive or run[-1][1] > deadline:
+            continue
+        cost = sum(slot[2] for slot in run)
+        if cost < best_cost - 1e-9:
+            best_start, best_cost = run[0][0], cost
+    return best_start
