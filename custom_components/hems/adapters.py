@@ -7,11 +7,11 @@ from .engine.derive import derive_house_load
 
 
 def reading_from_state(state: Any, sign: float = 1.0) -> Reading | None:
-    """A numeric reading stamped with when the entity last reported, or None when unavailable/unknown/non-numeric."""
+    """A numeric reading stamped with when the entity last reported and when its value last changed, or None when unavailable/unknown/non-numeric."""
     if state is None or state.state in ("unavailable", "unknown", ""):
         return None
     try:
-        return Reading(float(state.state) * sign, state.last_reported or state.last_updated)
+        return Reading(float(state.state) * sign, state.last_reported or state.last_updated, changed_at=state.last_changed)
     except (TypeError, ValueError):
         return None
 

@@ -98,7 +98,11 @@ def execute(decision: Decision | None, now: datetime, soc: Reading | None, cfg: 
         return _held(planned_w, NO_SOC, "no SoC reading")
     if not soc.is_fresh(now, max_soc_age):
         return _held(planned_w, STALE_SOC, f"SoC is {round(soc.age(now).total_seconds())} s old")
-    remaining_h = max((command.end - now).total_seconds() / 3600, MIN_REMAINING_H)
+    # The room is measured at the moment the SoC last changed, so the time left runs from then too. Measured from `now`, a
+    # SoC that stays at the same number for a minute (the battery keeps charging) would show a limit that rises with the clock
+    # until the next tick pulls it down again: the command would flap between limited and as planned every minute.
+    reference = min(max(soc.known_since, command.start), now)
+    remaining_h = max((command.end - reference).total_seconds() / 3600, MIN_REMAINING_H)
     eff = cfg.round_trip_eff ** 0.5
     if planned_w < 0:
         floor_pct = floor_fraction(decision.slots[0] if decision.slots else None, cfg) * 100

@@ -106,3 +106,51 @@ def test_the_planners_own_command_passes_the_executor_when_the_soc_is_what_it_pl
     d = plan_next(HorizonInputs(now, soc_pct / 100 * CFG.capacity_kwh, recorded_day("2026-10-06"), {}, {}), CFG)
     out = execute(d, d.slot_start, Reading(soc_pct, d.slot_start), CFG)
     assert not out.overridden, (hour, soc_pct, out)
+
+
+def seen(soc_pct: float, changed_s: int, now_s: int) -> tuple[Reading, datetime]:
+    """A SoC that last changed `changed_s` seconds into the quarter, re-reported just before `now_s` seconds into it."""
+    now = START + timedelta(seconds=now_s)
+    return Reading(soc_pct, now - timedelta(seconds=3), changed_at=START + timedelta(seconds=changed_s)), now
+
+
+def test_a_soc_that_keeps_its_number_does_not_let_the_limit_rise_with_the_clock():
+    """14 Oct 15:00: 95.4% stayed 95.4% for a minute while the battery kept charging; the limit must stay at what the number allows."""
+    powers = []
+    for now_s in (30, 74, 124, 200):
+        reading, now = seen(95.4, 24, now_s)
+        out = execute(decision(5522), now, reading, CFG)
+        assert out.code == LIMITED_FULL, now_s
+        powers.append(out.power_w)
+    assert max(powers) - min(powers) <= 1 and 5200 <= powers[0] <= 5240
+
+
+def test_the_recorded_quarter_of_14_oct_never_flips_back_to_as_planned():
+    """Readings of the incident: 95.4 at +24 s, 95.7 at +94 s, 96.0 at +154 s, checked every 10 s; the limit follows the readings and no check says 'as planned'."""
+    readings = [(24, 95.4, 5220), (94, 95.7, 5306), (154, 96.0, 5335)]
+    for second in range(30, 240, 10):
+        changed, soc, expected = [r for r in readings if r[0] <= second][-1]
+        reading, now = seen(soc, changed, second)
+        out = execute(decision(5522), now, reading, CFG)
+        assert out.code == LIMITED_FULL and abs(out.power_w - expected) <= 15, (second, out)
+
+
+def test_a_discharge_limit_does_not_fall_back_to_the_plan_while_the_soc_number_is_unchanged():
+    """The same holds at the floor: 30.5% stays 30.5% for 100 s of discharging, the limit stays at what 0.5% above the floor allows in the quarter."""
+    powers = [execute(decision(-7000), now, reading, CFG).power_w for reading, now in (seen(30.5, 5, s) for s in (10, 60, 110))]
+    assert all(-470 <= p <= -430 for p in powers) and max(powers) - min(powers) <= 1
+
+
+def test_a_soc_that_changed_long_before_the_quarter_counts_from_the_start_of_the_quarter():
+    """A battery that has stood at 99% since an hour ago: the limit is what 1% allows over the whole quarter, not over a quarter that began earlier."""
+    now = START + timedelta(seconds=40)
+    reading = Reading(99.0, now - timedelta(seconds=2), changed_at=START - timedelta(hours=1))
+    out = execute(decision(7000), now, reading, CFG)
+    assert out.code == LIMITED_FULL and 1000 <= out.power_w <= 1200
+
+
+def test_without_a_change_time_the_report_time_is_used():
+    """Sources that only know when they reported keep the old behaviour."""
+    reading = Reading(95.4, START + timedelta(seconds=50))
+    assert reading.known_since == reading.observed_at
+    assert execute(decision(5522), START + timedelta(seconds=55), reading, CFG).code == LIMITED_FULL

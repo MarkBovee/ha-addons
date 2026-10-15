@@ -434,3 +434,18 @@ async def test_the_window_sensors_are_unknown_when_the_plan_has_no_such_window(r
     await setup_entry(hass, freezer, aioclient_mock)
     assert hass.states.get("sensor.hems_charge_window").state == "unknown" and hass.states.get("sensor.hems_pv_forecast_next_hour").state == "unknown"
     assert hass.states.get("sensor.hems_irradiance_forecast").state == "unknown"
+
+
+async def test_a_reading_knows_when_the_value_changed_apart_from_when_it_was_reported(recorder_mock, hass: HomeAssistant, freezer):
+    """A sensor that repeats 95.4 every minute is fresh (reported now) but its information dates from the last change."""
+    from custom_components.hems.adapters import reading_from_state
+    freezer.move_to(NOW)
+    hass.states.async_set("sensor.soc", "95.4")
+    freezer.move_to(NOW + timedelta(seconds=70))
+    hass.states.async_set("sensor.soc", "95.4")                       # same value: only `last_reported` moves
+    reading = reading_from_state(hass.states.get("sensor.soc"))
+    assert reading.changed_at == NOW and reading.observed_at == NOW + timedelta(seconds=70) and reading.known_since == NOW
+    freezer.move_to(NOW + timedelta(seconds=80))
+    hass.states.async_set("sensor.soc", "95.7")
+    assert reading_from_state(hass.states.get("sensor.soc")).changed_at == NOW + timedelta(seconds=80)
+

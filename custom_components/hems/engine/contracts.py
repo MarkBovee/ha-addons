@@ -18,7 +18,14 @@ from typing import Protocol, Sequence
 class Reading:
     """A measured value with the moment it was observed, so staleness is checkable."""
     value: float
-    observed_at: datetime
+    observed_at: datetime                     # when the source last reported (also a repeat of the same value): staleness
+    changed_at: datetime | None = None        # when the value last changed: how old the information is (a battery that
+                                              # charges moves on while a re-reported SoC still shows the old number)
+
+    @property
+    def known_since(self) -> datetime:
+        """The moment the information in this value dates from: its last change, or its last report when that is not known."""
+        return self.changed_at or self.observed_at
 
     def age(self, now: datetime) -> timedelta:
         """Time since the value was observed."""
