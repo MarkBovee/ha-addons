@@ -1247,7 +1247,7 @@ def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_
     curve_start = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
     config["soc"]["sell_buffer_min_soc"] = 40
     import_prices = [0.40, 0.40, 0.40, 0.40, 0.10]
-    export_prices = [0.50, 0.50, 0.50, 0.50, 0.20]
+    export_prices = [0.05, 0.50, 0.50, 0.50, 0.05]  # the sale starts a quarter from now: the pre-sell check only runs before it
     import_curve = [
         {
             "start": (curve_start + timedelta(minutes=15 * index)).isoformat(),
@@ -1312,8 +1312,8 @@ def test_single_charge_slot_coalesces_precharge_with_main_charge(monkeypatch):
 
     now = datetime.now(timezone.utc)
     curve_start = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
-    import_prices = [0.40, 0.10, -0.10, 0.20]
-    export_prices = [0.60, 0.10, -0.10, 0.20]
+    import_prices = [0.40, 0.40, 0.10, -0.10, 0.20]
+    export_prices = [0.10, 0.60, 0.10, -0.10, 0.20]  # the sale starts a quarter from now: the pre-sell check only runs before it
     import_curve = [
         {
             "start": (curve_start + timedelta(minutes=15 * index)).isoformat(),

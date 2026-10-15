@@ -1443,6 +1443,29 @@ def _filter_supported_discharge_windows(
     return feasible_windows
 
 
+# Tell whether the sale the buffer is meant for has already begun, so the pre-sell check does not run during it.
+def _sale_in_progress(
+    discharge_windows: List[Dict[str, Any]],
+    now: datetime,
+    main_charge_start: datetime,
+    lead_hours: float,
+) -> bool:
+    """Return True when a sell window before the main charge has started and is running or ended within ``lead_hours``.
+
+    The sell buffer is a pre-sell check: it makes sure the battery holds the start SOC when the sale begins.
+    The sale itself drains the battery below that value, and the gaps between its windows are part of the
+    same sale, so neither may trigger a precharge or a buffer pause. A window that ended longer than
+    ``lead_hours`` ago belongs to an earlier sale (yesterday evening) and does not count.
+    """
+
+    earliest_end = now - timedelta(hours=lead_hours)
+    return any(
+        w.get("start") and w.get("end")
+        and w["start"] <= now and w["start"] < main_charge_start and w["end"] > earliest_end
+        for w in discharge_windows
+    )
+
+
 def _calculate_dynamic_sell_buffer_soc(
     windows: Dict[str, List[Dict[str, Any]]],
     now: datetime,
@@ -1453,7 +1476,8 @@ def _calculate_dynamic_sell_buffer_soc(
     The target is ``soc.sell_buffer_min_soc``: below it the battery is charged back up to it before the
     sale (``generate_schedule``), above it nothing is bought. The sale then runs down to the conservative
     SOC, where adaptive takes over. It only applies once the first sell window is within
-    ``sell_buffer_activation_hours_before_sell``. The sell hours are returned for logging and the trace.
+    ``sell_buffer_activation_hours_before_sell`` and not any more once the sale has started
+    (``_sale_in_progress``). The sell hours are returned for logging and the trace.
     """
 
     soc_cfg = config.get("soc", {})
@@ -1473,6 +1497,10 @@ def _calculate_dynamic_sell_buffer_soc(
         0.0,
         float(soc_cfg.get("sell_buffer_activation_hours_before_sell", 3)),
     )
+    if _sale_in_progress(windows.get("discharge", []), now, main_charge_start, lead_hours_before_sell):
+        logger.info("🕒 Sell-buffer off: the sale has already started, the pre-sell check only runs before it")
+        return None, 0.0, main_charge_start
+
     relevant_discharge_windows = sorted(
         [
             w for w in windows.get("discharge", [])
