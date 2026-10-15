@@ -148,8 +148,8 @@ def _precharge_config():
 def _precharge_schedule(monkeypatch, config, sell_price):
     now = datetime.now(timezone.utc)
     start = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
-    imports = [0.20, 0.20, 0.20, 0.20, 0.05]
-    exports = [sell_price] * 4 + [0.05]
+    imports = [0.20, 0.20, 0.20, 0.20, 0.20, 0.05]
+    exports = [0.05] + [sell_price] * 4 + [0.05]  # the sale starts a quarter from now: the pre-sell check only runs before it
 
     def curve(prices):
         return [

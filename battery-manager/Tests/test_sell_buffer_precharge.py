@@ -103,3 +103,58 @@ def test_a_single_charge_slot_keeps_the_precharge_next_to_the_main_charge():
     assert bm_main._choose_precharge_start(curve, now, deadline, 10, 15, 1) == now
     assert bm_main._choose_precharge_start(curve, now, deadline, 10, 15, 3) != now  # the cheapest quarter is later
     assert bm_main._choose_precharge_start(curve, now, None, 10, 15, 3) == now  # no sale to aim for
+
+
+# ---- 2026-10-15 08:33: SoC 57 % under the new 60 % start SOC, in the middle of the morning sale, planned 8000 W of charging
+
+
+def _sale_state(monkeypatch, hhmm, soc):
+    """Plan 2026-10-15 at ``hhmm`` with a 60 % start SOC and return (schedule, state)."""
+    state = bm_main.RuntimeState(schedule={"charge": [], "discharge": []}, schedule_generated_at=None)
+    schedule = _plan(monkeypatch, hhmm, soc=soc, state=state, **{"soc.sell_buffer_min_soc": 60})
+    return schedule, state
+
+
+def test_the_pre_sell_check_does_not_run_while_the_sale_is_running(monkeypatch, amsterdam_tz):
+    """The 07:15-08:45 window is running at 08:33: SoC 57 % is under the 60 % start SOC, but nothing is bought and discharge is not paused."""
+    schedule, state = _sale_state(monkeypatch, "08:33", soc=57.0)
+    assert _precharges(schedule) == []
+    assert state.sell_buffer_required_soc is None  # no buffer protection either: it would pause the sale it protects
+    assert any(p["window_type"] == "discharge" and local_start(p).hour < 11 for p in schedule["discharge"])
+
+
+def test_the_gap_between_two_windows_of_the_same_sale_is_not_pre_sell(monkeypatch, amsterdam_tz):
+    """08:45-09:00 lies between the 07:15 and the 09:00 window: still the same sale, so no precharge for the 09:00 window."""
+    schedule, state = _sale_state(monkeypatch, "08:50", soc=50.0)
+    assert _precharges(schedule) == []
+    assert state.sell_buffer_required_soc is None
+
+
+def test_before_the_sale_the_pre_sell_check_still_runs(monkeypatch, amsterdam_tz):
+    """The same 57 % at 03:30, before the first window: the check runs and the battery is charged up to 60 %."""
+    schedule, state = _sale_state(monkeypatch, "03:30", soc=57.0)
+    assert _precharges(schedule) and state.sell_buffer_required_soc == 60.0
+
+
+def _window(start, end):
+    """A sell window between two datetimes."""
+    return {"start": start, "end": end, "avg_price": 0.47}
+
+
+def test_a_sale_of_an_earlier_day_does_not_switch_off_the_check_for_the_next_one():
+    """Yesterday evening's window ended 12 hours ago (lead 4 h): it belongs to another sale, so the morning check is active."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 10, 15, 4, 0, tzinfo=timezone.utc)
+    main_charge = now + timedelta(hours=8)
+    evening = _window(now - timedelta(hours=14), now - timedelta(hours=12))
+    morning = _window(now + timedelta(hours=2), now + timedelta(hours=4))
+    config = make_config(**USER_SETTINGS)
+    target, _hours, _until = bm_main._calculate_dynamic_sell_buffer_soc(
+        {"charge": [{"start": main_charge, "end": main_charge + timedelta(hours=4)}], "discharge": [evening, morning]}, now, config)
+    assert target == 40.0
+    # the same morning window, started 1 hour ago: the sale is running, no check
+    running = _window(now - timedelta(hours=1), now + timedelta(hours=1))
+    target, _hours, _until = bm_main._calculate_dynamic_sell_buffer_soc(
+        {"charge": [{"start": main_charge, "end": main_charge + timedelta(hours=4)}], "discharge": [running]}, now, config)
+    assert target is None
