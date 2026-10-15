@@ -216,3 +216,50 @@ class TestDischargeSelectionHelpers:
         assert len(windows["discharge"]) == 1
         assert windows["discharge"][0]["start"] == base + timedelta(hours=1)
         assert windows["discharge"][0]["end"] == base + timedelta(hours=3)
+
+
+def _quarter_curve(prices):
+    """Quarter entries from 00:00 UTC with the given prices."""
+    from datetime import datetime, timedelta, timezone
+
+    first = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
+    return [
+        {"start": (first + timedelta(minutes=15 * i)).isoformat(), "end": (first + timedelta(minutes=15 * (i + 1))).isoformat(), "price": price}
+        for i, price in enumerate(prices)
+    ]
+
+
+def test_cheapest_block_start_picks_the_cheapest_run_before_the_deadline():
+    from datetime import datetime, timedelta, timezone
+
+    from app.price_analyzer import find_cheapest_block_start
+
+    curve = _quarter_curve([0.40, 0.38, 0.30, 0.31, 0.45, 0.20, 0.20])
+    midnight = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
+    # 30 minutes = two quarters; the 0.20 run at 01:15 ends at 02:00 and is after the deadline of 01:15
+    assert find_cheapest_block_start(curve, midnight, midnight + timedelta(minutes=75), 30, 15) == midnight + timedelta(minutes=30)
+    # with a later deadline the cheaper run wins
+    assert find_cheapest_block_start(curve, midnight, midnight + timedelta(minutes=105), 30, 15) == midnight + timedelta(minutes=75)
+
+
+def test_cheapest_block_start_starts_right_away_on_a_flat_curve_and_never_before_earliest():
+    from datetime import datetime, timedelta, timezone
+
+    from app.price_analyzer import find_cheapest_block_start
+
+    midnight = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
+    flat = _quarter_curve([0.30] * 8)
+    assert find_cheapest_block_start(flat, midnight + timedelta(minutes=30), midnight + timedelta(hours=2), 20, 15) == midnight + timedelta(minutes=30)
+
+
+def test_cheapest_block_start_is_none_when_the_block_does_not_fit_or_the_curve_has_a_gap():
+    from datetime import datetime, timedelta, timezone
+
+    from app.price_analyzer import find_cheapest_block_start
+
+    midnight = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
+    curve = _quarter_curve([0.30, 0.30, 0.30, 0.30])
+    assert find_cheapest_block_start(curve, midnight, midnight + timedelta(minutes=30), 60, 15) is None  # one hour in half an hour
+    gap = [curve[0], curve[2]]  # the 00:15 quarter is missing: two quarters, but not consecutive
+    assert find_cheapest_block_start(gap, midnight, midnight + timedelta(hours=1), 30, 15) is None
+    assert find_cheapest_block_start(curve, midnight, midnight + timedelta(hours=1), 0, 15) is None

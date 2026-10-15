@@ -11,6 +11,7 @@ Custom Home Assistant Supervisor add-ons for energy, battery, EV, and heating co
 | `Energy Prices` | Nord Pool import/export price curves and derived pricing |
 | `Water Heater Scheduler` | Price-based domestic hot water control |
 | `Charge Amps - EV Charger Monitor` | Charge Amps monitoring and control |
+| `Microsoft 365 MCP Server` | LAN-only MCP server (bearer-protected) for a personal Outlook/Hotmail account |
 
 ## Battery Stack
 
@@ -30,6 +31,7 @@ ha-addons/
 ├── battery-manager/
 ├── charge-amps-monitor/
 ├── energy-prices/
+├── ms365-mcp-server/
 ├── water-heater-scheduler/
 ├── docs/
 ├── shared/
@@ -72,6 +74,7 @@ For EV-aware battery control, add `Charge Amps - EV Charger Monitor`.
 - [energy-prices/README.md](energy-prices/README.md)
 - [water-heater-scheduler/README.md](water-heater-scheduler/README.md)
 - [charge-amps-monitor/README.md](charge-amps-monitor/README.md)
+- [ms365-mcp-server/README.md](ms365-mcp-server/README.md)
 
 Background docs:
 

@@ -46,3 +46,11 @@ class TestGapScheduler:
     def test_passive_fallback_is_tagged(self, scheduler):
         result = scheduler.generate_passive_gap_schedule()
         assert result["discharge"][0]["window_type"] == "passive_gap"
+
+    def test_start_times_use_local_time(self, scheduler):
+        import datetime
+        result = scheduler.generate_passive_gap_schedule()
+        now = datetime.datetime.now().astimezone()
+        start = datetime.datetime.strptime(result["charge"][0]["start"], "%H:%M")
+        diff = (start.hour * 60 + start.minute) - (now.hour * 60 + now.minute)
+        assert diff % (24 * 60) in (1, 2)

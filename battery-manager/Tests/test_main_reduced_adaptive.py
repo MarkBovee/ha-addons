@@ -359,6 +359,89 @@ def test_monitor_restores_generated_windows_when_protection_clears(monkeypatch, 
     assert not state.schedule_pause_active
 
 
+# A full battery sitting on a 100% sell buffer pauses discharge; the pause hides the sell window it
+# is reserved for, so the monitor must find an active window in the plan and release the pause.
+@pytest.mark.parametrize(
+    ("window_offset_minutes", "expect_released"),
+    [(-10, True), (30, False)],
+)
+def test_sell_buffer_pause_releases_when_the_planned_sell_window_is_active(
+    monkeypatch, window_offset_minutes, expect_released
+):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 25
+    config["ev_charger"]["enabled"] = True
+
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    sell_window = {
+        "start": (now + timedelta(minutes=window_offset_minutes)).isoformat(),
+        "duration": 60,
+        "power": 8000,
+        "window_type": "discharge",
+    }
+    state = bm_main.RuntimeState(
+        schedule={"charge": [], "discharge": [sell_window]},
+        published_schedule={"charge": [], "discharge": []},
+        schedule_generated_at=now,
+        schedule_pause_active=True,
+        sell_buffer_required_soc=100.0,
+        sell_buffer_valid_until=now + timedelta(hours=12),
+    )
+    sensor_values = {
+        config["entities"]["soc_entity"]: 100.0,
+        config["entities"]["grid_power_entity"]: 100.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 400.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 15.0,
+    }
+    published = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "discharge")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: (
+            published.append(deepcopy(schedule)),
+            setattr(state, "published_schedule", deepcopy(schedule)) if state is not None else None,
+            True,
+        )[-1],
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
+    )
+
+    if expect_released:
+        assert not state.schedule_pause_active
+        assert published and published[-1]["discharge"] == [sell_window]
+    else:
+        # A sell window that has not started yet must not lift the buffer protection.
+        assert state.schedule_pause_active
+        assert not any(schedule["discharge"] for schedule in published)
+
+
 # Expire the dynamic reserve when its associated main charge begins.
 def test_sell_buffer_target_expires_at_main_charge_start():
     now = datetime.now(timezone.utc)
@@ -733,13 +816,13 @@ def test_discharge_feasibility_respects_conservative_soc_floor():
     assert feasible[0]["end"] - feasible[0]["start"] == timedelta(minutes=48)
 
 
-# A saturated dynamic target still permits profitable selling while preserving sell_buffer_min_soc.
-def test_saturated_sell_buffer_truncates_sales_at_configured_safety_floor():
+# A profitable sale runs down to the conservative SOC, where adaptive takes over.
+def test_sell_windows_are_truncated_at_the_conservative_soc():
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["battery_capacity_kwh"] = 25
     config["soc"]["min_soc"] = 5
-    config["soc"]["conservative_soc"] = 30
-    config["soc"]["sell_buffer_min_soc"] = 40
+    config["soc"]["conservative_soc"] = 40
+    config["soc"]["sell_buffer_min_soc"] = 60  # the start SOC of a sale is not where the sale stops
     config["soc"]["sell_buffer_enabled"] = True
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_scaled_power"] = 8000
@@ -766,9 +849,10 @@ def test_saturated_sell_buffer_truncates_sales_at_configured_safety_floor():
     assert feasible[0]["end"] - feasible[0]["start"] == timedelta(minutes=112)
 
 
-# Schedule the affordable portion of a profitable sell when the buffer target saturates at 100%.
-def test_generate_schedule_allows_profitable_sell_when_saturated_buffer_equals_full_soc(monkeypatch):
+# Schedule the affordable portion of a profitable sell: down to the conservative SOC.
+def test_generate_schedule_sells_a_full_battery_down_to_the_conservative_soc(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = True
     config["negative_price_charging"]["enabled"] = False
@@ -777,9 +861,8 @@ def test_generate_schedule_allows_profitable_sell_when_saturated_buffer_equals_f
     config["temperature_based_discharge"]["enabled"] = False
     config["soc"]["battery_capacity_kwh"] = 25
     config["soc"]["min_soc"] = 5
-    config["soc"]["conservative_soc"] = 30
-    config["soc"]["sell_buffer_min_soc"] = 40
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
+    config["soc"]["conservative_soc"] = 40
+    config["soc"]["sell_buffer_min_soc"] = 60
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -828,6 +911,7 @@ def test_generate_schedule_allows_profitable_sell_when_saturated_buffer_equals_f
 # Keep publish-time sell power ranks aligned with energy-feasibility calculations.
 def test_generate_schedule_preserves_price_ranks_after_chronological_filtering(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = False
     config["negative_price_charging"]["enabled"] = False
@@ -1004,9 +1088,10 @@ def test_generate_schedule_uses_exact_top_discharge_hours_when_soc_supports_them
     assert discharge[0]["window_type"] == "discharge"
 
 
-# Allow a profitable sell down to the configured reserve when precharge is costly.
-def test_generate_schedule_limits_sell_to_safety_floor_when_precharge_is_too_expensive(monkeypatch):
+# A battery above the start SOC is not charged for the sale, and the sale is limited to the energy above the conservative SOC.
+def test_generate_schedule_limits_sell_to_the_conservative_soc_without_precharging_above_the_start_soc(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = False
     config["negative_price_charging"]["enabled"] = False
@@ -1014,9 +1099,8 @@ def test_generate_schedule_limits_sell_to_safety_floor_when_precharge_is_too_exp
     config["passive_solar"]["enabled"] = False
     config["temperature_based_discharge"]["enabled"] = False
     config["soc"]["min_soc"] = 5
-    config["soc"]["conservative_soc"] = 25
+    config["soc"]["conservative_soc"] = 40
     config["soc"]["sell_buffer_min_soc"] = 40
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -1054,10 +1138,8 @@ def test_generate_schedule_limits_sell_to_safety_floor_when_precharge_is_too_exp
 
     schedule = bm_main.generate_schedule(config, cast(Any, object()), None)
 
-    # 40% safety + the remaining 54 minutes at 8kW on a 25kWh battery
-    # rounds to a 70% target.
-    # The current price blocks precharging, but the profitable sell is still
-    # scheduled and runtime SOC protection preserves the configured floor.
+    # 43% is above the 40% start SOC: nothing is bought for the sale at 0.40, the profitable sell is still
+    # scheduled and limited to the 3 points above the conservative SOC (0.75 kWh = 5 minutes at 8 kW).
     assert schedule["charge"]
     assert schedule["charge"][0]["start"] == (curve_start + timedelta(hours=1)).isoformat()
     sell = next(
@@ -1075,6 +1157,7 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     expect_sell,
 ):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = True
     config["negative_price_charging"]["enabled"] = False
@@ -1083,8 +1166,7 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     config["temperature_based_discharge"]["enabled"] = False
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 25
-    config["soc"]["sell_buffer_min_soc"] = 40
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
+    config["soc"]["sell_buffer_min_soc"] = 50
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -1131,6 +1213,11 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     assert schedule["discharge"]
     assert all(period["window_type"] == "discharge" for period in schedule["discharge"])
     if not expect_sell:
+        # 43% is under the 50% start SOC: it is charged back up to it first, whatever the price (0.30 is above the 0.25 ceiling).
+        assert schedule["charge"][0]["window_type"] == "precharge"
+    else:
+        # exactly at the start SOC nothing is bought: the charge waits for the main window.
+        assert schedule["charge"][0]["window_type"] == "charge"
         assert schedule["charge"][0]["start"] == (curve_start + timedelta(minutes=45)).isoformat()
 
 
@@ -1138,6 +1225,7 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
 @pytest.mark.parametrize("max_charge_periods", [1, 3])
 def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_charge_periods):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = False
     config["negative_price_charging"]["enabled"] = False
@@ -1146,7 +1234,6 @@ def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_
     config["temperature_based_discharge"]["enabled"] = False
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 25
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -1180,7 +1267,8 @@ def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_
 
     monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _e: import_curve)
     monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _e: export_curve)
-    monkeypatch.setattr(bm_main, "_get_schedule_generation_soc", lambda *_a, **_kw: 10.0)
+    # 5% to the 40% floor is 35 pp = 66 minutes at 8 kW: longer than the hour before the main charge.
+    monkeypatch.setattr(bm_main, "_get_schedule_generation_soc", lambda *_a, **_kw: 5.0)
     monkeypatch.setattr(bm_main, "update_entity", lambda *_a, **_kw: None)
     monkeypatch.setattr(bm_main, "_get_schedule_slot_limits", lambda *_args, **_kwargs: (max_charge_periods, 6))
 
@@ -1203,6 +1291,7 @@ def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_
 # Prefer the adjacent main charge over a later negative slot when only one charge slot exists.
 def test_single_charge_slot_coalesces_precharge_with_main_charge(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = True
     config["negative_price_charging"]["enabled"] = True
@@ -1212,7 +1301,6 @@ def test_single_charge_slot_coalesces_precharge_with_main_charge(monkeypatch):
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 25
     config["soc"]["sell_buffer_min_soc"] = 40
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -1261,6 +1349,7 @@ def test_single_charge_slot_coalesces_precharge_with_main_charge(monkeypatch):
 # Keep new live sell periods paused when a rolling schedule is regenerated.
 def test_generate_schedule_preserves_active_pause(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["heuristics"]["discharge_after_charge_only"] = False  # these cases sell before the charge window
     config["dry_run"] = True
     config["adaptive"]["enabled"] = False
     config["negative_price_charging"]["enabled"] = False
@@ -1641,7 +1730,9 @@ def test_monitor_uses_today_only_range_curves(monkeypatch):
     assert captured_ranges["export"] == [0.31, 0.32]
 
 
-def test_generate_schedule_inserts_current_adaptive_window_when_missing(monkeypatch):
+# A quarter in the sell band that no sell window covers (the energy is reserved for later windows) falls back to adaptive like an adaptive quarter does, instead of idling.
+@pytest.mark.parametrize("price_range", ["adaptive", "discharge"])
+def test_generate_schedule_inserts_current_adaptive_window_when_missing(monkeypatch, price_range):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["heuristics"]["adaptive_price_threshold"] = 0.27
     config["power"]["min_discharge_power"] = 0
@@ -1672,7 +1763,7 @@ def test_generate_schedule_inserts_current_adaptive_window_when_missing(monkeypa
     monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
     monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
     monkeypatch.setattr(bm_main, "find_profitable_discharge_starts", lambda *_args, **_kwargs: set())
-    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "adaptive")
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: price_range)
     monkeypatch.setattr(
         bm_main,
         "get_current_price_entry",
@@ -2213,6 +2304,51 @@ def test_supported_discharge_skip_log_includes_energy_budget_breakdown(caplog):
     assert feasible[2]["end"] - feasible[2]["start"] == timedelta(minutes=45)
 
 
+# An energy-empty note for a window more than 12 hours out rests on a speculative projection, so it stays out of the INFO log.
+def test_empty_battery_skip_note_is_not_logged_at_info_for_windows_beyond_the_horizon(caplog):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["battery_capacity_kwh"] = 25
+    config["soc"]["min_soc"] = 5
+    config["power"]["max_discharge_power"] = 8000
+    # At 6 kW the 0.07 kWh left after the first window is under a minute of discharge, so later windows drop instead of truncating.
+    config["power"]["min_scaled_power"] = 6000
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    near_start = now + timedelta(hours=4)
+    far_start = now + timedelta(hours=13)
+    discharge_windows = [
+        {"start": now + timedelta(hours=1), "end": now + timedelta(hours=3), "avg_price": 0.474},
+        {"start": near_start, "end": near_start + timedelta(hours=1), "avg_price": 0.457},
+        {"start": far_start, "end": far_start + timedelta(hours=1), "avg_price": 0.457},
+    ]
+    trace: list = []
+
+    with caplog.at_level(logging.DEBUG):
+        feasible = bm_main._filter_supported_discharge_windows(
+            discharge_windows,
+            [],
+            soc=100.0,
+            config=config,
+            not_before=now,
+            top_x_discharge_count=3,
+            min_scaled_power=6000,
+            trace=trace,
+        )
+
+    skip_levels = {
+        record.getMessage().split("window ")[1][:5]: record.levelno
+        for record in caplog.records
+        if "Skipping discharge window" in record.getMessage()
+    }
+    assert len(feasible) == 1
+    assert skip_levels == {
+        near_start.astimezone().strftime("%H:%M"): logging.INFO,
+        far_start.astimezone().strftime("%H:%M"): logging.DEBUG,
+    }
+    # The decision trace keeps both drops; only the INFO log goes quiet.
+    assert [entry["decision"] for entry in trace] == ["truncated", "dropped", "dropped"]
+
+
 def test_generate_schedule_scales_charge_power_per_slot(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["heuristics"]["adaptive_price_threshold"] = 0.27
@@ -2657,9 +2793,144 @@ def test_active_passive_gap_keeps_passive_solar_mode(monkeypatch):
     assert state.passive_gap_active is True
 
 
-# A saturated target allows selling above the configured floor and pauses at that floor.
-@pytest.mark.parametrize(("soc", "expect_pause"), [(100.0, False), (40.0, True), (39.0, True)])
-def test_active_discharge_respects_safety_floor_with_saturated_sell_buffer(monkeypatch, soc, expect_pause):
+def test_passive_solar_charges_at_low_soc_below_conservative(monkeypatch):
+    """Low SOC (above hard min) must not suspend Passive Solar; solar should charge the battery."""
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["conservative_soc"] = 35
+    config["soc"]["min_soc"] = 5
+
+    now = datetime.now(timezone.utc)
+    schedule = {
+        "charge": [],
+        "discharge": [
+            {
+                "start": (now - timedelta(minutes=5)).isoformat(),
+                "duration": 15,
+                "power": 0,
+                "window_type": "adaptive",
+            }
+        ],
+    }
+    state = bm_main.RuntimeState(
+        schedule=deepcopy(schedule),
+        published_schedule=deepcopy(schedule),
+        schedule_generated_at=now,
+        last_schedule_publish=now,
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 5.7,
+        config["entities"]["grid_power_entity"]: -2167.0,
+        config["entities"]["solar_power_entity"]: 3166.0,
+        config["entities"]["house_load_entity"]: 900.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 13.0,
+    }
+    published = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "adaptive")
+    monkeypatch.setattr(bm_main, "_should_regenerate_live_schedule", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bm_main, "_publish_schedule", lambda *_args, **_kwargs: published.append(_args[1]) or True)
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=_ActiveSolarMonitorStub(),
+        gap_scheduler=_GapSchedulerStub(),
+    )
+
+    assert state.passive_gap_active is True
+    assert published
+
+
+def test_expired_passive_gap_is_not_replaced_by_rolling_regeneration(monkeypatch):
+    """After the 1-minute gap expires, Passive Solar must not regenerate the adaptive 0W schedule."""
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["soc"]["conservative_soc"] = 35
+    config["soc"]["min_soc"] = 5
+
+    now = datetime.now(timezone.utc)
+    expired_gap = {
+        "charge": [{"start": (now - timedelta(minutes=5)).isoformat(), "duration": 1, "power": 0}],
+        "discharge": [
+            {
+                "start": (now - timedelta(minutes=4)).isoformat(),
+                "duration": 1,
+                "power": 4000,
+                "window_type": "passive_gap",
+            }
+        ],
+    }
+    state = bm_main.RuntimeState(
+        schedule=deepcopy(expired_gap),
+        published_schedule=deepcopy(expired_gap),
+        schedule_generated_at=now - timedelta(minutes=5),
+        last_schedule_publish=now - timedelta(minutes=5),
+        passive_gap_active=True,
+    )
+
+    sensor_values = {
+        config["entities"]["soc_entity"]: 5.7,
+        config["entities"]["grid_power_entity"]: -2215.0,
+        config["entities"]["solar_power_entity"]: 3198.0,
+        config["entities"]["house_load_entity"]: 900.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 13.0,
+    }
+    generated = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [{"start": now.isoformat(), "price": 0.3}])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "adaptive")
+    monkeypatch.setattr(bm_main, "generate_schedule", lambda *_args, **_kwargs: generated.append(1) or {"charge": [], "discharge": []})
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bm_main, "_publish_schedule", lambda *_args, **_kwargs: True)
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=_ActiveSolarMonitorStub(),
+        gap_scheduler=_GapSchedulerStub(),
+    )
+
+    assert not generated
+    assert state.passive_gap_active is True
+
+
+# A sell window may spend the buffer target and pauses at the conservative SOC, where adaptive takes over.
+@pytest.mark.parametrize(("soc", "expect_pause"), [(100.0, False), (35.0, False), (30.0, True), (29.0, True)])
+def test_active_discharge_runs_down_to_the_conservative_soc_with_a_sell_buffer_target(monkeypatch, soc, expect_pause):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["conservative_soc"] = 30
     config["soc"]["min_soc"] = 5
@@ -3103,6 +3374,201 @@ def test_adaptive_regen_triggers_when_soc_below_conservative(monkeypatch):
     )
 
 
+# A sell-band quarter without a running window needs the same rolling regeneration as an adaptive quarter.
+def test_live_regen_covers_a_sell_band_quarter_without_a_running_window():
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    curve = [{"start": now.isoformat(), "end": (now + timedelta(hours=1)).isoformat(), "price": 0.45}]
+
+    assert bm_main._should_regenerate_live_schedule("discharge", False, False, curve, 85.0, config) == "discharge"
+    assert bm_main._should_regenerate_live_schedule("discharge", False, True, curve, 85.0, config) is None
+    assert bm_main._should_regenerate_live_schedule("discharge", True, False, curve, 85.0, config) is None
+    assert bm_main._should_regenerate_live_schedule("passive", False, False, curve, 85.0, config) is None
+
+
+# The sell-buffer target counts on the first sell window before the main charge, so it goes stale when that window ends.
+def test_sell_buffer_recompute_time_is_the_end_of_the_first_sell_window():
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    main_charge_start = now + timedelta(hours=14)
+    windows = {
+        "discharge": [
+            {"start": now + timedelta(hours=10), "end": now + timedelta(hours=11, minutes=30)},
+            {"start": now - timedelta(minutes=5), "end": now + timedelta(minutes=7)},
+            {"start": now - timedelta(hours=1), "end": now - timedelta(minutes=40)},
+            {"start": now + timedelta(hours=16), "end": now + timedelta(hours=18)},
+        ]
+    }
+
+    # Ended and post-charge windows do not count; the window running now does.
+    assert bm_main._sell_buffer_recompute_time(windows, now, main_charge_start, 100.0) == now + timedelta(minutes=7)
+    # Without an active buffer there is nothing to recompute.
+    assert bm_main._sell_buffer_recompute_time(windows, now, main_charge_start, None) is None
+    assert bm_main._sell_buffer_recompute_time({"discharge": []}, now, main_charge_start, 100.0) is None
+
+
+# After the sell window the buffer target counted on is over: recompute it instead of holding adaptive paused
+# on the stale target until the next hourly refresh or a restart (2026-10-14 20:30-20:48).
+@pytest.mark.parametrize(("recompute_offset_minutes", "expect_regen"), [(-1, True), (30, False)])
+def test_monitor_recomputes_a_stale_sell_buffer_once_its_sell_window_is_over(
+    monkeypatch, recompute_offset_minutes, expect_regen
+):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["timing"]["schedule_regen_cooldown_seconds"] = 0
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 25
+
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    morning_window = {
+        "start": (now + timedelta(hours=10)).isoformat(),
+        "duration": 90,
+        "power": 8000,
+        "window_type": "discharge",
+    }
+    state = bm_main.RuntimeState(
+        schedule={"charge": [], "discharge": [morning_window]},
+        published_schedule={"charge": [], "discharge": [morning_window]},
+        schedule_generated_at=now - timedelta(minutes=10),
+        last_schedule_publish=now - timedelta(minutes=10),
+        sell_buffer_required_soc=100.0,
+        sell_buffer_valid_until=now + timedelta(hours=14),
+        sell_buffer_recompute_at=now + timedelta(minutes=recompute_offset_minutes),
+    )
+    current_entry = {
+        "start": now.replace(minute=0).isoformat(),
+        "end": (now.replace(minute=0) + timedelta(hours=1)).isoformat(),
+        "price": 0.43,
+    }
+    regenerated_schedule = {"charge": [], "discharge": [morning_window]}
+    sensor_values = {
+        config["entities"]["soc_entity"]: 86.0,
+        config["entities"]["grid_power_entity"]: 470.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 300.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 12.0,
+    }
+    regen_calls = []
+    published = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "get_current_price_entry", lambda _curve, _now, _interval: current_entry)
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "adaptive")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bm_main,
+        "_publish_schedule",
+        lambda _mqtt, schedule, _dry_run, state=None, force=False: (
+            published.append(deepcopy(schedule)),
+            setattr(state, "published_schedule", deepcopy(schedule)) if state is not None else None,
+            True,
+        )[-1],
+    )
+    monkeypatch.setattr(
+        bm_main,
+        "generate_schedule",
+        lambda *_args, **_kwargs: (regen_calls.append(True), regenerated_schedule)[1],
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
+    )
+
+    if expect_regen:
+        assert regen_calls, "A sell-buffer target whose sell window is over must be recomputed"
+        assert state.last_schedule_publish is not None and state.last_schedule_publish > now - timedelta(minutes=1)
+    else:
+        # The target still counts on a window that has not ended: SOC 86% <= 100% keeps adaptive paused.
+        assert not regen_calls
+        assert published and published[-1]["discharge"] == []
+
+
+# Sell-wait holds adaptive until its wait ends; regenerating a sell-band quarter meanwhile would only repeat the hold every cooldown.
+@pytest.mark.parametrize(("wait_offset_minutes", "expect_regen"), [(90, False), (-1, True)])
+def test_monitor_does_not_regenerate_a_sell_band_quarter_during_a_sell_wait(
+    monkeypatch, wait_offset_minutes, expect_regen
+):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["timing"]["schedule_regen_cooldown_seconds"] = 0
+    config["soc"]["min_soc"] = 5
+    config["soc"]["conservative_soc"] = 25
+
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    state = bm_main.RuntimeState(
+        schedule={"charge": [], "discharge": []},
+        published_schedule={"charge": [], "discharge": []},
+        schedule_generated_at=now - timedelta(minutes=10),
+        last_schedule_publish=now - timedelta(minutes=10),
+        sell_wait_until=now + timedelta(minutes=wait_offset_minutes),
+    )
+    current_entry = {
+        "start": now.replace(minute=0).isoformat(),
+        "end": (now.replace(minute=0) + timedelta(hours=1)).isoformat(),
+        "price": 0.48,
+    }
+    sensor_values = {
+        config["entities"]["soc_entity"]: 85.0,
+        config["entities"]["grid_power_entity"]: 540.0,
+        config["entities"]["solar_power_entity"]: 0.0,
+        config["entities"]["house_load_entity"]: 300.0,
+        config["entities"]["battery_power_entity"]: 0.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 12.0,
+    }
+    regen_calls = []
+
+    monkeypatch.setattr(
+        bm_main,
+        "_get_sensor_float_and_age_seconds",
+        lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0),
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [current_entry])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "get_current_price_entry", lambda _curve, _now, _interval: current_entry)
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "discharge")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bm_main, "_publish_schedule", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        bm_main,
+        "generate_schedule",
+        lambda *_args, **_kwargs: (regen_calls.append(True), {"charge": [], "discharge": []})[1],
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=cast(Any, _SolarMonitorStub()),
+        gap_scheduler=cast(Any, _GapSchedulerStub()),
+    )
+
+    assert bool(regen_calls) is expect_regen
+
+
 # Enforce dynamic reserve protection without blocking adaptive operation above it.
 @pytest.mark.parametrize(
     (
@@ -3267,3 +3733,74 @@ def test_zero_power_adaptive_placeholder_respects_sell_buffer(
             p.get("window_type") == "discharge" and p.get("power") == 8000
             for p in published[-1][0]["discharge"]
         ), "Future discharge window must be preserved in the published schedule"
+
+
+# Live solar surplus trims the active solar-aware charge window to a 1000 W step.
+@pytest.mark.parametrize(
+    ("solar", "load", "expected_power"),
+    [(4054.0, 2300.0, 4000), (9000.0, 2300.0, 0), (0.0, 500.0, 6000)],
+)
+def test_active_solar_aware_charge_window_is_trimmed_to_live_solar(monkeypatch, solar, load, expected_power):
+    config = deepcopy(bm_main.DEFAULT_CONFIG)
+    config["solar_aware_charging"]["live_trim_enabled"] = True
+    now = datetime.now(timezone.utc)
+    window = {
+        "start": (now - timedelta(minutes=15)).isoformat(),
+        "duration": 285,
+        "power": 3252,
+        "base_power": 8000,
+        "window_type": "load",
+        "solar_aware": True,
+    }
+    schedule = {"charge": [window], "discharge": []}
+    state = bm_main.RuntimeState(
+        schedule=deepcopy(schedule),
+        published_schedule=deepcopy(schedule),
+        schedule_generated_at=now,
+        last_schedule_publish=now,
+    )
+    sensor_values = {
+        config["entities"]["soc_entity"]: 8.1,
+        config["entities"]["grid_power_entity"]: 4800.0,
+        config["entities"]["solar_power_entity"]: solar,
+        config["entities"]["house_load_entity"]: load,
+        config["entities"]["battery_power_entity"]: -6500.0,
+        config["ev_charger"]["entity_id"]: 0.0,
+        config["entities"]["temperature_entity"]: 19.0,
+    }
+    published = []
+
+    monkeypatch.setattr(
+        bm_main, "_get_sensor_float_and_age_seconds", lambda _ha, entity_id, _now: (sensor_values.get(entity_id), 0.0)
+    )
+    monkeypatch.setattr(bm_main, "_get_sensor_float", lambda _ha, entity_id: sensor_values.get(entity_id))
+    monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _entity_id: [{"start": now.isoformat(), "price": 0.2}])
+    monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _entity_id: [])
+    monkeypatch.setattr(bm_main, "detect_interval_minutes", lambda _curve: 60)
+    monkeypatch.setattr(bm_main, "calculate_top_x_count", lambda _hours, _interval: 1)
+    monkeypatch.setattr(bm_main, "calculate_price_ranges", lambda *_args, **_kwargs: (None, None, None))
+    monkeypatch.setattr(bm_main, "_determine_price_range", lambda *_args, **_kwargs: "load")
+    monkeypatch.setattr(bm_main, "build_today_story", lambda *_args, **_kwargs: "story")
+    monkeypatch.setattr(bm_main, "build_status_message", lambda *_args, **_kwargs: "status")
+    monkeypatch.setattr(bm_main, "update_entity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bm_main, "_publish_schedule", lambda _mqtt, sched, *_args, **_kwargs: published.append(sched) or True
+    )
+
+    bm_main.monitor_and_adjust_active_period(
+        config,
+        ha_api=cast(Any, object()),
+        mqtt_client=None,
+        state=state,
+        solar_monitor=_SolarMonitorStub(),
+        gap_scheduler=_GapSchedulerStub(),
+    )
+
+    assert published
+    assert published[-1]["charge"][0]["power"] == expected_power
+    assert state.schedule["charge"][0]["power"] == 3252
+
+
+# Live trim is opt-in: by default the planned charge power is kept regardless of live solar.
+def test_live_solar_charge_trim_is_disabled_by_default():
+    assert bm_main.DEFAULT_CONFIG["solar_aware_charging"]["live_trim_enabled"] is False

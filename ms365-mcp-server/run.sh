@@ -1,0 +1,195 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck shell=bash
+
+# Layout inside the container:
+#   LAN :3000  -> nginx (bearer-token check, only /mcp and /healthz)
+#   127.0.0.1:3001 -> ms-365-mcp-server --http --trust-proxy-auth
+# --trust-proxy-auth makes the MCP server skip its own Bearer check and use the
+# MSAL identity cached in /data, so nginx MUST stay in front of it.
+
+readonly PROXY_PORT=3000
+readonly NODE_PORT=3001
+readonly NGINX_CONF=/etc/nginx/ms365-mcp.conf
+
+bashio::log.info "Starting Microsoft 365 MCP Server add-on..."
+
+# ---------------------------------------------------------------- options
+client_id=$(bashio::config 'client_id')
+access_token=$(bashio::config 'access_token')
+
+if [[ ! "${client_id}" =~ ^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$ ]]; then
+    bashio::exit.nok "Option 'client_id' must be the Application (client) ID (a GUID) of your Azure app registration."
+fi
+# No token configured: generate one and store it in the add-on options, where the
+# Configuration tab shows it as a password field (reveal to copy). Clearing the
+# field and restarting rotates it. The value is never written to the log.
+if ! bashio::config.has_value 'access_token'; then
+    access_token=$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n')
+    bashio::addon.option 'access_token' "${access_token}" || true
+    # bashio does not reliably report API failures, so read the option back.
+    if [[ "$(bashio::config 'access_token')" != "${access_token}" ]]; then
+        bashio::exit.nok "Could not store the generated access_token. Set the 'access_token' option manually."
+    fi
+    bashio::log.notice "Generated a new access_token. Open the Configuration tab, reveal 'access_token' and copy it."
+fi
+# The token is written into the nginx config, so the charset is restricted.
+if [[ ! "${access_token}" =~ ^[A-Za-z0-9._~+/=-]{32,128}$ ]]; then
+    bashio::exit.nok "Option 'access_token' must be 32-128 characters from [A-Za-z0-9._~+/=-]. Generate one with: openssl rand -hex 32"
+fi
+
+# ------------------------------------------------------------ environment
+export MS365_MCP_CLIENT_ID="${client_id}"
+# Personal Microsoft accounts only; "common" refresh tokens are rejected for them.
+export MS365_MCP_TENANT_ID=consumers
+
+# Persist the MSAL token cache (+ its .cache-key) and selected account in /data.
+export MS365_MCP_TOKEN_CACHE_PATH=/data/.token-cache.json
+export MS365_MCP_SELECTED_ACCOUNT_PATH=/data/.selected-account.json
+# No system credential store in the container; keep the key file next to the cache.
+export MS365_MCP_USE_KEYTAR=0
+
+export LOG_LEVEL=info
+# MS365_MCP_REDACT_PII is deliberately left unset (default: redaction enabled).
+
+# ------------------------------------------------------------------ flags
+# Flags that shape the tool surface (also used for --list-permissions below).
+surface_args=()
+if bashio::config.true 'read_only'; then
+    surface_args+=(--read-only)
+fi
+if bashio::config.has_value 'preset'; then
+    surface_args+=(--preset "$(bashio::config 'preset | join(",")')")
+fi
+
+server_args=(--http "127.0.0.1:${NODE_PORT}" --trust-proxy-auth --no-dynamic-registration)
+server_args+=("${surface_args[@]}")
+# Dynamic tool discovery (experimental upstream): the client sees search-tools,
+# get-tool-schema and execute-tool instead of ~180 tools. --read-only and --preset
+# still limit what these can find and run. Server only; login does not need it.
+if bashio::config.true 'dynamic_tools'; then
+    server_args+=(--discovery)
+fi
+if bashio::config.has_value 'expected_username'; then
+    server_args+=(--expected-username "$(bashio::config 'expected_username')")
+fi
+if bashio::config.has_value 'message_signoff_suffix'; then
+    server_args+=(--message-signoff-suffix "$(bashio::config 'message_signoff_suffix')")
+fi
+
+# Log the Graph permissions this configuration will request (offline, no secrets).
+if permissions=$(ms-365-mcp-server "${surface_args[@]}" --list-permissions 2>/dev/null \
+        | jq -r '.effectivePermissions | join(", ")' 2>/dev/null) && [[ -n "${permissions}" ]]; then
+    bashio::log.info "Graph delegated permissions requested at login: ${permissions}"
+fi
+
+# ------------------------------------------------------------------ login
+# One-time device-code login, done before the server starts so the URL and code
+# appear in this add-on's log. The login lives in /data and is reused afterwards;
+# the login/logout tools are never exposed to MCP clients. The same surface and
+# account flags are used so the requested scopes and the pin match the server's.
+login_args=("${surface_args[@]}")
+if bashio::config.has_value 'expected_username'; then
+    login_args+=(--expected-username "$(bashio::config 'expected_username')")
+fi
+
+# Succeeds when a cached login for the expected account can get a Graph token.
+login_is_valid() {
+    local result
+    result=$(ms-365-mcp-server "${login_args[@]}" --verify-login 2>/dev/null | tail -n 1) || return 1
+    jq -e '.success == true' <<<"${result}" >/dev/null 2>&1
+}
+
+if login_is_valid; then
+    bashio::log.info "Microsoft login found in /data."
+else
+    bashio::log.notice "No valid Microsoft login yet. Open https://microsoft.com/devicelogin, enter the code printed below and sign in within 15 minutes."
+    # The JSON result line is dropped so the account name is not printed. A read loop
+    # (not grep) passes each line on immediately: grep buffers when writing to a pipe,
+    # which would hide the code until the login had already finished.
+    timeout 960 ms-365-mcp-server "${login_args[@]}" --login 2>&1 \
+        | while IFS= read -r line; do [[ "${line}" == \{* ]] || printf '%s\n' "${line}"; done || true
+    login_is_valid || bashio::exit.nok "Microsoft login did not complete. Restart the add-on to get a new code."
+    bashio::log.info "Microsoft login completed and stored in /data."
+fi
+
+# ------------------------------------------------------------------ nginx
+# Only /mcp (bearer required) and /healthz are reachable from the LAN. The
+# upstream OAuth endpoints (/authorize, /token, /register, ...) are not exposed.
+# Host/Origin are rewritten because upstream rejects non-localhost values when
+# bound to loopback, and X-Forwarded-For is replaced (not appended) so the
+# upstream per-IP rate limit (120 req/min on /mcp) sees the real client.
+umask 077
+mkdir -p /run/nginx
+cat > "${NGINX_CONF}" <<EOF
+worker_processes 1;
+pid /run/nginx/ms365-mcp.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 128;
+}
+
+http {
+    access_log off;
+    server_tokens off;
+    default_type application/json;
+
+    limit_req_zone \$binary_remote_addr zone=mcp:1m rate=20r/s;
+
+    server {
+        listen ${PROXY_PORT} default_server;
+        # Upstream's express.json() caps request bodies at 100 KB regardless of this value.
+        client_max_body_size 25m;
+
+        location = /healthz {
+            proxy_pass http://127.0.0.1:${NODE_PORT}/;
+            proxy_set_header Host localhost:${NODE_PORT};
+            proxy_connect_timeout 2s;
+            proxy_read_timeout 5s;
+        }
+
+        # limit_req runs before auth_request, so unauthenticated floods are throttled too.
+        location = /mcp {
+            limit_req zone=mcp burst=40 nodelay;
+            limit_req_status 429;
+            auth_request /_mcp_auth;
+            error_page 401 = @mcp_unauthorized;
+
+            proxy_pass http://127.0.0.1:${NODE_PORT}/mcp;
+            proxy_http_version 1.1;
+            proxy_set_header Host localhost:${NODE_PORT};
+            proxy_set_header Origin "";
+            proxy_set_header Authorization "";
+            proxy_set_header X-Forwarded-For \$remote_addr;
+            proxy_buffering off;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 180s;
+        }
+
+        # Token check. "if ... !=" compares case-sensitively; a "map" lookup does not.
+        location = /_mcp_auth {
+            internal;
+            if (\$http_authorization != "Bearer ${access_token}") {
+                return 401;
+            }
+            return 204;
+        }
+
+        location @mcp_unauthorized {
+            add_header WWW-Authenticate 'Bearer realm="ms365-mcp"' always;
+            return 401 '{"error":"unauthorized"}';
+        }
+
+        location / {
+            return 404 '{"error":"not_found"}';
+        }
+    }
+}
+EOF
+umask 022
+
+nginx -t -c "${NGINX_CONF}" || bashio::exit.nok "Generated nginx configuration is invalid."
+nginx -c "${NGINX_CONF}" -g 'daemon off;' &
+
+bashio::log.info "MCP endpoint: http://<ha-host>:${PROXY_PORT}/mcp (Authorization: Bearer <access_token>)"
+exec ms-365-mcp-server "${server_args[@]}"

@@ -30,6 +30,9 @@ DEFAULT_CONFIG = {
         "entry_threshold": 1000,
         "exit_threshold": 200,
         "min_solar_entry_power": 200,
+        "entry_hold_seconds": 0,
+        "exit_hold_seconds": 0,
+        "min_active_seconds": 0,
     },
 }
 
@@ -122,3 +125,79 @@ class TestSolarMonitor:
             "sensor.grid_power": {"state": "unknown"},
         })
         assert monitor.check_passive_state(ha) is False
+
+
+class _Clock:
+    def __init__(self):
+        import datetime
+        self.t = datetime.datetime(2026, 10, 5, 9, 0, tzinfo=datetime.timezone.utc)
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds):
+        import datetime
+        self.t += datetime.timedelta(seconds=seconds)
+
+
+def _states(pv, grid):
+    return FakeHaApi({"sensor.pv_power": {"state": str(pv)}, "sensor.grid_power": {"state": str(grid)}})
+
+
+class TestHysteresis:
+    def _monitor(self, clock):
+        config = {
+            **DEFAULT_CONFIG,
+            "passive_solar": {
+                **DEFAULT_CONFIG["passive_solar"],
+                "entry_hold_seconds": 300,
+                "exit_hold_seconds": 180,
+                "min_active_seconds": 600,
+            },
+        }
+        return SolarMonitor(config, logging.getLogger("test"), now_fn=clock)
+
+    def test_entry_requires_sustained_export(self):
+        clock = _Clock()
+        mon = self._monitor(clock)
+        assert mon.check_passive_state(_states(3000, -1500)) is False
+        clock.advance(299)
+        assert mon.check_passive_state(_states(3000, -1500)) is False
+        clock.advance(2)
+        assert mon.check_passive_state(_states(3000, -1500)) is True
+
+    def test_entry_timer_resets_when_export_drops(self):
+        clock = _Clock()
+        mon = self._monitor(clock)
+        mon.check_passive_state(_states(3000, -1500))
+        clock.advance(200)
+        mon.check_passive_state(_states(3000, -100))
+        clock.advance(200)
+        assert mon.check_passive_state(_states(3000, -1500)) is False
+
+    def _activate(self, clock, mon):
+        mon.check_passive_state(_states(3000, -1500))
+        clock.advance(301)
+        assert mon.check_passive_state(_states(3000, -1500)) is True
+
+    def test_exit_requires_min_active_and_sustained_import(self):
+        clock = _Clock()
+        mon = self._monitor(clock)
+        self._activate(clock, mon)
+        # Import starts right after activation: held 180s but min active (600s) not reached.
+        assert mon.check_passive_state(_states(1500, 480)) is True
+        clock.advance(200)
+        assert mon.check_passive_state(_states(1500, 480)) is True
+        clock.advance(400)
+        assert mon.check_passive_state(_states(1500, 480)) is False
+
+    def test_short_import_blip_does_not_exit(self):
+        clock = _Clock()
+        mon = self._monitor(clock)
+        self._activate(clock, mon)
+        clock.advance(700)
+        assert mon.check_passive_state(_states(1500, 480)) is True
+        clock.advance(60)
+        assert mon.check_passive_state(_states(1500, -500)) is True
+        clock.advance(150)
+        assert mon.check_passive_state(_states(1500, 480)) is True
