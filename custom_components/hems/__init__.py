@@ -1,15 +1,17 @@
 """HEMS: modular home energy management for Home Assistant. This version plans in dry-run only (no device writes)."""
 import logging
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_state_change_event, async_track_utc_time_change
 
-from .const import CONF_SOC, PLATFORMS
+from .const import BUILD_FILE, CONF_SOC, PLATFORMS
 from .coordinator import HemsCoordinator
 
 type HemsConfigEntry = ConfigEntry[HemsCoordinator]
 
+_LOGGER = logging.getLogger(__name__)
 PLAN_SECONDS = 20          # a few seconds past the quarter so sensors that update on the boundary are already fresh
 
 
@@ -23,10 +25,20 @@ def _show_info_logs() -> None:
         package.setLevel(logging.INFO)
 
 
+def read_build() -> str:
+    """The commit this code was deployed from (hems/deploy.py writes it next to the code); 'unknown' for a copy that was not deployed by it."""
+    try:
+        return (Path(__file__).with_name(BUILD_FILE)).read_text().strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool:
     """Create the coordinator, plan once now, then every quarter."""
     _show_info_logs()
     coordinator = HemsCoordinator(hass, entry)
+    coordinator.build = await hass.async_add_executor_job(read_build)
+    _LOGGER.info("HEMS build %s", coordinator.build)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
 

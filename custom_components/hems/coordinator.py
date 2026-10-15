@@ -91,6 +91,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._pv_history: list[tuple[datetime, float]] = []
         self._history_at: datetime | None = None
         self._weather: Weather | None = None
+        self.build = "unknown"                      # set by async_setup_entry before the first cycle
         self._market_prices: dict[datetime, float] = {}
         self._market: MarketPrices | None = None
         self._market_tried_at: datetime | None = None
@@ -112,7 +113,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         snapshot = settings_snapshot({"battery": settings.battery, "prices": settings.prices, "engine": engine})
         if snapshot["hash"] != self._settings_hash:
             roles = {k: v for k, v in self.config_entry.data.items()}
-            await self._log_event("settings", hash=snapshot["hash"], previous=self._settings_hash, values=snapshot["values"], roles=roles)
+            await self._log_event("settings", hash=snapshot["hash"], build=self.build, previous=self._settings_hash, values=snapshot["values"], roles=roles)
             self._settings_hash = snapshot["hash"]
 
     async def _retry(self, _now: datetime) -> None:
@@ -252,7 +253,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         action = decision.plan.slots[0].action if decision else None
         inputs = {**output.trace.get("inputs", {}), "history_hours": len(self._history), "weather_age_min": None if weather_age is None else round(weather_age),
                   "market_age_min": round((now - self._market.fetched_at).total_seconds() / 60) if self._market else None, "price_curve_configured": has_curve}
-        record = {"dry_run": True, "pv_gain": round(gain, 2), "settings": self._settings_hash, **output.trace, "inputs": inputs,
+        record = {"dry_run": True, "build": self.build, "pv_gain": round(gain, 2), "settings": self._settings_hash, **output.trace, "inputs": inputs,
                   "previous_action": self._last_action, "action_changed": bool(action and self._last_action and action != self._last_action),
                   "execution": {"code": execution.code, "planned_w": execution.planned_w, "power_w": execution.power_w, "reason": execution.reason}}
         await self.hass.async_add_executor_job(self._trace.write, record)

@@ -182,3 +182,24 @@ def test_dry_run_changes_nothing_and_never_connects():
     """--dry-run lists the files and exits before any ssh or test run."""
     done = subprocess.run([sys.executable, str(DEPLOY), "--dry-run", "--host", "192.0.2.1", "--user", "demo"], capture_output=True, text=True)
     assert done.returncode == 0 and "Nothing was changed" in done.stdout and "manifest.json" in done.stdout
+
+
+def test_the_build_stamp_is_the_commit_and_says_when_the_code_is_not_committed(tmp_path):
+    """BUILD carries the short commit of the deployed code; a changed tracked file in it adds '+dirty'."""
+    git = lambda *args: subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-q")
+    code = tmp_path / "custom_components" / "hems" / "a.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("x = 1\n")
+    git("add", "-A")
+    git("commit", "-qm", "first")
+    commit = git("rev-parse", "--short", "HEAD")
+    assert deploy.write_build_stamp(tmp_path) == commit
+    assert (tmp_path / "custom_components" / "hems" / "BUILD").read_text() == commit + "\n"
+    code.write_text("x = 2\n")
+    assert deploy.write_build_stamp(tmp_path) == commit + "+dirty"
+
+
+def test_the_stamp_is_deployed_even_though_git_ignores_it():
+    """BUILD is generated and ignored, so the file list must add it by name."""
+    assert deploy.BUILD_FILE == "BUILD"

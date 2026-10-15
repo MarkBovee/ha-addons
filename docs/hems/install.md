@@ -109,9 +109,15 @@ HEMS schrijft in `/config/hems/` drie bestanden, elk met roterende generaties (`
 
 Redencodes in `plans.jsonl`: `s` verkopen loont meer dan bewaren, `b` kopen is goedkoper dan bewaren, `h` vasthouden, `f` vasthouden op de reservevloer (verkopen zou lonen maar mag niet lager), `v` vasthouden omdat de batterij vol is. Alle waarden zijn EUR per kWh in de batterij; `keep` is wat de rest van de horizon die kWh waard is.
 
+### Welke code maakte deze regel? (build)
+
+`hems/deploy.py` schrijft de commit van de uitgerolde code naar `custom_components/hems/BUILD` (`abc1234`, met `+dirty` als er niet-gecommitte wijzigingen in `custom_components/hems` of `hems/core` zaten). HEMS zet die in elk beslissingsrecord (`build` in `decision_trace.jsonl`), in de `settings`-gebeurtenis, in het HA-log (`HEMS build abc1234` bij het opstarten) en als softwareversie van het apparaat. Een review die een regel in twijfel trekt kijkt eerst naar `build`: een regel van vóór de fix is geen open bug. Zonder BUILD (met de hand gekopieerd) staat er `unknown`.
+
 ### Planner en uitvoerder
 
 De **planner** bepaalt elk kwartier uit prijzen en voorspellingen hoe de dag eruitziet: laden in het goedkope venster, verkopen uit de geladen energie later. Hij plant vanaf de werkelijke SoC en maakt zichzelf elk kwartier opnieuw. De **uitvoerder** is de laatste controle vóór een apparaat: hij leest de actuele SoC opnieuw, bij elke SoC-update binnen het kwartier, en laat de opdracht nooit onder de vloer (reserve of harde minimum) ontladen, boven vol laden, of draaien op een SoC die ontbreekt of niet meer ververst wordt. Ontbreekt er nog maar een beetje ruimte, dan vertraagt hij het vermogen zodat het kwartier precies op de vloer eindigt. Dat staat in `sensor.hems_executor`, in `events.jsonl` (`executor`) en als WARNING in het HA-log zodra hij het plan overschrijft. Zodra HEMS naar de batterij gaat schrijven, gebeurt dat uitsluitend via de uitvoerder.
+
+De uitvoerder rekent de ruimte tot vol of tot de vloer vanaf het moment dat de SoC-waarde voor het laatst **veranderde** (`Reading.changed_at`, bij Home Assistant `last_changed`), niet vanaf het moment van de laatste melding. Een sensor die elke minuut hetzelfde getal herhaalt terwijl de batterij laadt, liet anders de limiet met de klok meestijgen en dan weer instorten (14 okt 15:00, `limited_full` en `as_planned` om de halve minuut). De limiet verandert nu alleen mee met een nieuwe SoC-waarde.
 
 ### Wachtkosten
 

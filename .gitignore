@@ -46,3 +46,6 @@ docs/hems/observations/data/plans.jsonl
 docs/hems/observations/data/prices_quarter.jsonl
 docs/hems/observations/data/price_curves.jsonl
 docs/hems/observations/data/trace/
+
+# HEMS deploy stamp (written by hems/deploy.py)
+custom_components/hems/BUILD

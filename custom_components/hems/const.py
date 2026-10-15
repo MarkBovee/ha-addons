@@ -52,3 +52,4 @@ TRACE_DIR = "hems"
 TRACE_FILE = "decision_trace.jsonl"      # one line per cycle: inputs, the comparison behind the action, plan segments
 PLANS_FILE = "plans.jsonl"                 # one line per cycle: every planned quarter with the inputs it came from
 EVENTS_FILE = "events.jsonl"               # fetches, status changes, action changes, settings changes
+BUILD_FILE = "BUILD"                  # written by hems/deploy.py: the commit this code was deployed from

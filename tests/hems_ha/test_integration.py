@@ -449,3 +449,20 @@ async def test_a_reading_knows_when_the_value_changed_apart_from_when_it_was_rep
     hass.states.async_set("sensor.soc", "95.7")
     assert reading_from_state(hass.states.get("sensor.soc")).changed_at == NOW + timedelta(seconds=80)
 
+
+async def test_every_record_and_the_device_say_which_build_made_them(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock, monkeypatch):
+    """A decision, the settings event and the device carry the deployed commit, so a review can tell old code from current code."""
+    from homeassistant.helpers import device_registry as dr
+    monkeypatch.setattr("custom_components.hems.read_build", lambda: "abc1234")
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    assert read_jsonl(hass, "decision_trace.jsonl")[-1]["build"] == "abc1234"
+    assert [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]["build"] == "abc1234"
+    assert dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)[0].sw_version == "abc1234"
+
+
+async def test_a_copy_without_a_stamp_reports_unknown(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Nothing breaks when BUILD is missing (a hand-copied integration, the test suite): the build is 'unknown'."""
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    assert read_jsonl(hass, "decision_trace.jsonl")[-1]["build"] == "unknown"

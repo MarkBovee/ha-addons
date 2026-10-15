@@ -21,4 +21,4 @@ class HemsEntity(CoordinatorEntity[HemsCoordinator]):
         super().__init__(coordinator)
         self.entity_id = f"{domain}.hems_{key}"
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name="HEMS", manufacturer="HEMS", model="Dry-run planner")
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name="HEMS", manufacturer="HEMS", model="Dry-run planner", sw_version=coordinator.build)

@@ -92,6 +92,22 @@ def relative_files(root: Path = ROOT) -> list[str]:
     return sorted(p[len(prefix):] for p in out if p.startswith(prefix) and "__pycache__" not in p)
 
 
+BUILD_FILE = "BUILD"
+
+
+def write_build_stamp(root: Path = ROOT) -> str:
+    """Write the commit the deployed code comes from into custom_components/hems/BUILD and return it ('abc1234', '+dirty' when tracked files differ).
+
+    The integration puts this in every decision record and event, so a log line says which code made it; without it a
+    reviewer cannot tell a decision of an old version from one of the current version."""
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+    dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", str(INTEGRATION), "hems/core"], cwd=root,
+                           capture_output=True, text=True, check=True).stdout.strip()
+    stamp = head + ("+dirty" if dirty else "")
+    (root / INTEGRATION / BUILD_FILE).write_text(stamp + "\n")
+    return stamp
+
+
 def local_digests(files: list[str], root: Path = ROOT) -> dict[str, str]:
     """sha256 per relative file of the local copy."""
     return {f: hashlib.sha256((root / INTEGRATION / f).read_bytes()).hexdigest() for f in files}
@@ -249,6 +265,7 @@ def main() -> int:
     args = parser.parse_args()
     env = parse_env((ROOT / ".env").read_text()) if (ROOT / ".env").exists() else {}
     target, files = target_from_env(env, args.host, args.user, args.key), relative_files()
+    files = sorted({*files, BUILD_FILE}) if files else files
     target = replace(target, sudo=not args.no_sudo)
     if not files:
         raise SystemExit("No files found under custom_components/hems.")
@@ -260,6 +277,7 @@ def main() -> int:
         return 0
     if not args.skip_checks:
         run_checks()
+    print(f"Build {write_build_stamp()}")
     with tempfile.TemporaryDirectory() as tmp:
         deploy(target, files, os.path.join(tmp, "ssh-%C"), args.batch)
     if args.restart:
