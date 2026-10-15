@@ -52,8 +52,8 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 - Low-value periods stay passive unless heuristics promote them
 - Future sell windows are pruned when the SOC projected at their start (current SOC + planned grid charge + forecast PV share − earlier sells) cannot support them
 - Top-X sell hours are picked per price peak: from the quarters after the day's main charge window (the evening) and, with their own budget, from the profitable quarters before it (the morning) (`heuristics.discharge_after_charge_only`); `top_x_discharge_hours` applies to each peak, not to the whole day
-- The day's charge is sized to refill what the morning sale takes out, so the evening keeps its full budget; the sell-buffer precharge is an emergency charge: it only runs when the SOC is below `soc.sell_buffer_min_soc` and then restores that value, at any price; above it the price ceiling (`heuristics.adaptive_price_threshold`) blocks it
-- Grid charging outside the cheapest top-X slots (spread-only windows, and the sell-buffer top-up at a price under the ceiling) must earn `sell × round_trip_efficiency − charge ≥ grid_charge_min_margin`
+- The day's charge is sized to refill what the morning sale takes out, so the evening keeps its full budget; the sell buffer is the SOC a sale needs at its start (`soc.sell_buffer_min_soc`): a battery below it is charged back up to exactly that value before the sale, at the cheapest quarters before it and at any price; above it nothing is bought for the sale
+- Grid charging outside the cheapest top-X slots (spread-only windows) must earn `sell × round_trip_efficiency − charge ≥ grid_charge_min_margin`
 - The power of a charge window is held for an hour unless SoC or the solar forecast moves noticeably; the schedule is only re-sent to battery-api when its periods change
 
 ### Live Adaptive Control
@@ -63,7 +63,7 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 - Conservative SOC does not hard-stop all live discharge: active adaptive period can downgrade from full discharge to adaptive discharge while respecting the hard minimum and dynamic sell-buffer reserve
 - A safety pause suspends published discharge periods without discarding the generated plan; the complete plan is restored when the pause reason clears. While a pause is active the monitor also checks the plan for a sell window that has started, and that releases the sell-buffer pause so a full battery still sells. When the sell window the buffer target counts on is over, the target is recomputed right away, so adaptive resumes if the next sale is still far off. A quarter whose price is in the sell band but that no sell window covers runs adaptive like any other quarter
 - EV and SOC protection also take precedence over adaptive-placeholder startup and Passive Solar fallback schedules
-- When SOC is below the dynamic sell-buffer target, adaptive discharge is held until the next main charge if precharging is blocked by the current price. Profitable sell windows can spend that planned buffer, but are duration-limited to preserve the configured reserve floor. The target is calculated from `soc.sell_buffer_min_soc` plus the energy required for the remaining planned sell window(s).
+- The sell buffer is `soc.sell_buffer_min_soc`, the SOC a sale needs at its start, and applies once the first sell window before the next main charge starts within `soc.sell_buffer_activation_hours_before_sell`. While the SOC is at or below it, adaptive discharge is held so the energy is kept, and a SOC below it is charged back up to it. A sell window then runs down to `soc.conservative_soc`, where adaptive takes over; the planner only counts energy above the conservative SOC as sellable.
 
 ### Solar-Aware Charging
 
@@ -105,12 +105,11 @@ Defaults live in `battery-manager/config.yaml`.
 | `power.min_discharge_power` | Adaptive baseline |
 | `power.min_scaled_power` | Minimum scaled schedule power |
 | `soc.min_soc` | Hard reserve floor |
-| `soc.conservative_soc` | Softer reserve threshold |
+| `soc.conservative_soc` | Softer reserve threshold; sell windows run down to it, then adaptive takes over |
 | `soc.max_soc` | Max target SOC |
 | `soc.battery_capacity_kwh` | Usable capacity for energy math |
 | `soc.sell_buffer_enabled` | Enable or disable the dynamic reserve before planned sell windows |
-| `soc.sell_buffer_min_soc` | Safety SOC baseline used to calculate the dynamic sell-buffer target; a battery below it is charged back up to exactly this value (the emergency precharge, at any price) |
-| `soc.sell_buffer_rounding_step_pct` | Rounding step for the dynamic sell-buffer target |
+| `soc.sell_buffer_min_soc` | The SOC a sale needs at its start. Below it the battery is charged back up to exactly this value before the sale (cheapest quarters, any price); sell windows themselves run down to `soc.conservative_soc` |
 | `soc.sell_buffer_activation_hours_before_sell` | Lead time before the first sell window in which the buffer becomes active |
 | `solar_aware_charging.*` | Remaining-solar-aware charge reduction |
 | `passive_solar.*` | Excess-solar passive gap logic |

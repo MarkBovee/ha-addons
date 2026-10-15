@@ -27,7 +27,7 @@ Optimizes battery charge/discharge scheduling using Nord Pool electricity prices
 | `app/solar_monitor.py` | Passive Solar mode: detect excess PV and suppress battery discharge |
 | `app/gap_scheduler.py` | Generates the Passive Solar gap schedule (0W charge slot) |
 | `app/grid_monitor.py` | Detects grid export / over-discharge; triggers adaptive power reduction |
-| `app/soc_guardian.py` | `can_charge()`, `can_discharge()`, sell-buffer SOC calculation |
+| `app/soc_guardian.py` | `can_charge()`, `can_discharge()` |
 | `app/temperature_advisor.py` | Maps temperature → discharge hours via threshold config |
 | `app/ev_charger_monitor.py` | `should_pause_discharge()` — pauses discharge when EV is charging |
 | `app/power_calculator.py` | `calculate_rank_scaled_power()` — rank-based power scaling across discharge windows |
@@ -86,7 +86,7 @@ Every charge and discharge period in the schedule dict:
 | Value | Meaning |
 |-------|---------|
 | `charge` | Regular price-based charge window |
-| `precharge` | Emergency pre-sell buffer charge |
+| `precharge` | Pre-sell charge back up to `sell_buffer_min_soc` |
 | `negative_price_charge` | Charge at max power during negative import prices (grid pays to consume) |
 | `discharge` | Profitable sell window |
 | `adaptive` | Adaptive discharge (grid → 0W) |
@@ -103,7 +103,7 @@ MAX_DISCHARGE_PERIODS = 6   # SAJ inverter API limit
 ```
 
 Discharge windows are prioritized: profitable sell windows fill slots first, adaptive windows fill remaining slots.
-The sell-buffer precharge is an emergency charge: below `sell_buffer_min_soc` it charges up to that value (not to the dynamic target) regardless of price; above it the price ceiling (`adaptive_price_threshold`) alone blocks it, and the margin gate only judges a top-up at a price under the ceiling. The margin gate MUST NOT overrule the ceiling: on 2026-10-15 a battery at 74% was charged to 100% at 0.33 for a thin morning peak.
+`sell_buffer_min_soc` is the SOC a sale needs at its start, not the SOC where a sale stops. Below it `generate_schedule()` adds a precharge up to exactly that value, at the cheapest consecutive intervals before the first sell window (`find_cheapest_block_start`; with a single charge slot it starts now so it can coalesce with the main charge) and at any price; above it nothing is bought for the sale. Sell windows may discharge down to `conservative_soc` (`_get_sell_window_reserve_floor_soc`), where adaptive takes over; the feasibility filter MUST NOT count the energy that lifts the battery from below the floor to the floor as sellable.
 An emergency precharge consumes one charge slot and must fit within the provider-advertised `max_charge_periods` limit. When one slot is available, coalesce it with the immediately adjacent main-charge period.
 
 ---
@@ -116,7 +116,7 @@ An emergency precharge consumes one charge slot and must fit within the provider
 4. Calculate price ranges per day (`calculate_price_ranges`)
 5. Find upcoming windows (`find_upcoming_windows`) → charge / discharge / adaptive
 6. Apply sell-wait heuristic (defer discharge if better morning window exists)
-7. Calculate dynamic sell-buffer SOC; add pre-charge if needed
+7. Calculate the sell-buffer start SOC (`sell_buffer_min_soc`); add a pre-charge when the SOC is below it
 8. Build `charge_schedule`:
    - **Pass 1**: Negative-price windows → one API slot per window, power proportional to depth of negative price
    - **Pass 2**: Regular cheap windows → one API slot per *consecutive window* (not per individual slot); windows ranked by `avg_price` and rank-scaled power applied; this ensures a 7-hour cheap block is covered by a single long period rather than only its 3 cheapest individual hours
@@ -180,9 +180,9 @@ When `price_range == "adaptive"` and a discharge period is active:
 | `soc < min_soc` | Pause all discharge |
 | `soc <= conservative_soc` during discharge | Switch to adaptive (not hard stop) |
 | `soc <= conservative_soc`, price = adaptive, no active window | Trigger schedule regen to add adaptive fallback window (is_conservative=False for adaptive band) |
-| `soc <= sell_buffer_required_soc` | Pause adaptive discharge before the next charge; profitable sell windows may spend the dynamic buffer but retain `sell_buffer_min_soc` as their reserve floor |
+| `soc <= sell_buffer_required_soc` | Pause adaptive discharge before the next charge; profitable sell windows may spend the buffer and run down to `conservative_soc` |
 
-`sell_buffer_required_soc` is recalculated every `generate_schedule` call based on planned discharge hours before the next charge window.
+`sell_buffer_required_soc` is recalculated every `generate_schedule` call: it is `sell_buffer_min_soc` while a sell window before the next charge window starts within the activation lead, otherwise None.
 
 **Conservative SOC and adaptive discharge:** `conservative_soc` blocks full-power scheduled discharge windows but does NOT by itself block adaptive discharge (grid≈0W). The dynamic `sell_buffer_required_soc`, when present before the next main charge, blocks adaptive discharge below its target. Profitable sell windows may consume that dynamic buffer, but `_filter_supported_discharge_windows()` and runtime monitoring MUST preserve the configured sell-buffer reserve floor. `_should_regenerate_live_schedule` uses `is_conservative=False` when checking whether to regen for the adaptive price band, so SOC between `min_soc` and `conservative_soc` still triggers adaptive regen when the sell buffer is met. `generate_schedule()` MUST also downgrade the current live interval from `discharge` to `adaptive` when SOC is already at/below `conservative_soc`, otherwise rolling schedule regeneration will keep republishing a schedule with no active adaptive slot.
 

@@ -166,9 +166,19 @@ def _precharge_schedule(monkeypatch, config, sell_price):
     return bm_main.generate_schedule(config, object(), None)
 
 
-def test_precharge_needs_margin_unless_below_the_safety_floor(monkeypatch):
-    rich = _precharge_schedule(monkeypatch, _precharge_config(), sell_price=0.60)
-    assert any(p["window_type"] == "precharge" for p in rich["charge"])  # 0.54 - 0.20 = 0.34
+def test_precharge_below_the_start_soc_does_not_need_a_sell_margin(monkeypatch):
+    """Below sell_buffer_min_soc the battery is charged back up to it: the sale cannot start without it."""
+    config = _precharge_config()
+    config["soc"]["sell_buffer_min_soc"] = 40  # SoC is 30
+    for sell_price in (0.60, 0.28):  # a rich and a thin sale: 0.54 - 0.20 = 0.34 and 0.252 - 0.20 = 0.05
+        schedule = _precharge_schedule(monkeypatch, config, sell_price=sell_price)
+        assert any(p["window_type"] == "precharge" for p in schedule["charge"])
 
-    thin = _precharge_schedule(monkeypatch, _precharge_config(), sell_price=0.28)
-    assert not any(p["window_type"] == "precharge" for p in thin["charge"])  # 0.252 - 0.20 = 0.05
+
+def test_nothing_is_precharged_at_or_above_the_start_soc(monkeypatch):
+    """The sell margin only rules the top-X charge slots; at 30% a start SOC of 30 (or less) buys nothing for the sale."""
+    for start_soc in (20, 30):
+        config = _precharge_config()
+        config["soc"]["sell_buffer_min_soc"] = start_soc
+        schedule = _precharge_schedule(monkeypatch, config, sell_price=0.60)
+        assert not any(p["window_type"] == "precharge" for p in schedule["charge"])
