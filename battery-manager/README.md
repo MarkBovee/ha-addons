@@ -110,7 +110,6 @@ Defaults live in `battery-manager/config.yaml`.
 | `soc.battery_capacity_kwh` | Usable capacity for energy math |
 | `soc.sell_buffer_enabled` | Enable or disable the dynamic reserve before planned sell windows |
 | `soc.sell_buffer_min_soc` | The SOC a sale needs at its start. Below it the battery is charged back up to exactly this value before the sale (cheapest quarters, any price); sell windows themselves run down to `soc.conservative_soc` |
-| `soc.sell_buffer_rounding_step_pct` | No longer used (the target is `sell_buffer_min_soc`); kept so existing options stay valid |
 | `soc.sell_buffer_activation_hours_before_sell` | Lead time before the first sell window in which the buffer becomes active |
 | `solar_aware_charging.*` | Remaining-solar-aware charge reduction |
 | `passive_solar.*` | Excess-solar passive gap logic |

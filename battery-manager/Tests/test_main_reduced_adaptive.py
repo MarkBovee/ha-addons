@@ -863,7 +863,6 @@ def test_generate_schedule_sells_a_full_battery_down_to_the_conservative_soc(mon
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 40
     config["soc"]["sell_buffer_min_soc"] = 60
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -1102,7 +1101,6 @@ def test_generate_schedule_limits_sell_to_the_conservative_soc_without_prechargi
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 40
     config["soc"]["sell_buffer_min_soc"] = 40
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -1169,7 +1167,6 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 25
     config["soc"]["sell_buffer_min_soc"] = 50
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -1237,7 +1234,6 @@ def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_
     config["temperature_based_discharge"]["enabled"] = False
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 25
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000
@@ -1305,7 +1301,6 @@ def test_single_charge_slot_coalesces_precharge_with_main_charge(monkeypatch):
     config["soc"]["min_soc"] = 5
     config["soc"]["conservative_soc"] = 25
     config["soc"]["sell_buffer_min_soc"] = 40
-    config["soc"]["sell_buffer_rounding_step_pct"] = 10
     config["power"]["max_discharge_power"] = 8000
     config["power"]["min_discharge_power"] = 4000
     config["power"]["min_scaled_power"] = 4000

@@ -18,7 +18,6 @@ USER_SETTINGS = {
     "soc.conservative_soc": 30,
     "soc.max_soc": 100,
     "soc.sell_buffer_min_soc": 40,
-    "soc.sell_buffer_rounding_step_pct": 10,
     "soc.sell_buffer_activation_hours_before_sell": 4,
     "heuristics.min_profit_threshold": 0.08,
     "heuristics.top_x_charge_hours": 4,

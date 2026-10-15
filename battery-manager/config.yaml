@@ -59,7 +59,6 @@ options:
     battery_capacity_kwh: 25
     sell_buffer_enabled: true
     sell_buffer_min_soc: 20
-    sell_buffer_rounding_step_pct: 10
     sell_buffer_activation_hours_before_sell: 3
 
   adaptive:
@@ -168,7 +167,6 @@ schema:
     battery_capacity_kwh: int(1,200)
     sell_buffer_enabled: bool?
     sell_buffer_min_soc: int(0,100)
-    sell_buffer_rounding_step_pct: int(0,50)
     sell_buffer_activation_hours_before_sell: float(0,24)?
 
   adaptive:
