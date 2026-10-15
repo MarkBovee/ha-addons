@@ -2496,8 +2496,13 @@ def generate_schedule(
         sell_buffer_floor_soc = float(config["soc"].get("sell_buffer_min_soc", 20))
         is_below_sell_buffer_floor = soc < sell_buffer_floor_soc
         over_price_ceiling = precharge_price_ceiling is not None and import_price > precharge_price_ceiling
+        # Below the floor the precharge is an emergency that only restores the floor (sell_buffer_min_soc is the
+        # value the battery must not sit under). Above it the buffer target is a top-up that the price ceiling
+        # alone vetoes: on 2026-10-15 a battery at 74% was charged to 100% at 0.33 because the margin gate
+        # overruled the ceiling, although 74% was far above the floor.
+        precharge_target_soc = sell_buffer_floor_soc if is_below_sell_buffer_floor else buffer_required_soc
         verdict: Optional[Dict[str, Any]] = None
-        if not is_below_sell_buffer_floor:
+        if not is_below_sell_buffer_floor and not over_price_ceiling:
             driving_windows = [
                 w for w in upcoming_windows.get("discharge", [])
                 if w.get("end") and w["end"] > now
@@ -2517,10 +2522,9 @@ def generate_schedule(
                 min_margin=gate_margin,
             )
             margin_gate_records.append({"kind": "precharge", "charge_price": round(import_price, 4), **verdict})
-        # The fixed price ceiling stops an emergency precharge from buying at expensive prices. A precharge that
-        # the margin gate approves (sell x efficiency - charge >= margin for the windows it feeds) is not an
-        # emergency: on 2026-10-14 the 0.25 ceiling blocked the charge for a 0.56-0.62 morning peak at 0.33.
-        if over_price_ceiling and not is_below_sell_buffer_floor and not (verdict and verdict["allowed"]):
+        # The fixed price ceiling stops the buffer top-up from buying at expensive prices; only a battery under the
+        # floor is charged regardless of price.
+        if over_price_ceiling and not is_below_sell_buffer_floor:
             logger.warning(
                 "🚫 Skipping pre-sell precharge: current price €%.3f above ceiling €%.3f",
                 import_price,
@@ -2531,17 +2535,11 @@ def generate_schedule(
                 "reason": f"price {import_price:.3f} above ceiling {precharge_price_ceiling:.3f}",
             }
         else:
-            if over_price_ceiling and is_below_sell_buffer_floor:
+            if over_price_ceiling:
                 logger.warning(
                     "⚠️ Forcing sell-buffer floor precharge: SOC %.1f%% below floor %.1f%% despite price €%.3f > €%.3f",
                     soc,
                     sell_buffer_floor_soc,
-                    import_price,
-                    precharge_price_ceiling,
-                )
-            elif over_price_ceiling:
-                logger.info(
-                    "✅ Pre-sell precharge @€%.3f above ceiling €%.3f approved by the margin gate",
                     import_price,
                     precharge_price_ceiling,
                 )
@@ -2553,7 +2551,7 @@ def generate_schedule(
                 precharge_trace = {"decision": "skipped_margin", "reason": verdict["reason"]}
                 soc_per_hour_charge = 0.0
             if soc_per_hour_charge > 0:
-                deficit_soc = buffer_required_soc - soc
+                deficit_soc = precharge_target_soc - soc
                 required_minutes = int(math.ceil((deficit_soc / soc_per_hour_charge) * 60.0))
                 if required_minutes > 0:
                     requested_precharge_until = interval_start + timedelta(minutes=required_minutes)
@@ -2571,12 +2569,13 @@ def generate_schedule(
                             "until": precharge_until.astimezone().isoformat(),
                             "soc": soc,
                             "buffer_required_soc": buffer_required_soc,
+                            "target_soc": precharge_target_soc,
                             "forced_below_floor": is_below_sell_buffer_floor,
                         }
                         logger.info(
                             "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min until %s",
                             soc,
-                            buffer_required_soc,
+                            precharge_target_soc,
                             actual_minutes,
                             precharge_until.astimezone().strftime("%H:%M"),
                         )

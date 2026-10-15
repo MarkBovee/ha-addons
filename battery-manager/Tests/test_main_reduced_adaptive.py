@@ -1218,9 +1218,9 @@ def test_generate_schedule_respects_buffer_target_without_blocking_at_equality(
     assert schedule["discharge"]
     assert all(period["window_type"] == "discharge" for period in schedule["discharge"])
     if not expect_sell:
-        # The 0.25 price ceiling no longer blocks this: selling at 0.60 against charging at 0.30 passes the margin gate,
-        # so the sell buffer is topped up now instead of waiting for the 08:00 main charge.
-        assert schedule["charge"][0]["window_type"] == "precharge"
+        # 43% is above the 40% floor and 0.30 is above the 0.25 ceiling: no precharge, the charge waits for the main window.
+        assert schedule["charge"][0]["window_type"] == "charge"
+        assert schedule["charge"][0]["start"] == (curve_start + timedelta(minutes=45)).isoformat()
 
 
 # Cap emergency precharge duration and fit it to provider charge-slot limits.
@@ -1270,7 +1270,8 @@ def test_generate_schedule_caps_precharge_at_main_charge_start(monkeypatch, max_
 
     monkeypatch.setattr(bm_main, "_get_price_curve", lambda _ha, _e: import_curve)
     monkeypatch.setattr(bm_main, "_get_export_price_curve", lambda _ha, _e: export_curve)
-    monkeypatch.setattr(bm_main, "_get_schedule_generation_soc", lambda *_a, **_kw: 10.0)
+    # 5% to the 40% floor is 35 pp = 66 minutes at 8 kW: longer than the hour before the main charge.
+    monkeypatch.setattr(bm_main, "_get_schedule_generation_soc", lambda *_a, **_kw: 5.0)
     monkeypatch.setattr(bm_main, "update_entity", lambda *_a, **_kw: None)
     monkeypatch.setattr(bm_main, "_get_schedule_slot_limits", lambda *_args, **_kwargs: (max_charge_periods, 6))
 

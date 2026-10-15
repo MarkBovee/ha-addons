@@ -103,6 +103,7 @@ MAX_DISCHARGE_PERIODS = 6   # SAJ inverter API limit
 ```
 
 Discharge windows are prioritized: profitable sell windows fill slots first, adaptive windows fill remaining slots.
+The sell-buffer precharge is an emergency charge: below `sell_buffer_min_soc` it charges up to that value (not to the dynamic target) regardless of price; above it the price ceiling (`adaptive_price_threshold`) alone blocks it, and the margin gate only judges a top-up at a price under the ceiling. The margin gate MUST NOT overrule the ceiling: on 2026-10-15 a battery at 74% was charged to 100% at 0.33 for a thin morning peak.
 An emergency precharge consumes one charge slot and must fit within the provider-advertised `max_charge_periods` limit. When one slot is available, coalesce it with the immediately adjacent main-charge period.
 
 ---
