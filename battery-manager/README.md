@@ -52,8 +52,8 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 - Low-value periods stay passive unless heuristics promote them
 - Future sell windows are pruned when the SOC projected at their start (current SOC + planned grid charge + forecast PV share − earlier sells) cannot support them
 - Top-X sell hours are picked per price peak: from the quarters after the day's main charge window (the evening) and, with their own budget, from the profitable quarters before it (the morning) (`heuristics.discharge_after_charge_only`); `top_x_discharge_hours` applies to each peak, not to the whole day
-- The day's charge is sized to refill what the morning sale takes out, so the evening keeps its full budget; a pre-sell charge above the price ceiling is allowed when the margin gate approves it
-- Grid charging outside the cheapest top-X slots (spread-only windows, sell-buffer precharge) must earn `sell × round_trip_efficiency − charge ≥ grid_charge_min_margin`
+- The day's charge is sized to refill what the morning sale takes out, so the evening keeps its full budget; the sell-buffer precharge is an emergency charge: it only runs when the SOC is below `soc.sell_buffer_min_soc` and then restores that value, at any price; above it the price ceiling (`heuristics.adaptive_price_threshold`) blocks it
+- Grid charging outside the cheapest top-X slots (spread-only windows, and the sell-buffer top-up at a price under the ceiling) must earn `sell × round_trip_efficiency − charge ≥ grid_charge_min_margin`
 - The power of a charge window is held for an hour unless SoC or the solar forecast moves noticeably; the schedule is only re-sent to battery-api when its periods change
 
 ### Live Adaptive Control
@@ -109,7 +109,7 @@ Defaults live in `battery-manager/config.yaml`.
 | `soc.max_soc` | Max target SOC |
 | `soc.battery_capacity_kwh` | Usable capacity for energy math |
 | `soc.sell_buffer_enabled` | Enable or disable the dynamic reserve before planned sell windows |
-| `soc.sell_buffer_min_soc` | Safety SOC baseline used to calculate the dynamic sell-buffer target and the emergency precharge floor |
+| `soc.sell_buffer_min_soc` | Safety SOC baseline used to calculate the dynamic sell-buffer target; a battery below it is charged back up to exactly this value (the emergency precharge, at any price) |
 | `soc.sell_buffer_rounding_step_pct` | Rounding step for the dynamic sell-buffer target |
 | `soc.sell_buffer_activation_hours_before_sell` | Lead time before the first sell window in which the buffer becomes active |
 | `solar_aware_charging.*` | Remaining-solar-aware charge reduction |

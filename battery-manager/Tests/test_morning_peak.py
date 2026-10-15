@@ -48,14 +48,14 @@ def test_the_morning_peak_gets_a_sell_window_next_to_the_evening(monkeypatch, am
     assert morning[0]["price"] > 0.53  # the 07:30-09:30 block averages 0.537; the evening block 0.519
 
 
-def test_the_pre_sell_charge_is_not_blocked_by_the_price_ceiling_and_fills_the_morning_window(monkeypatch, amsterdam_tz):
-    """A pre-sell charge at 0.33 passes the margin gate despite the 0.25 ceiling, so the morning window is not cut."""
-    # 04:00 = four hours before the sale: the sell buffer activates. Import is 0.33 there, above the 0.25 ceiling,
-    # but 0.537 x 0.9 - 0.33 clears the margin gate, so the buffer is charged.
+def test_the_pre_sell_charge_stays_behind_the_price_ceiling_above_the_floor(monkeypatch, amsterdam_tz):
+    """At 0.33 (above the 0.25 ceiling) a battery above the 40 % floor is not charged for the morning peak, so the sale is cut."""
+    # 04:00 = four hours before the sale: the sell buffer activates (target 100 %). The margin gate would approve the
+    # charge (0.537 x 0.9 - 0.33), but since 0.9.4 only a battery under the floor is charged above the ceiling.
     schedule = _plan(monkeypatch, "04:00", soc=58)
-    assert any(p["window_type"] == "precharge" for p in schedule["charge"])
+    assert not any(p["window_type"] == "precharge" for p in schedule["charge"])
     morning = [p for p in _sells(schedule) if local_start(p).hour < 11]
-    assert _minutes(morning, 0, 11) >= 105  # of 120: the energy for the whole peak is there
+    assert 0 < _minutes(morning, 0, 11) <= 45  # the 18 points above the floor (4.5 kWh) last about 34 minutes at 8 kW
 
 
 def test_the_midday_charge_refills_what_the_morning_sale_takes_out(monkeypatch, amsterdam_tz):
@@ -97,7 +97,7 @@ def _planned_kw(schedule, quarter_start):
 
 
 def test_the_midday_charge_is_recomputed_on_the_actual_soc_after_the_sale_and_changes_about_hourly(monkeypatch, amsterdam_tz):
-    """One cycle per quarter from the pre-sell charge to noon, SoC following the published plan (25 kWh, 0.3 pp house load per quarter)."""
+    """One cycle per quarter from 03:30 to noon, SoC following the published plan (25 kWh, 0.3 pp house load per quarter)."""
     config = make_config(**USER_SETTINGS)
     state = bm_main.RuntimeState(schedule={"charge": [], "discharge": []}, schedule_generated_at=None)
     cest = timezone(timedelta(hours=2))
@@ -112,11 +112,11 @@ def test_the_midday_charge_is_recomputed_on_the_actual_soc_after_the_sale_and_ch
         now += timedelta(minutes=15)
 
     at = {c["at"].strftime("%H:%M"): c for c in cycles}
-    assert at["05:15"]["soc"] >= 98  # the pre-sell charge filled the battery before the sale
-    assert at["09:30"]["soc"] < 40 and at["07:30"]["am"] >= 100  # the morning peak was sold
+    assert at["05:15"]["soc"] <= 58  # no pre-sell charge at 0.33: the battery is above the floor and the price above the ceiling
+    assert at["09:30"]["soc"] < 45 and 20 <= at["06:00"]["am"] <= 45  # the morning peak is sold down to the floor and cut there
     assert all(c["pm"] == 120 for c in cycles)  # the evening budget is never cut
-    # After the sale the midday power follows the actual SoC (it rises as SoC sinks) ...
-    assert at["12:30"]["main"] > at["05:30"]["main"] >= 4500
+    # After the sale the midday power is recomputed on the actual SoC (it was sized on the planned morning sale before) ...
+    assert at["05:30"]["main"] >= 4500 and at["12:30"]["main"] >= 4500
     # ... and moves at most once an hour (a lock hour, or an SoC deviation of more than 5 pp), not every quarter.
     after_sale = [c["main"] for c in cycles if c["at"] >= datetime(2026, 10, 14, 9, 30, tzinfo=cest)]
     changes = sum(1 for a, b in zip(after_sale, after_sale[1:]) if a != b)
