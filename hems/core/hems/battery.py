@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from hems.slots import SLOT_H
 
 INF = float("inf")
-EXPLAIN_TOLERANCE = 0.005        # EUR per kWh: the SoC grid makes 'keep' a finite difference, so smaller gaps are rounding
+REASON_DIGITS = 3                # the reason text prints prices with this many decimals; its comparison is judged on what it prints
 
 
 @dataclass
@@ -92,6 +92,19 @@ class Reasoning:
     buy: float | None = None
 
 
+def _says(left: str, strict: str, right: str, larger: float, smaller: float) -> str | None:
+    """'left > right' (or '<') when the printed numbers say so, 'left >= right' (or '<=') when they print equal, else None.
+
+    The comparison is judged on the rounded numbers the text shows: a reader checks the text against what is on screen,
+    so 'buy 0.330 < keep 0.328' is false even when the unrounded values differ by 0.0004. `larger` and `smaller` are the
+    printed numbers of the side that must be the larger and the smaller one."""
+    if larger > smaller:
+        return f"{left} {strict} {right}"
+    if larger == smaller:
+        return f"{left} {strict}= {right}"
+    return None
+
+
 def _reason(action: str, s: Slot, grid_kwh: float, stored_value: float | None, eff: float, cfg: BatteryConfig,
             at_floor: bool, at_full: bool) -> Reasoning:
     """Why the planner chose `action`: selling net of the minimum profit margin, buying net of loss, or keeping.
@@ -110,17 +123,20 @@ def _reason(action: str, s: Slot, grid_kwh: float, stored_value: float | None, e
     # discharging), so now and then the plan sells below or buys above the end-of-slot 'keep' because the whole path
     # pays; then the text says so instead of printing a comparison that is false on its face.
     if action == "discharge":
-        text = f"sell {sell:.3f} > keep {stored_value:.3f}" if sell + EXPLAIN_TOLERANCE >= stored_value else \
-            f"plan-level sale: sell {sell:.3f} < keep {stored_value:.3f} at the margin"
+        shown_sell, shown_keep = round(sell, REASON_DIGITS), round(stored_value, REASON_DIGITS)
+        text = _says(f"sell {shown_sell:.3f}", ">", f"keep {shown_keep:.3f}", shown_sell, shown_keep) or \
+            f"plan-level sale: sell {shown_sell:.3f} < keep {shown_keep:.3f} at the margin"
         return Reasoning("sell", text, sell, buy)
     if action == "charge":
-        text = f"buy {buy:.3f} < keep {stored_value:.3f}" if buy <= stored_value + EXPLAIN_TOLERANCE else \
-            f"plan-level charge: buy {buy:.3f} > keep {stored_value:.3f} at the margin"
+        shown_buy, shown_keep = round(buy, REASON_DIGITS), round(stored_value, REASON_DIGITS)
+        text = _says(f"buy {shown_buy:.3f}", "<", f"keep {shown_keep:.3f}", shown_keep, shown_buy) or \
+            f"plan-level charge: buy {shown_buy:.3f} > keep {shown_keep:.3f} at the margin"
         return Reasoning("buy", text, sell, buy)
+    shown_sell, shown_buy, shown_keep = (round(v, REASON_DIGITS) for v in (sell, buy, stored_value))
     if at_floor and sell > stored_value:
-        return Reasoning("floor", f"hold at reserve floor (sell {sell:.3f} > keep {stored_value:.3f})", sell, buy)
+        return Reasoning("floor", f"hold at reserve floor ({_says(f'sell {shown_sell:.3f}', '>', f'keep {shown_keep:.3f}', shown_sell, shown_keep)})", sell, buy)
     if at_full and buy < stored_value:
-        return Reasoning("full", f"hold, battery full (buy {buy:.3f} < keep {stored_value:.3f})", sell, buy)
+        return Reasoning("full", f"hold, battery full ({_says(f'buy {shown_buy:.3f}', '<', f'keep {shown_keep:.3f}', shown_keep, shown_buy)})", sell, buy)
     return Reasoning("hold", f"hold: sell {sell:.3f} <= keep {stored_value:.3f} <= buy {buy:.3f}", sell, buy)
 
 

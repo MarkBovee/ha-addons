@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from test_rolling import recorded_day
 
-from hems.battery import EXPLAIN_TOLERANCE, BatteryConfig, Slot, plan
+from hems.battery import REASON_DIGITS, BatteryConfig, Slot, plan
 from hems.contracts import BatteryCommand
 from hems.forecast import LOCAL_TZ
 from hems.prices import PriceSeries
@@ -21,6 +21,12 @@ from hems.rolling import HorizonInputs, plan_next
 FIXTURES = Path(__file__).parent / "fixtures"
 CFG = BatteryConfig()
 EFF = CFG.round_trip_eff ** 0.5
+MARGINAL_SLACK = 0.005         # EUR per kWh: the SoC grid makes 'keep' a finite difference, so smaller gaps are not a modelling question
+
+
+def shown(value: float) -> float:
+    """A price as the reason text prints it."""
+    return round(value, REASON_DIGITS)
 
 
 def real_day() -> PriceSeries:
@@ -71,22 +77,22 @@ def test_a_discharge_above_the_house_load_is_priced_as_export_in_its_explanation
     assert sold, "the expensive quarters are sold"
     for s in sold:
         assert s.sell_value == pytest.approx(EFF * (0.579 - CFG.min_profit_margin), abs=1e-9)    # not 0.538 (the import price)
-        assert s.sell_value + EXPLAIN_TOLERANCE >= s.stored_value and s.reason.startswith("sell ")
+        assert s.sell_value + MARGINAL_SLACK >= s.stored_value and s.reason.startswith("sell ")
 
 
 @pytest.mark.parametrize("day", ["2026-10-04", "2026-10-06", "2026-10-09", "2026-10-12"])
 @pytest.mark.parametrize("load_kwh", [0.02, 0.25])
 def test_an_explanation_never_prints_a_comparison_that_is_false(day, load_kwh):
-    """'sell x > keep y' and 'buy x < keep y' only appear when they hold; otherwise the text says plan-level."""
+    """'sell x > keep y' and 'buy x < keep y' only appear when the printed numbers say so; otherwise the text says plan-level."""
     prices = recorded_day(day)
     for soc in (0.35, 0.9):
         p = plan([Slot(i, e, load_kwh, 0.0) for i, e in zip(prices.import_eur_kwh, prices.export_eur_kwh)], soc * 25, CFG)
         for s in p.slots:
             if s.action == "discharge" and s.stored_value is not None:
-                assert s.reason.startswith("sell ") == (s.sell_value + EXPLAIN_TOLERANCE >= s.stored_value), s.reason
+                assert s.reason.startswith("sell ") == (shown(s.sell_value) >= shown(s.stored_value)), s.reason
                 assert s.reason.startswith("sell ") or s.reason.startswith("plan-level sale")
             if s.action == "charge" and s.stored_value is not None:
-                assert s.reason.startswith("buy ") == (s.buy_cost <= s.stored_value + EXPLAIN_TOLERANCE), s.reason
+                assert s.reason.startswith("buy ") == (shown(s.buy_cost) <= shown(s.stored_value)), s.reason
                 assert s.reason.startswith("buy ") or s.reason.startswith("plan-level charge")
 
 
@@ -100,7 +106,7 @@ def test_selling_never_needs_the_marginal_comparison_to_be_false_on_recorded_day
             for s in p.slots:
                 if s.action == "discharge" and s.stored_value is not None:
                     cases += 1
-                    fails += s.sell_value + EXPLAIN_TOLERANCE < s.stored_value
+                    fails += s.sell_value + MARGINAL_SLACK < s.stored_value
     assert cases > 200 and fails == 0
 
 
@@ -117,3 +123,20 @@ def test_the_reason_text_says_plan_level_when_the_marginal_comparison_contradict
     assert dear.text.startswith("plan-level charge") and dear.code == "buy"
     cheap = _reason("charge", slot, 1.0, 0.90, EFF, CFG, at_floor=False, at_full=False)
     assert cheap.text.startswith("buy ") and "< keep" in cheap.text
+
+
+def test_a_comparison_that_prints_equal_numbers_says_so_and_one_that_prints_reversed_numbers_is_plan_level():
+    """14 Oct 01:00 printed 'buy 0.313 < keep 0.313', 02:15 'buy 0.330 < keep 0.328': a reader checks the text against its own numbers."""
+    from hems.battery import _reason
+
+    slot = Slot(0.30, 0.20, 0.1, 0.0)
+    buy_price = 0.30 / EFF
+    equal = _reason("charge", slot, 1.0, buy_price + 0.0001, EFF, CFG, at_floor=False, at_full=False)
+    assert equal.text == f"buy {shown(buy_price):.3f} <= keep {shown(buy_price):.3f}"
+    reversed_ = _reason("charge", slot, 1.0, buy_price - 0.002, EFF, CFG, at_floor=False, at_full=False)
+    assert reversed_.text.startswith("plan-level charge: buy ") and reversed_.code == "buy"
+    sell_price = EFF * (0.45 - CFG.min_profit_margin)
+    equal_sale = _reason("discharge", Slot(0.40, 0.45, 0.1, 0.0), -1.0, sell_price - 0.0001, EFF, CFG, at_floor=False, at_full=False)
+    assert equal_sale.text == f"sell {shown(sell_price):.3f} >= keep {shown(sell_price):.3f}"
+    floor = _reason("idle", Slot(0.40, 0.45, 0.0, 0.0), 0.0, sell_price - 0.0001, EFF, CFG, at_floor=True, at_full=False)
+    assert floor.code == "floor" and floor.text == f"hold at reserve floor (sell {shown(sell_price):.3f} >= keep {shown(sell_price):.3f})"
