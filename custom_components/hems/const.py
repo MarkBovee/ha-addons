@@ -26,6 +26,7 @@ DEFAULT_OPTIONS = {
     "pv_gain_w_per_wm2": 0.0,                  # 0 = calibrate from recorded PV against the weather data
     "pv_max_ac_w": 5000.0,
     "weather_enabled": True,
+    "water_heater_plan_entity": "sensor.wh_heating_plan",   # the water heater module's plan entity ("" = do not model the water heater)
     "trace_full_plan": True,                   # also log every planned quarter each cycle (about 1 MB per day)
     "nordpool_enabled": True,                  # HEMS fetches day-ahead prices itself
     "delivery_area": "NL",

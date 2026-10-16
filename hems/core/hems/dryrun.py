@@ -14,6 +14,7 @@ from hems.contracts import MarketPrices, Reading
 from hems.decision_log import plan_detail
 from hems.forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
 from hems.prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
+from hems.heater import HeatingRun, run_kwh_per_quarter, without_daily_peak
 from hems.pvforecast import pv_kwh_per_quarter
 from hems.rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
 from hems.slots import slot_starts
@@ -38,6 +39,7 @@ class EngineSettings:
     default_load_w: float = 400.0                     # base load until the history has samples
     max_slots: int = 192
     tz: ZoneInfo = LOCAL_TZ
+    heater_cap_kwh: float = 0.0                       # > 0: the water heater is modelled (heater_kwh per run); 0 = left in the history
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ class EngineInputs:
     load_history_w: Sequence[tuple[datetime, float]]  # hourly mean base load, timezone-aware hour starts
     ghi_w_m2: Mapping[datetime, float] | None         # irradiance by quarter start; None = no weather data
     market: MarketPrices | None = None                # preferred price source: market prices, priced by the model
+    heating_runs: Sequence[HeatingRun] = ()           # planned water heater runs from the water heater module (a Home Assistant entity)
 
 
 @dataclass(frozen=True)
@@ -89,12 +92,21 @@ def _prices(inputs: EngineInputs, settings: EngineSettings, start: datetime) -> 
 
 
 def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: datetime, n_slots: int) -> tuple[dict[datetime, float], str]:
-    """Base-load kWh per quarter from the local-hour median profile, or the flat default without history."""
+    """Base-load kWh per quarter from the local-hour median profile, or the flat default without history.
+
+    With the water heater modelled (`heater_cap_kwh`) each day's heater is taken out of the history first and the planned runs
+    are added where the water heater module says they happen."""
+    heater = settings.heater_cap_kwh > 0
     if inputs.load_history_w:
-        profile, source = hourly_profile(list(inputs.load_history_w), settings.load_days, settings.tz), "history"
+        history = without_daily_peak(inputs.load_history_w, settings.heater_cap_kwh, settings.tz) if heater else list(inputs.load_history_w)
+        profile, source = hourly_profile(history, settings.load_days, settings.tz), "history+heater" if heater else "history"
     else:
         profile, source = [settings.default_load_w] * 24, "default"
-    return dict(zip(slot_starts(start, n_slots), to_slots_kwh(profile, start, n_slots, settings.tz))), source
+    load = dict(zip(slot_starts(start, n_slots), to_slots_kwh(profile, start, n_slots, settings.tz)))
+    for quarter, kwh in run_kwh_per_quarter(inputs.heating_runs).items():
+        if quarter in load:
+            load[quarter] += kwh
+    return load, source
 
 
 def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | None = None) -> EngineOutput:
@@ -118,7 +130,7 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
                              "prices_end": prices.starts[-1].isoformat()})
     trace = {"status": STATUS_OK, "price_source": source, "load_source": load_source, "weather": inputs.ghi_w_m2 is not None,
              "inputs": {"soc_age_s": round(inputs.soc_pct.age(inputs.now).total_seconds()), "price_quarters": len(prices.starts),
-                        "prices_until": (prices.starts[-1] + timedelta(minutes=15)).isoformat(), "load_samples": len(inputs.load_history_w)},
+                        "prices_until": (prices.starts[-1] + timedelta(minutes=15)).isoformat(), "load_samples": len(inputs.load_history_w), "heating_runs": len(inputs.heating_runs)},
              **decision.trace}
     if price_check is not None:
         trace["price_check_max_diff"] = price_check

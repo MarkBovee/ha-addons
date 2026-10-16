@@ -46,6 +46,7 @@ def _options_schema(current: dict[str, Any]) -> vol.Schema:
                "export_energy_tax": (0, 1, 0.00001)}
     fields: dict[Any, Any] = {vol.Required(k, default=current[k]): _number(*bounds) for k, bounds in numbers.items()}
     fields[vol.Required("delivery_area", default=current["delivery_area"])] = str
+    fields[vol.Optional("water_heater_plan_entity", description={"suggested_value": current.get("water_heater_plan_entity")})] = str
     for flag in ("weather_enabled", "nordpool_enabled", "trace_full_plan", "salderen", "bonus_only_daylight", "bonus_only_positive_price"):
         fields[vol.Required(flag, default=current[flag])] = bool
     return vol.Schema(fields)
@@ -81,5 +82,6 @@ class HemsOptionsFlow(OptionsFlowWithReload):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show the current settings; store them as given."""
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            # An emptied text field is absent from the form data, and an absent option falls back to its default: say 'off' explicitly.
+            return self.async_create_entry(data={"water_heater_plan_entity": "", **user_input})
         return self.async_show_form(step_id="init", data_schema=_options_schema({**DEFAULT_OPTIONS, **self.config_entry.options}))

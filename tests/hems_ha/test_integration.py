@@ -594,3 +594,40 @@ async def test_the_pv_forecast_is_clipped_at_the_panels_peak_not_at_the_inverter
     await hass.async_block_till_done()
     assert float(hass.states.get("sensor.hems_pv_forecast_next_hour").state) == pytest.approx(5.0, abs=0.01)
     assert DEFAULT_OPTIONS["pv_max_ac_w"] == 5000.0
+
+
+def plan_entity_state(hass: HomeAssistant, energy: float = 1.9) -> None:
+    """The water heater module's plan entity with one 1.9 kWh run from 11:00 to 12:00 local on 6 Oct (the hour of NOW)."""
+    hass.states.async_set("sensor.wh_heating_plan", "2026-10-06T11:00+02:00", {
+        "windows": [{"kind": "day", "start": "2026-10-06T11:00+02:00", "end": "2026-10-06T12:00+02:00", "energy_kwh": energy, "avg_price": 0.236}],
+        "heating_energy_kwh": 1.9})
+
+
+async def test_the_water_heaters_planned_run_is_part_of_the_load_forecast(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The load forecast of the next hour includes the run the water heater module plans in it (0.4 kWh default load + 1.9 kWh), and says so in the trace."""
+    set_states(hass)
+    plan_entity_state(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    assert float(hass.states.get("sensor.hems_load_forecast_next_hour").state) == pytest.approx(0.4 + 1.9, abs=0.01)
+    record = read_jsonl(hass, "decision_trace.jsonl")[-1]
+    assert record["inputs"]["heating_runs"] == 1
+
+
+async def test_without_the_plan_entity_the_forecast_is_unchanged(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Entity missing (the add-on is not updated yet), unavailable, or the option emptied: the water heater stays in the history, no run is added."""
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    assert float(hass.states.get("sensor.hems_load_forecast_next_hour").state) == pytest.approx(0.4, abs=0.01)
+    assert read_jsonl(hass, "decision_trace.jsonl")[-1]["inputs"]["heating_runs"] == 0
+
+
+async def test_emptying_the_plan_entity_option_switches_the_water_heater_model_off(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """A cleared text field is not in the form data; the options flow must save '' so the default does not come back."""
+    set_states(hass)
+    plan_entity_state(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"reserve_soc_pct": 30.0})
+    await hass.async_block_till_done()
+    assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["water_heater_plan_entity"] == ""
+    assert float(hass.states.get("sensor.hems_load_forecast_next_hour").state) == pytest.approx(0.4, abs=0.01)

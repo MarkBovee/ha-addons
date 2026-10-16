@@ -29,6 +29,7 @@ from .engine.decision_log import cycle_line, event_line, plan_summary, plan_tabl
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
 from .engine.dryrun import EngineInputs, EngineOutput, EngineSettings, step
 from .engine.executor import AS_PLANNED, Execution, execute
+from .engine.heater import parse_runs
 from .engine.pvforecast import fit_gain_from_history
 from .engine.prices import PriceModel
 from .engine.rolling import Decision
@@ -309,6 +310,22 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             _LOGGER.info("%s", "\n".join(tree))
         await self._note_windows(output)
 
+    def _water_heater_plan(self) -> tuple[list, float]:
+        """The water heater module's planned runs and the energy of a normal run, from its plan entity (Home Assistant is the interface).
+
+        ([], 0.0) when the option is empty or the entity is missing or unavailable: then the water heater stays in the load history,
+        as before. The energy per run (`heating_energy_kwh` attribute, a setting of that module) is how much of each day's peak hour
+        counts as the heater when the history is cleaned."""
+        entity = {**DEFAULT_OPTIONS, **self.config_entry.options}["water_heater_plan_entity"]
+        state = self.hass.states.get(entity) if entity else None
+        if state is None or state.state in ("unavailable", "unknown", ""):
+            return [], 0.0
+        try:
+            cap = float(state.attributes.get("heating_energy_kwh") or 0.0)
+        except (TypeError, ValueError):
+            cap = 0.0
+        return parse_runs(state.attributes.get("windows")), max(cap, 0.0)
+
     async def _async_update_data(self) -> HemsSnapshot:
         """One planning cycle: inputs -> engine -> trace -> snapshot for the sensors."""
         now = dt_util.utcnow()
@@ -325,10 +342,13 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
                                   source="setting" if {**DEFAULT_OPTIONS, **self.config_entry.options}["pv_gain_w_per_wm2"] else "fit")
             self._last_gain = gain
         price_state = self.hass.states.get(self._entity(CONF_PRICE_CURVE) or "")
+        heating_runs, heater_cap = self._water_heater_plan()
+        settings = replace(settings, heater_cap_kwh=heater_cap)
         inputs = EngineInputs(
             now=now, soc_pct=reading_from_state(self.hass.states.get(self._entity(CONF_SOC) or "")),
             import_curve=parse_price_curve(price_state.attributes.get("price_curve") if price_state else None),
-            load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market)
+            load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market,
+            heating_runs=heating_runs)
         output = await self.hass.async_add_executor_job(step, inputs, settings, self._previous)
         if output.decision:
             self._previous = output.decision

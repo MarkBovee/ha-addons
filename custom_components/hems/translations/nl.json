@@ -51,7 +51,8 @@
           "bonus_only_positive_price": "Percentagebonus alleen bij een positieve marktprijs",
           "nordpool_enabled": "Dagprijzen zelf ophalen bij Nord Pool",
           "delivery_area": "Nord Pool-biedzone",
-          "trace_full_plan": "Elk kwartier het volledige plan loggen (plans.jsonl, ongeveer 1 MB per dag)"
+          "trace_full_plan": "Elk kwartier het volledige plan loggen (plans.jsonl, ongeveer 1 MB per dag)",
+          "water_heater_plan_entity": "Entiteit met het plan van de boiler (een sensor met een attribuut `windows` met geplande verwarmingsruns, zoals sensor.wh_heating_plan; leeg = boiler niet meenemen)"
         }
       }
     }
