@@ -27,38 +27,68 @@
     "step": {
       "init": {
         "title": "HEMS settings",
-        "description": "Battery, forecast and price components. The price components mirror the energy-prices add-on.",
-        "data": {
-          "capacity_kwh": "Usable battery capacity (kWh)",
-          "max_power_kw": "Maximum charge/discharge power (kW)",
-          "hard_min_soc_pct": "Hard minimum SoC (%)",
-          "reserve_soc_pct": "Reserve SoC (%)",
-          "round_trip_eff": "Round-trip efficiency (0-1)",
-          "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
-          "hold_cost_kwh_h": "Waiting cost (EUR per stored kWh per hour; 0 = off, higher charges later before a sale)",
-          "pv_gain_w_per_wm2": "PV gain (W per W/m2, 0 = calibrate automatically)",
-          "pv_max_ac_w": "Peak PV output (W): the PV forecast is clipped here; use what the panels peak at, or the inverter AC limit if that is lower",
-          "weather_enabled": "Fetch weather from Open-Meteo",
-          "import_vat_multiplier": "Import VAT multiplier",
-          "import_markup": "Import markup (EUR/kWh)",
-          "import_energy_tax": "Import energy tax (EUR/kWh)",
-          "export_vat_multiplier": "Export VAT multiplier (netting only)",
-          "export_bonus_pct": "Solar bonus percentage (0.10 = 10%)",
-          "export_fixed_bonus": "Solar bonus fixed (EUR/kWh)",
-          "export_energy_tax": "Export energy tax refund (EUR/kWh, netting only)",
-          "salderen": "Netting (salderen) applies",
-          "bonus_only_daylight": "Percentage bonus only between sunrise and sunset",
-          "bonus_only_positive_price": "Percentage bonus only for a positive market price",
-          "nordpool_enabled": "Fetch day-ahead prices from Nord Pool",
-          "delivery_area": "Nord Pool delivery area",
-          "trace_full_plan": "Log the full plan every cycle (plans.jsonl, about 1 MB per day)",
-          "water_heater_enabled": "Water heater module on (plans the daily heating run for the load forecast; HEMS does not control the heating)",
-          "water_heater_energy_kwh": "Water heater: energy of a normal heating run (kWh)",
-          "water_heater_hours": "Water heater: length of a normal heating run (hours)",
-          "water_heater_legionella_energy_kwh": "Water heater: energy of the legionella run (kWh)",
-          "water_heater_legionella_hours": "Water heater: length of the legionella run (hours)",
-          "water_heater_legionella_weekday": "Water heater: legionella day",
-          "water_heater_night_energy_kwh": "Water heater: energy of the night run (kWh, 0 = no night run)"
+        "description": "Settings in the parts of the HEMS plan: modules first, then the base components they share. Fold a part open to change it, then save once.",
+        "sections": {
+          "module_battery": {
+            "name": "Module: battery",
+            "description": "The battery planner: capacity, power limits and the profit margin it needs.",
+            "data": {
+              "capacity_kwh": "Usable battery capacity (kWh)",
+              "max_power_kw": "Maximum charge/discharge power (kW)",
+              "hard_min_soc_pct": "Hard minimum SoC (%)",
+              "reserve_soc_pct": "Reserve SoC (%)",
+              "round_trip_eff": "Round-trip efficiency (0-1)",
+              "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
+              "hold_cost_kwh_h": "Waiting cost (EUR per stored kWh per hour; 0 = off, higher charges later before a sale)"
+            }
+          },
+          "module_water_heater": {
+            "name": "Module: water heater",
+            "description": "Plans the daily heating run for the load forecast. HEMS does not control the heating.",
+            "data": {
+              "water_heater_enabled": "Water heater module on (plans the daily heating run for the load forecast; HEMS does not control the heating)",
+              "water_heater_energy_kwh": "Water heater: energy of a normal heating run (kWh)",
+              "water_heater_hours": "Water heater: length of a normal heating run (hours)",
+              "water_heater_night_energy_kwh": "Water heater: energy of the night run (kWh, 0 = no night run)",
+              "water_heater_legionella_energy_kwh": "Water heater: energy of the legionella run (kWh)",
+              "water_heater_legionella_hours": "Water heater: length of the legionella run (hours)",
+              "water_heater_legionella_weekday": "Water heater: legionella day"
+            }
+          },
+          "base_prices": {
+            "name": "Base: prices",
+            "description": "Day-ahead prices and the price components every module uses; they mirror the energy-prices add-on.",
+            "data": {
+              "nordpool_enabled": "Fetch day-ahead prices from Nord Pool",
+              "delivery_area": "Nord Pool delivery area",
+              "import_vat_multiplier": "Import VAT multiplier",
+              "import_markup": "Import markup (EUR/kWh)",
+              "import_energy_tax": "Import energy tax (EUR/kWh)",
+              "export_vat_multiplier": "Export VAT multiplier (netting only)",
+              "export_bonus_pct": "Solar bonus percentage (0.10 = 10%)",
+              "export_fixed_bonus": "Solar bonus fixed (EUR/kWh)",
+              "export_energy_tax": "Export energy tax refund (EUR/kWh, netting only)",
+              "salderen": "Netting (salderen) applies",
+              "bonus_only_daylight": "Percentage bonus only between sunrise and sunset",
+              "bonus_only_positive_price": "Percentage bonus only for a positive market price"
+            }
+          },
+          "base_forecast": {
+            "name": "Base: forecasts (PV and weather)",
+            "description": "Weather source and the PV forecast every module uses.",
+            "data": {
+              "weather_enabled": "Fetch weather from Open-Meteo",
+              "pv_gain_w_per_wm2": "PV gain (W per W/m2, 0 = calibrate automatically)",
+              "pv_max_ac_w": "Peak PV output (W): the PV forecast is clipped here; use what the panels peak at, or the inverter AC limit if that is lower"
+            }
+          },
+          "logging": {
+            "name": "Logging",
+            "description": "What HEMS writes to its decision logs.",
+            "data": {
+              "trace_full_plan": "Log the full plan every cycle (plans.jsonl, about 1 MB per day)"
+            }
+          }
         }
       }
     }

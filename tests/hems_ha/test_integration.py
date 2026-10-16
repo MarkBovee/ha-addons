@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
+from custom_components.hems.config_flow import SECTIONS
 from custom_components.hems.const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_GRID, CONF_PRICE_CURVE, CONF_PV,
                                           CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
 from custom_components.hems.engine.nordpool import NORD_POOL_URL, nordpool_params
@@ -396,8 +397,8 @@ async def test_saving_the_settings_form_reloads_hems_and_the_planner_uses_the_ne
     entry = await setup_entry(hass, freezer, aioclient_mock)
     first = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
     form = await hass.config_entries.options.async_init(entry.entry_id)
-    assert form["type"] == FlowResultType.FORM and {"reserve_soc_pct", "hold_cost_kwh_h", "import_energy_tax"} <= {str(k) for k in form["data_schema"].schema}
-    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"reserve_soc_pct": 40.0, "hold_cost_kwh_h": 0.01})
+    assert form["type"] == FlowResultType.FORM and list(map(str, form["data_schema"].schema)) == ["module_battery", "module_water_heater", "base_prices", "base_forecast", "logging"]
+    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"module_battery": {"reserve_soc_pct": 40.0, "hold_cost_kwh_h": 0.01}})
     await hass.async_block_till_done()
     assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["reserve_soc_pct"] == 40.0 and entry.options["hold_cost_kwh_h"] == 0.01
     assert entry.state.value == "loaded" and hass.states.get("sensor.hems_status").state == "ok"
@@ -641,10 +642,28 @@ async def test_the_options_form_switches_the_water_heater_module_on_and_the_plan
     set_states(hass)
     entry = await setup_entry(hass, freezer, aioclient_mock)
     form = await hass.config_entries.options.async_init(entry.entry_id)
-    assert form["type"] == FlowResultType.FORM and {"water_heater_enabled", "water_heater_legionella_weekday", "water_heater_hours"} <= {str(k) for k in form["data_schema"].schema}
-    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"water_heater_enabled": True, "water_heater_legionella_weekday": "tuesday"})
+    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"module_water_heater": {"water_heater_enabled": True, "water_heater_legionella_weekday": "tuesday"}})
     await hass.async_block_till_done()
     assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["water_heater_enabled"] is True
     window, = hass.states.get("sensor.hems_water_heater_plan").attributes["windows"]
     assert (window["kind"], window["energy_kwh"]) == ("legionella", 2.6)
     assert datetime.fromisoformat(window["end"]) - datetime.fromisoformat(window["start"]) == timedelta(hours=3)
+
+
+async def test_the_settings_form_is_split_into_parts_that_cover_every_option_and_are_translated(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Five parts, the battery open and the rest folded; every option appears in exactly one part and has a label in both languages; saving one part keeps the others as they were."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    collapsed = {str(name): part.options["collapsed"] for name, part in form["data_schema"].schema.items()}
+    assert collapsed == {"module_battery": False, "module_water_heater": True, "base_prices": True, "base_forecast": True, "logging": True}
+    assert list(collapsed) == list(SECTIONS), "modules first, then the base components they share"
+    keys = [key for keys in SECTIONS.values() for key in keys]
+    assert sorted(keys) == sorted(set(keys)) and set(keys) == set(DEFAULT_OPTIONS), "every editable option is in exactly one part"
+    for language in ("strings", "translations/en", "translations/nl"):
+        texts = json.loads((ROOT / "custom_components" / "hems" / f"{language}.json").read_text())["options"]["step"]["init"]["sections"]
+        assert {name: set(part["data"]) for name, part in texts.items()} == {name: set(keys) for name, keys in SECTIONS.items()}
+    before = dict(entry.options)
+    await hass.config_entries.options.async_configure(form["flow_id"], {"module_water_heater": {"water_heater_hours": 2}})
+    await hass.async_block_till_done()
+    assert entry.options["water_heater_hours"] == 2 and {k: v for k, v in entry.options.items() if k != "water_heater_hours"} == {k: v for k, v in before.items() if k != "water_heater_hours"}

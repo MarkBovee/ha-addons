@@ -24,6 +24,8 @@ Snelste route: `python3 hems/deploy.py --dry-run` en daarna `python3 hems/deploy
 
 4. Instellingen, HEMS, Configureren: de standaardwaarden zijn de besluiten uit `docs/hems/intake-decisions.md` (capaciteit 25 kWh, 8 kW, vloer 5 %, reserve 30 %, round trip 0,82, minimale winstmarge 0,10, wachtkosten 0,002, prijscomponenten zoals energy-prices, Nord Pool aan voor zone NL). PV-factor 0 betekent automatisch kalibreren op de opgenomen PV. Het piekvermogen PV (standaard 5000 W: de panelen haalden deze week maximaal 4964 W, de omvormer kan 8 kW) kapt de PV-verwachting af; staat het te hoog, dan voorspelt HEMS op zonnige dagen meer PV dan de panelen kunnen leveren.
 
+   Het formulier volgt de indeling van het HEMS-plan, in inklapbare onderdelen: eerst de **modules** (Module: batterij, open; Module: boiler, met een aan/uit-schakelaar), daarna de **basiscomponenten** die alle modules delen (Basis: prijzen, Basis: voorspellingen) en tot slot Logboek. Wijzig wat je wilt en sla één keer op; onderdelen die je niet opent blijven zoals ze waren. Een nieuwe module krijgt zo een eigen onderdeel `module_*` met als eerste veld zijn aan/uit-schakelaar (lijst: `SECTIONS` in `config_flow.py`). De modus per module (dry-run, advisory, auto), de prioriteit en de hold-tijden uit het plan zijn er nog niet: alles is dry-run.
+
 ## Wat je ziet
 
 Na een herstart van Home Assistant staan de sensoren van battery-api er nog niet meteen; HEMS meldt dan kort `no_soc` en plant na 60 seconden zelf opnieuw.
