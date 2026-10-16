@@ -164,10 +164,11 @@ def parse_price_curve(sensor_state: Dict[str, Any]) -> Dict[datetime, float]:
         if start_str is None or price is None:
             continue
         try:
-            dt = datetime.fromisoformat(str(start_str))
-            # Convert to local time for comparison (strip timezone for simple comparisons)
+            dt = datetime.fromisoformat(str(start_str).replace("Z", "+00:00"))
+            # The curve is in UTC; every window search works on naive local hours. Converting (not just stripping the offset)
+            # matters: stripped UTC hours put the heating window two hours before the cheapest hour in summer time.
             if dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)
+                dt = dt.astimezone().replace(tzinfo=None)
             prices[dt] = float(price)
         except (ValueError, TypeError):
             continue
