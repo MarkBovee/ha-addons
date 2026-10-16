@@ -4,7 +4,8 @@ The planner decides every quarter from one economic comparison and has no notion
 the same prices and the finished plan from the outside, for people and for monitoring:
 
   detect   the stretches of the horizon where selling beats the cheapest charge it can lean on (before it: a fresh
-           charge; after it: replacing what is sold), with the thresholds and the headroom to them;
+           charge, also one of the last day that lies before the horizon; after it: replacing what is sold), with the
+           thresholds and the headroom to them;
   analyse  per window what the plan does (sold, kept, nothing left to sell), which charges feed it, and which sales
            fall outside every window.
 
@@ -25,7 +26,8 @@ PARTIAL = "partial"                  # the plan sells in the window but not in i
 NO_STOCK = "no_stock"                # nothing above the floor at the start and only a replacement would make it pay
 KEPT_FOR_LATER = "kept_for_later"    # energy is there, the plan keeps it for a later window with a higher price
 UNSOLD = "unsold"                    # energy is there, the window pays, the plan sells nothing and no better window explains it
-STOCK_TOLERANCE_KWH = 0.5            # less than this above the floor counts as 'nothing to sell'
+STOCK_TOLERANCE_KWH = 0.5            # less than this above the floor, or sold from it, counts as 'nothing'
+MAX_LOOKBACK = 96                    # quarters of earlier prices a fresh charge may come from (one day)
 MAX_GAP_QUARTERS = int(MAX_PERIOD_GAP / QUARTER)
 
 
@@ -49,6 +51,7 @@ class Window:
     avg_price: float
     fresh: Basis | None
     replace: Basis | None
+    reference_at: datetime           # the quarter with the most headroom: the thresholds belong to it
 
     @property
     def viable(self) -> str:
@@ -78,6 +81,7 @@ class WindowReport:
     from_stock_kwh: float            # of that, energy that was in the battery already
     charges: tuple[ChargeRun, ...]   # of that, energy bought for it (oldest energy is sold first)
     soc_before_kwh: float
+    usable_room: float | None = None  # headroom on a fresh charge that is still there for this window: bought after the battery was last empty
 
 
 @dataclass(frozen=True)
@@ -88,28 +92,36 @@ class WindowAnalysis:
     serves: Mapping[datetime, tuple[datetime, ...]]    # charge quarter start -> start of every window it feeds
 
 
-def _bases(starts: Sequence[datetime], imp: Sequence[float], cfg: BatteryConfig) -> tuple[list[tuple[int, float] | None], list[tuple[int, float] | None]]:
-    """Per quarter t: the cheapest fresh charge (s <= t) and the cheapest replacement (s > t) as (index, threshold).
+def _bases(imp: Sequence[float], offset: int, cfg: BatteryConfig) -> tuple[list[tuple[int, float]], list[tuple[int, float] | None]]:
+    """Per horizon quarter t: the cheapest fresh charge and the cheapest replacement as (index into `imp`, threshold).
 
-    A fresh charge pays its price per stored kWh plus carrying the energy until t; replacing means selling the stock now
-    and buying the same stored energy back later. Both thresholds are export prices: import / round trip + margin."""
+    `imp` holds the earlier quarters first (`offset` of them) and then the horizon. A fresh charge may lie in the earlier
+    quarters or in the horizon up to t; it pays its price per stored kWh plus carrying the energy until t. A replacement lies
+    after t: the stock is sold now and the same stored energy bought back later. Both thresholds are export prices:
+    import / round trip + margin (+ carrying cost)."""
     rt, eff, hold = cfg.round_trip_eff, cfg.round_trip_eff ** 0.5, cfg.hold_cost_kwh_h
-    n = len(starts)
-    fresh: list[tuple[int, float] | None] = []
-    for t in range(n):
-        fresh.append(min(((s, imp[s] / rt + cfg.min_profit_margin + hold * (t - s) * SLOT_H / eff) for s in range(t + 1)), key=lambda x: x[1]))
+    n = len(imp) - offset
+    fresh = [min(((s, imp[s] / rt + cfg.min_profit_margin + hold * (offset + t - s) * SLOT_H / eff) for s in range(offset + t + 1)), key=lambda x: x[1])
+             for t in range(n)]
     replace: list[tuple[int, float] | None] = [None] * n
     cheapest: tuple[int, float] | None = None
     for t in range(n - 1, -1, -1):
         replace[t] = cheapest
-        candidate = (t, imp[t] / rt + cfg.min_profit_margin)
+        candidate = (offset + t, imp[offset + t] / rt + cfg.min_profit_margin)
         cheapest = candidate if cheapest is None or candidate[1] < cheapest[1] else cheapest
     return fresh, replace
 
 
-def detect(starts: Sequence[datetime], imp: Sequence[float], exp: Sequence[float], cfg: BatteryConfig) -> list[Window]:
-    """The sell windows of a price horizon: runs of quarters whose export price beats the cheapest charge on either basis."""
-    fresh, replace = _bases(starts, imp, cfg)
+def detect(starts: Sequence[datetime], imp: Sequence[float], exp: Sequence[float], cfg: BatteryConfig, past_imp: Sequence[float] = ()) -> list[Window]:
+    """The sell windows of a price horizon: runs of quarters whose export price beats the cheapest charge on either basis.
+
+    `past_imp` are the import prices of the quarters just before `starts[0]` (at most MAX_LOOKBACK): energy that is in the
+    battery when the horizon begins was bought there, and without them the evening sale of energy charged at noon has no
+    charge to lean on once noon is behind the horizon."""
+    past = list(past_imp)[-MAX_LOOKBACK:]
+    offset = len(past)
+    fresh, replace = _bases(past + list(imp), offset, cfg)
+    at = lambda index: starts[0] + (index - offset) * QUARTER
     n = len(starts)
     headroom = [[exp[t] - b[t][1] if b[t] else None for t in range(n)] for b in (fresh, replace)]
     best = [max(h for h in (headroom[0][t], headroom[1][t]) if h is not None) for t in range(n)]
@@ -127,9 +139,10 @@ def detect(starts: Sequence[datetime], imp: Sequence[float], exp: Sequence[float
         bases = []
         for table, rows in ((fresh, headroom[0]), (replace, headroom[1])):
             found = table[reference]
-            bases.append(Basis(starts[found[0]], round(imp[found[0]], 4), round(found[1], 4), round(rows[reference], 4)) if found else None)
+            price = (past + list(imp))[found[0]] if found else 0.0
+            bases.append(Basis(at(found[0]), round(price, 4), round(found[1], 4), round(rows[reference], 4)) if found else None)
         windows.append(Window(starts[group[0]], starts[group[-1]] + QUARTER, len(group), round(exp[peak], 4), starts[peak],
-                              round(sum(exp[t] for t in group) / len(group), 4), bases[0], bases[1]))
+                              round(sum(exp[t] for t in group) / len(group), 4), bases[0], bases[1], starts[reference]))
     return windows
 
 
@@ -177,10 +190,25 @@ def _runs(pieces: list[tuple[datetime, float, float]]) -> tuple[ChargeRun, ...]:
     return tuple(ChargeRun(a, b, round(kwh, 2), round(cost / kwh, 4) if kwh else 0.0) for a, b, kwh, cost in runs)
 
 
-def analyse(starts: Sequence[datetime], slots: Sequence[Slot], result: Plan, soc0_kwh: float, cfg: BatteryConfig) -> WindowAnalysis:
+def _usable_room(window: Window, starts: Sequence[datetime], imp: Sequence[float], past: Sequence[float], exp_at_reference: float,
+                 first_charge: int, cfg: BatteryConfig) -> float | None:
+    """Headroom on the best fresh charge that can still feed the window: bought at or after quarter `first_charge`.
+
+    `first_charge` is counted from the horizon's first quarter and may be negative (earlier quarters). Energy bought before
+    the battery was last empty has been sold already, so a cheap quarter before that is not a basis for this window."""
+    rt, eff, hold = cfg.round_trip_eff, cfg.round_trip_eff ** 0.5, cfg.hold_cost_kwh_h
+    reference = next(t for t, start in enumerate(starts) if start == window.reference_at)
+    prices = {**{-len(past) + j: price for j, price in enumerate(past)}, **{t: imp[t] for t in range(reference + 1)}}
+    candidates = [prices[s] / rt + cfg.min_profit_margin + hold * (reference - s) * SLOT_H / eff for s in prices if s >= first_charge]
+    return round(exp_at_reference - min(candidates), 4) if candidates else None
+
+
+def analyse(starts: Sequence[datetime], slots: Sequence[Slot], result: Plan, soc0_kwh: float, cfg: BatteryConfig,
+            past_imp: Sequence[float] = ()) -> WindowAnalysis:
     """Detect the windows of the horizon and say what the plan does with each: sold, from which energy, and why not when unsold."""
     imp, exp = [s.import_price for s in slots], [s.export_price for s in slots]
-    windows = detect(starts, imp, exp, cfg)
+    past = list(past_imp)[-MAX_LOOKBACK:]
+    windows = detect(starts, imp, exp, cfg, past)
     where = _window_index(starts, windows)
     eff = cfg.round_trip_eff ** 0.5
     floor_kwh = floor_fraction(slots[0], cfg) * cfg.capacity_kwh
@@ -220,31 +248,37 @@ def analyse(starts: Sequence[datetime], slots: Sequence[Slot], result: Plan, soc
         first = next(t for t, start in enumerate(starts) if start == window.start)
         before = result.slots[first - 1].soc_kwh if first else soc0_kwh
         best_sold = any(exp[t] >= window.peak_price - 1e-9 for t in range(len(starts)) if span[k] and starts[t] in span[k])
+        empty = [t for t in range(first) if result.slots[t].soc_kwh <= floor_kwh + STOCK_TOLERANCE_KWH]
+        first_charge = empty[-1] + 1 if empty else (0 if soc0_kwh <= floor_kwh + STOCK_TOLERANCE_KWH else -len(past))
+        room = _usable_room(window, starts, imp, past, exp[next(t for t, start in enumerate(starts) if start == window.reference_at)], first_charge, cfg)
         reports.append(WindowReport(window, PLANNED if best_sold else "", round(sold[k], 2), sold_q[k], span[k][0] if span[k] else None,
-                                    span[k][-1] + QUARTER if span[k] else None, round(stock[k], 2), _runs(pieces[k]), round(before, 2)))
+                                    span[k][-1] + QUARTER if span[k] else None, round(stock[k], 2), _runs(pieces[k]), round(before, 2), room))
     return WindowAnalysis(tuple(_with_status(reports, floor_kwh)), round(outside, 2),
                           {start: tuple(sorted(w)) for start, w in serves.items()})
 
 
 def _with_status(reports: list[WindowReport], floor_kwh: float) -> list[WindowReport]:
-    """Give every report its status; a window left unsold is 'kept' when a later, higher-priced window is sold.
+    """Give every report its status.
 
-    The report arrives with PLANNED when the plan sells in the window's best-priced quarter and '' otherwise."""
+    A sale below STOCK_TOLERANCE_KWH counts as no sale: 0.4 kWh above the floor must not flip a window between 'planned' and
+    'no_stock' from one quarter to the next. A window nothing is sold in is 'no_stock' when the battery holds nothing above
+    the floor and no fresh charge that is still there would pay, 'kept_for_later' when a later, higher-priced window is sold,
+    and 'unsold' otherwise (there is energy, or a charge that pays, and the plan does not use it)."""
     out = []
     for k, report in enumerate(reports):
         window = report.window
-        if report.status == PLANNED:
-            status = PLANNED
-        elif report.sold_kwh > 0:
-            status = PARTIAL
-        elif report.soc_before_kwh - floor_kwh < STOCK_TOLERANCE_KWH and window.viable == "replace":
+        stock_above = report.soc_before_kwh - floor_kwh
+        usable = report.usable_room is not None and report.usable_room >= 0
+        if report.sold_kwh >= STOCK_TOLERANCE_KWH:
+            status = report.status if report.status == PLANNED else PARTIAL
+        elif stock_above < STOCK_TOLERANCE_KWH and not usable:
             status = NO_STOCK
-        elif any(later.sold_kwh > 0 and later.window.avg_price > window.avg_price for later in reports[k + 1:]):
+        elif any(later.sold_kwh >= STOCK_TOLERANCE_KWH and later.window.avg_price > window.avg_price for later in reports[k + 1:]):
             status = KEPT_FOR_LATER
         else:
             status = UNSOLD
         out.append(WindowReport(window, status, report.sold_kwh, report.sold_quarters, report.sold_from, report.sold_to, report.from_stock_kwh,
-                                report.charges, report.soc_before_kwh))
+                                report.charges, report.soc_before_kwh, report.usable_room))
     return out
 
 
@@ -255,6 +289,6 @@ def record(report: WindowReport, tz: tzinfo = timezone.utc) -> dict:
     return {"from": iso(w.start), "to": iso(w.end), "quarters": w.quarters, "peak": w.peak_price, "peak_at": iso(w.peak_at), "avg": w.avg_price,
             "viable": w.viable, "need_fresh": w.fresh and w.fresh.threshold, "room_fresh": w.fresh and w.fresh.headroom, "charge_at": w.fresh and iso(w.fresh.at),
             "need_replace": w.replace and w.replace.threshold, "room_replace": w.replace and w.replace.headroom, "refill_at": w.replace and iso(w.replace.at),
-            "status": report.status, "sold_kwh": report.sold_kwh, "sold_from": iso(report.sold_from), "sold_to": iso(report.sold_to),
+            "room_usable": report.usable_room, "status": report.status, "sold_kwh": report.sold_kwh, "sold_from": iso(report.sold_from), "sold_to": iso(report.sold_to),
             "from_stock_kwh": report.from_stock_kwh, "soc_before_kwh": report.soc_before_kwh,
             "charges": [{"from": iso(c.start), "to": iso(c.end), "kwh": c.kwh, "avg_import": c.avg_import} for c in report.charges]}

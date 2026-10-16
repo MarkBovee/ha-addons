@@ -13,7 +13,7 @@ from hems.decision_log import best_later, plan_segments
 from hems.prices import PriceSeries
 from hems.slots import SLOT_H, SLOT_MINUTES
 from hems.trace import explain
-from hems.windows import WindowAnalysis, analyse, record
+from hems.windows import MAX_LOOKBACK, WindowAnalysis, analyse, record
 
 QUARTER = timedelta(minutes=SLOT_MINUTES)
 SHIFT_POWER_FRACTION = 0.25          # a replanned quarter that moves more than this share of its power is logged
@@ -81,7 +81,13 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
                     "at_floor": first.at_floor, "at_full": first.at_full, **best_later(result, start)},
         "segments": plan_segments(result, slots, start, inputs.soc_kwh, cfg.capacity_kwh),
     }
-    analysis = analyse([start + n * QUARTER for n in range(len(slots))], slots, result, inputs.soc_kwh, cfg)
+    earlier = dict(zip(inputs.prices.starts, inputs.prices.import_eur_kwh))
+    past: list[float] = []
+    for k in range(1, MAX_LOOKBACK + 1):                                  # the contiguous run of known quarters right before this one
+        if start - k * QUARTER not in earlier:
+            break
+        past.insert(0, earlier[start - k * QUARTER])
+    analysis = analyse([start + n * QUARTER for n in range(len(slots))], slots, result, inputs.soc_kwh, cfg, past)
     trace["windows"] = [record(r) for r in analysis.reports]
     trace["windows_outside_kwh"] = analysis.outside_kwh
     return Decision(start, command, result, trace, tuple(slots), analysis)

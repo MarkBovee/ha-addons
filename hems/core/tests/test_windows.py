@@ -180,3 +180,58 @@ def test_a_window_sold_only_below_its_best_quarter_is_partial():
     best = analyse(starts, slots, manual_plan({8: ("discharge", -2.0)}), 15.0, CFG).reports[0]
     lesser = analyse(starts, slots, manual_plan({9: ("discharge", -2.0)}), 15.0, CFG).reports[0]
     assert best.status == PLANNED and lesser.status == "partial" and lesser.sold_kwh == 2.0
+
+
+def logged_cycle(name: str):
+    """A planning cycle as the integration logged it (plans.jsonl + decision_trace.jsonl): starts, slots, SoC, and the plan recomputed from them."""
+    data = json.loads((FIXTURES / f"cycle_2026_10_{name}.json").read_text())
+    start = datetime.fromisoformat(data["start"])
+    starts = [start + k * QUARTER for k in range(len(data["imp"]))]
+    slots = [Slot(i, e, l, v) for i, e, l, v in zip(data["imp"], data["exp"], data["load"], data["pv"])]
+    return starts, slots, data["soc_kwh"], plan(slots, data["soc_kwh"], CFG)
+
+
+def earlier_prices(starts: list[datetime]) -> list[float]:
+    """Import prices of 15 Oct before the first quarter of a cycle (what the coordinator knows of today)."""
+    day_starts, imp, _ = real_day(15)
+    return [p for t, p in zip(day_starts, imp) if t < starts[0]]
+
+
+def test_the_evening_sale_of_stock_bought_at_noon_is_still_a_window_when_noon_is_behind_the_horizon():
+    """15 Oct 16:45 (logged): 98% in the battery, charged at 14:00 for 0.23. Without the earlier prices that charge is out of sight and 13.6 kWh of
+    the evening sale falls outside every window; with them the window is found and the sale is 'planned'."""
+    starts, slots, soc, result = logged_cycle("15_1645")
+    blind = analyse(starts, slots, result, soc, CFG)
+    seen = analyse(starts, slots, result, soc, CFG, earlier_prices(starts))
+    assert blind.outside_kwh > 10
+    assert seen.outside_kwh == 0
+    evening = next(r for r in seen.reports if hhmm(r.window.start) == "17:45" or hhmm(r.window.peak_at) == "18:30")
+    assert evening.status == PLANNED and evening.window.fresh.threshold < 0.42 and hhmm(evening.window.fresh.at) in ("14:00", "14:15", "14:30", "13:45")
+
+
+def test_a_window_whose_cheap_charge_lies_before_the_battery_was_emptied_is_not_unsold():
+    """15 Oct 14:45 (logged): the 16 Oct evening window leans on the 14:00 valley, but the morning sale empties the battery in between; the energy
+    bought then is gone, so the window has nothing to sell and no charge that pays: 'no_stock', not 'unsold'."""
+    starts, slots, soc, result = logged_cycle("15_1445")
+    analysis = analyse(starts, slots, result, soc, CFG, earlier_prices(starts))
+    evening = next(r for r in analysis.reports if hhmm(r.window.peak_at) == "18:30" and r.window.start.astimezone(LOCAL_TZ).day == 16)
+    assert evening.window.viable == "fresh" and evening.usable_room < 0 and evening.soc_before_kwh < 8 and evening.status == NO_STOCK
+
+
+def test_a_battery_a_hair_above_the_floor_does_not_flip_a_window_between_no_stock_and_planned():
+    """15 Oct 23:15 and 00:45: 0.1 kWh and 0.4 kWh above the floor. A sale of 0.45 kWh counts as no sale, so both quarters say the same."""
+    starts, imp, exp = flat_day(0.40, 0.28, imp={80: 0.20}, exp={32: 0.55})
+    slots = [Slot(i, e, 0.0, 0.0) for i, e in zip(imp, exp)]
+    nothing = analyse(starts, slots, manual_plan({}, soc=7.6), 7.6, CFG).reports[0]
+    hair = analyse(starts, slots, manual_plan({32: ("discharge", -0.45)}, soc=7.5), 7.9, CFG).reports[0]
+    assert nothing.window.viable == "replace" and (nothing.status, hair.status) == (NO_STOCK, NO_STOCK)
+    real = analyse(starts, slots, manual_plan({32: ("discharge", -2.0)}, soc=7.5), 12.0, CFG).reports[0]
+    assert real.status == PLANNED
+
+
+def test_a_window_that_pays_on_a_charge_that_is_still_there_and_gets_nothing_is_unsold():
+    """The flag keeps its meaning: battery on the floor, a cheap quarter before the window that pays, and the plan neither charges nor sells."""
+    starts, imp, exp = flat_day(0.40, 0.28, imp={5: 0.15}, exp={32: 0.65})
+    slots = [Slot(i, e, 0.0, 0.0) for i, e in zip(imp, exp)]
+    report = analyse(starts, slots, manual_plan({}, soc=7.5), 7.5, CFG).reports[0]
+    assert report.status == "unsold" and report.usable_room > 0.05 and report.window.viable in ("fresh", "both")
