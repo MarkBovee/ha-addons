@@ -3,7 +3,8 @@
 
 Repo-specific on purpose (entity ids of this installation live here, never in hems/core). Inputs:
   docs/hems/observations/data/hourly.jsonl            hourly means from scripts/hems_collect.py (gitignored)
-  hems/core/tests/fixtures/quarter_import_prices.csv  recorder export of sensor.current_price
+  hems/core/tests/fixtures/quarter_import_prices.csv  recorder export of sensor.current_price (ends at 12 Oct 2026)
+  docs/hems/observations/data/trace/plans.jsonl        the prices of every later day, as HEMS planned on them (after `hems_trace.py --pull`)
 
 Hourly means are spread evenly over the four quarters of the hour, for the planner run and the recorded battery
 alike, so intra-hour structure (a 45-minute sell window) is not visible in either. Prints a markdown report.
@@ -29,6 +30,7 @@ from hems.solar import is_daylight  # noqa: E402
 
 HOURLY = ROOT / "docs" / "hems" / "observations" / "data" / "hourly.jsonl"
 PRICES = ROOT / "hems" / "core" / "tests" / "fixtures" / "quarter_import_prices.csv"
+TRACE_PLANS = ROOT / "docs" / "hems" / "observations" / "data" / "trace" / "plans.jsonl"
 LAT, LON = 52.0907, 5.1214
 E_SOC, E_BATT, E_PV = "sensor.battery_api_battery_soc", "sensor.battery_api_battery_power", "sensor.battery_api_pv_power"
 E_P1, E_INV, E_EV = "sensor.power_usage", "sensor.saj_total_grid_power", "sensor.charge_amps_monitor_charger_current_power"
@@ -48,19 +50,41 @@ def mean(v: dict, entity: str, field: str = "mean") -> float:
     return (v.get(entity) or {}).get(field) or 0.0
 
 
-def load_prices(model: PriceModel) -> PriceSeries:
-    """Consumer prices per quarter from the recorder export; export price is daylight-aware."""
+def trace_prices() -> dict[datetime, tuple[float, float]]:
+    """Consumer import and export price per quarter (UTC) from the logged plans; a later cycle overrides an earlier one."""
+    prices: dict[datetime, tuple[float, float]] = {}
+    if TRACE_PLANS.exists():
+        for line in TRACE_PLANS.read_text().splitlines():
+            plan = json.loads(line)
+            start = datetime.fromisoformat(plan["start"])
+            for k, (imp, exp) in enumerate(zip(plan["imp"], plan["exp"])):
+                prices[start + timedelta(minutes=15 * k)] = (imp, exp)
+    return prices
+
+
+def load_prices(model: PriceModel, later: dict[datetime, tuple[float, float]] | None = None) -> PriceSeries:
+    """Consumer prices per quarter from the recorder export (export price daylight-aware), then the quarters of `later` it does not have."""
     with PRICES.open(newline="") as handle:
         rows = [(datetime.fromisoformat(r["quarter_utc"]), float(r["import_price_eur_kwh"])) for r in csv.DictReader(handle)]
     market = [model.market_from_import(p) for _, p in rows]
     imp, exp = curves(market, model, [is_daylight(t, LAT, LON) for t, _ in rows])
-    return PriceSeries(tuple(t for t, _ in rows), tuple(imp), tuple(exp))
+    known = {t: (i, e) for (t, _), i, e in zip(rows, imp, exp)}
+    for start, pair in (later or {}).items():
+        known.setdefault(start, pair)
+    starts = sorted(known)
+    return PriceSeries(tuple(starts), tuple(known[t][0] for t in starts), tuple(known[t][1] for t in starts))
 
 
 def build(prices: PriceSeries, hourly: dict, first: datetime, last: datetime, capacity_kwh: float) -> ReplayData:
     """Replay inputs for [first, last): base load = P1 + inverter output - EV, PV, and the recorded battery flow."""
     keep = [i for i, s in enumerate(prices.starts) if first <= s < last]
     sl = PriceSeries(*(tuple(getattr(prices, f)[i] for i in keep) for f in ("starts", "import_eur_kwh", "export_eur_kwh")))
+    if not sl.starts:
+        raise SystemExit(f"No prices between {first:%Y-%m-%d %H:%M} and {last:%Y-%m-%d %H:%M} UTC: the recorder export ends at 12 Oct 2026; "
+                         "pull the logs (`python3 scripts/hems_trace.py --pull`) for later days.")
+    missing = next((s for s in sl.starts if s.replace(minute=0) not in hourly), None)
+    if missing or first.replace(minute=0) - timedelta(hours=1) not in hourly:
+        raise SystemExit(f"No hourly battery/PV/load data for {missing or first:%Y-%m-%d %H:%M} UTC: run `python3 scripts/hems_collect.py run --hours 72` first.")
     house, pv, batt = [], [], []
     for start in sl.starts:
         v = hourly[start.replace(minute=0)]
@@ -120,6 +144,7 @@ def main() -> int:
     first = datetime.fromisoformat(a.first).replace(tzinfo=LOCAL_TZ).astimezone(timezone.utc)
     last = datetime.fromisoformat(a.last).replace(tzinfo=LOCAL_TZ).astimezone(timezone.utc)
     hourly = load_hourly()
+    later = trace_prices()
     base_cfg = BatteryConfig()
     variants = [
         ("reserve 30 %, bonus switches on (default)", base_cfg, PriceModel()),
@@ -139,12 +164,15 @@ def main() -> int:
            "Recorded = what the real battery did, accounted the same way.", ""]
     failures: list[str] = []
     for label, cfg, model in variants:
-        prices = load_prices(model)
+        prices = load_prices(model, later)
         data = build(prices, hourly, first, last, cfg.capacity_kwh)
         soc_value = sorted(data.prices.import_eur_kwh)[len(data.prices.import_eur_kwh) // 5]
         sim = run_replay(data, cfg)
         rec_soc = recorded_soc(hourly, data, cfg.capacity_kwh)
-        pairs = {"6 Oct": ["2026-10-06"], "7+8 Oct": ["2026-10-07", "2026-10-08"], "9 Oct": ["2026-10-09"], "whole period": sorted({local_day(s) for s in data.prices.starts})}
+        present = {local_day(s) for s in data.prices.starts}
+        pairs = {name: days for name, days in {"6 Oct": ["2026-10-06"], "7+8 Oct": ["2026-10-07", "2026-10-08"], "9 Oct": ["2026-10-09"]}.items()
+                 if set(days) <= present}
+        pairs["whole period"] = sorted(present)
         out += [f"## {label}", "", "| window | planner | recorded |", "|---|---|---|"]
         for name, days in pairs.items():
             planner, recorded = window(data, sim, data.recorded_battery_kwh, days, soc_value, rec_soc)

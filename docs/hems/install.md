@@ -106,13 +106,17 @@ HEMS schrijft in `/config/hems/` drie bestanden, elk met roterende generaties (`
 |---|---|---|
 | `decision_trace.jsonl` | Eén regel per kwartier: status, invoer met leeftijden (SoC, prijzen, weer, historie), de vergelijking achter de actie (`compare`: verkoopwaarde, bewaarwaarde, kopen, drempel/vol-vlaggen, beste latere verkoop en aankoop met tijdstip), `segments` (het hele plan als aaneengesloten runs laden/ontladen/rust met vermogen, kWh, prijs en SoC), vorige actie en `plan_shift` | ca. 3 KB per kwartier, 20 MB per generatie, 3 generaties |
 | `plans.jsonl` | Eén regel per kwartier met elk geplande kwartier als compacte arrays: actie, redencode, vermogen, SoC, net, bewaar-/verkoop-/koopwaarde, import- en exportprijs, verbruik en PV. Daarmee is elk plan achteraf te reconstrueren en te vergelijken | ca. 1 MB per dag, 30 MB per generatie, 2 generaties; uit te zetten met "volledig plan loggen" in de opties |
-| `events.jsonl` | Gebeurtenissen: `settings` (instellingen, hash, gekozen entiteiten), `history`, `market` (per dag HTTP-status en aantal kwartieren, tot wanneer bekend), `weather`, `pv_gain`, `status` (van, naar), `action` (van, naar, reden), `windows` (de verkoopvensters en hun status, alleen als die verandert), `retry` | klein |
+| `events.jsonl` | Gebeurtenissen: `settings` (instellingen, hash, gekozen entiteiten), `history`, `market` (per dag HTTP-status en aantal kwartieren, tot wanneer bekend), `weather`, `pv_gain`, `status` (van, naar), `action` (van, naar, reden), `windows` (de verkoopvensters en hun status, alleen als die verandert), `retry` (na een herstart zonder SoC of prijzen, of na een mislukte weer-fetch zonder eerdere kopie: één snelle herhaling na 60 s per storing, daarna weer om de 30 minuten) | klein |
 
 Redencodes in `plans.jsonl`: `s` verkopen loont meer dan bewaren, `b` kopen is goedkoper dan bewaren, `h` vasthouden, `f` vasthouden op de reservevloer (verkopen zou lonen maar mag niet lager), `v` vasthouden omdat de batterij vol is. Alle waarden zijn EUR per kWh in de batterij; `keep` is wat de rest van de horizon die kWh waard is.
 
 ### Verkoopvensters in het log en in de reader
 
 Bij elk kwartier staat onder de plan-boom een blok `HEMS sell windows`: per venster waar het verkocht wordt, de piek, wat het nodig heeft op beide grondslagen (`after a charge at 04:15 needs 0.514 (-0.025)`, `bought back at 14:00 needs 0.382 (+0.107)`) en wat het plan ermee doet. `python3 scripts/hems_trace.py windows [TIME]` toont dat voor één kwartier en daarna per venster de statussen die het doorliep (`no_stock -> planned`): een venster dat tussen kwartieren heen en weer springt is een plan dat niet houdt. Een `unsold` venster of verkoop buiten elk venster geeft één WARNING (`HEMS window check`) per verandering, niet per kwartier.
+
+### Terugkijken met de replay
+
+`python3 scripts/hems_replay.py --from 2026-10-15 --to 2026-10-16 [--write docs/hems/observations/replay-2026-10-15.md]` speelt de planner over opgenomen dagen na en vergelijkt het kasresultaat met wat de echte batterij deed. Prijzen komen uit de recorder-export (tot 12 okt) en voor latere dagen uit `plans.jsonl` (eerst `hems_trace.py --pull`); de uurgemiddelden komen uit `hems_collect.py run --hours 72`. Ontbreekt een van beide, dan zegt het script welke opdracht nodig is. De replay kent belasting en PV vooraf (oracle) en spreidt uurgemiddelden over vier kwartieren: hij toont wat de planner op die prijzen kan, niet wat de prognoses ervan maken.
 
 ### Welke code maakte deze regel? (build)
 
