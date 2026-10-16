@@ -26,7 +26,13 @@ DEFAULT_OPTIONS = {
     "pv_gain_w_per_wm2": 0.0,                  # 0 = calibrate from recorded PV against the weather data
     "pv_max_ac_w": 5000.0,
     "weather_enabled": True,
-    "water_heater_plan_entity": "sensor.wh_heating_plan",   # the water heater module's plan entity ("" = do not model the water heater)
+    "water_heater_enabled": False,             # the water heater module: plans the daily heating run for the load forecast (the heating itself is not controlled)
+    "water_heater_energy_kwh": 1.9,
+    "water_heater_hours": 1,
+    "water_heater_night_energy_kwh": 0.0,       # 0 = the day part carries the heating, no night run
+    "water_heater_legionella_energy_kwh": 2.6,
+    "water_heater_legionella_hours": 3,
+    "water_heater_legionella_weekday": "saturday",
     "trace_full_plan": True,                   # also log every planned quarter each cycle (about 1 MB per day)
     "nordpool_enabled": True,                  # HEMS fetches day-ahead prices itself
     "delivery_area": "NL",

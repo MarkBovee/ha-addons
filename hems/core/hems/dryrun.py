@@ -14,7 +14,7 @@ from hems.contracts import MarketPrices, Reading
 from hems.decision_log import plan_detail
 from hems.forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
 from hems.prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
-from hems.heater import HeatingRun, run_kwh_per_quarter, without_daily_peak
+from hems.heater import HeatingRun, WaterHeaterConfig, plan_runs, run_kwh_per_quarter, without_daily_peak
 from hems.pvforecast import pv_kwh_per_quarter
 from hems.rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
 from hems.slots import slot_starts
@@ -39,7 +39,7 @@ class EngineSettings:
     default_load_w: float = 400.0                     # base load until the history has samples
     max_slots: int = 192
     tz: ZoneInfo = LOCAL_TZ
-    heater_cap_kwh: float = 0.0                       # > 0: the water heater is modelled (heater_kwh per run); 0 = left in the history
+    water_heater: WaterHeaterConfig = field(default_factory=WaterHeaterConfig)   # the switchable water heater module (off = the heater stays in the history)
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,6 @@ class EngineInputs:
     load_history_w: Sequence[tuple[datetime, float]]  # hourly mean base load, timezone-aware hour starts
     ghi_w_m2: Mapping[datetime, float] | None         # irradiance by quarter start; None = no weather data
     market: MarketPrices | None = None                # preferred price source: market prices, priced by the model
-    heating_runs: Sequence[HeatingRun] = ()           # planned water heater runs from the water heater module (a Home Assistant entity)
 
 
 @dataclass(frozen=True)
@@ -62,6 +61,7 @@ class EngineOutput:
     pv_kwh: Mapping[datetime, float]
     trace: dict
     detail: dict | None = None               # the full plan as compact arrays (hems.decision_log.plan_detail)
+    heating_runs: tuple[HeatingRun, ...] = ()   # the water heater module's planned runs (empty when it is off)
 
 
 def _failure(status: str, inputs: EngineInputs, **extra) -> EngineOutput:
@@ -91,19 +91,20 @@ def _prices(inputs: EngineInputs, settings: EngineSettings, start: datetime) -> 
     return from_market, "market" if from_market else "none", check
 
 
-def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: datetime, n_slots: int) -> tuple[dict[datetime, float], str]:
+def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: datetime, n_slots: int,
+                   runs: Sequence[HeatingRun] = ()) -> tuple[dict[datetime, float], str]:
     """Base-load kWh per quarter from the local-hour median profile, or the flat default without history.
 
-    With the water heater modelled (`heater_cap_kwh`) each day's heater is taken out of the history first and the planned runs
-    are added where the water heater module says they happen."""
-    heater = settings.heater_cap_kwh > 0
+    With the water heater module on, each day's heater is taken out of the history first and the module's planned `runs`
+    are added where it plans them."""
+    heater = settings.water_heater.enabled and settings.water_heater.energy_kwh > 0
     if inputs.load_history_w:
-        history = without_daily_peak(inputs.load_history_w, settings.heater_cap_kwh, settings.tz) if heater else list(inputs.load_history_w)
+        history = without_daily_peak(inputs.load_history_w, settings.water_heater.energy_kwh, settings.tz) if heater else list(inputs.load_history_w)
         profile, source = hourly_profile(history, settings.load_days, settings.tz), "history+heater" if heater else "history"
     else:
         profile, source = [settings.default_load_w] * 24, "default"
     load = dict(zip(slot_starts(start, n_slots), to_slots_kwh(profile, start, n_slots, settings.tz)))
-    for quarter, kwh in run_kwh_per_quarter(inputs.heating_runs).items():
+    for quarter, kwh in run_kwh_per_quarter(runs).items():
         if quarter in load:
             load[quarter] += kwh
     return load, source
@@ -120,7 +121,8 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
     prices, source, price_check = _prices(inputs, settings, start)
     if prices is None:
         return _failure(STATUS_NO_PRICES, inputs)
-    load, load_source = _load_forecast(inputs, settings, start, settings.max_slots)
+    runs = tuple(plan_runs(prices, inputs.now, settings.water_heater, settings.tz))
+    load, load_source = _load_forecast(inputs, settings, start, settings.max_slots, runs)
     pv = pv_kwh_per_quarter(inputs.ghi_w_m2 or {}, settings.pv_gain_w_per_wm2, settings.pv_max_ac_w)
     soc_kwh = inputs.soc_pct.value / 100 * cfg.capacity_kwh
     decision = plan_next(HorizonInputs(inputs.now, soc_kwh, prices, load, pv, settings.max_slots), cfg)
@@ -130,11 +132,11 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
                              "prices_end": prices.starts[-1].isoformat()})
     trace = {"status": STATUS_OK, "price_source": source, "load_source": load_source, "weather": inputs.ghi_w_m2 is not None,
              "inputs": {"soc_age_s": round(inputs.soc_pct.age(inputs.now).total_seconds()), "price_quarters": len(prices.starts),
-                        "prices_until": (prices.starts[-1] + timedelta(minutes=15)).isoformat(), "load_samples": len(inputs.load_history_w), "heating_runs": len(inputs.heating_runs)},
+                        "prices_until": (prices.starts[-1] + timedelta(minutes=15)).isoformat(), "load_samples": len(inputs.load_history_w), "heating_runs": len(runs)},
              **decision.trace}
     if price_check is not None:
         trace["price_check_max_diff"] = price_check
     shift = plan_shift(previous, decision)
     if shift:
         trace["plan_shift"] = shift
-    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace, plan_detail(decision))
+    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace, plan_detail(decision), runs)

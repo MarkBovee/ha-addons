@@ -29,7 +29,7 @@ from .engine.decision_log import cycle_line, event_line, plan_summary, plan_tabl
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
 from .engine.dryrun import EngineInputs, EngineOutput, EngineSettings, step
 from .engine.executor import AS_PLANNED, Execution, execute
-from .engine.heater import parse_runs
+from .engine.heater import WaterHeaterConfig
 from .engine.pvforecast import fit_gain_from_history
 from .engine.prices import PriceModel
 from .engine.rolling import Decision
@@ -56,6 +56,17 @@ class HemsSnapshot:
     weather: Weather | None = None         # the irradiance and temperature forecast the PV forecast was computed from
 
 
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def water_heater_from_options(o: dict[str, Any]) -> WaterHeaterConfig:
+    """The water heater module's settings from the (default-filled) options; an unknown weekday falls back to the default one."""
+    weekday = o["water_heater_legionella_weekday"]
+    return WaterHeaterConfig(enabled=bool(o["water_heater_enabled"]), energy_kwh=float(o["water_heater_energy_kwh"]), hours=int(o["water_heater_hours"]), night_energy_kwh=float(o["water_heater_night_energy_kwh"]),
+                             legionella_energy_kwh=float(o["water_heater_legionella_energy_kwh"]), legionella_hours=int(o["water_heater_legionella_hours"]),
+                             legionella_weekday=WEEKDAYS.index(weekday) if weekday in WEEKDAYS else WEEKDAYS.index(DEFAULT_OPTIONS["water_heater_legionella_weekday"]))
+
+
 def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -> EngineSettings:
     """Engine settings from the options (defaults fill gaps) and the Home Assistant location."""
     o = {**DEFAULT_OPTIONS, **entry.options}
@@ -69,7 +80,7 @@ def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -
                         bonus_only_daylight=o["bonus_only_daylight"], bonus_only_positive_price=o["bonus_only_positive_price"])
     return EngineSettings(battery=battery, prices=prices, latitude=latitude, longitude=longitude,
                           pv_gain_w_per_wm2=o["pv_gain_w_per_wm2"] or 7.0, pv_max_ac_w=o["pv_max_ac_w"],
-                          tz=dt_util.get_default_time_zone())
+                          tz=dt_util.get_default_time_zone(), water_heater=water_heater_from_options(o))
 
 
 class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
@@ -115,7 +126,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         engine = {"pv_max_ac_w": settings.pv_max_ac_w, "load_days": settings.load_days, "default_load_w": settings.default_load_w,
                   "max_slots": settings.max_slots, "soc_max_age_s": settings.soc_max_age.total_seconds(),
                   "latitude": round(settings.latitude, 2), "longitude": round(settings.longitude, 2)}
-        snapshot = settings_snapshot({"battery": settings.battery, "prices": settings.prices, "engine": engine})
+        snapshot = settings_snapshot({"battery": settings.battery, "prices": settings.prices, "engine": engine, "water_heater": settings.water_heater})
         if snapshot["hash"] != self._settings_hash:
             roles = {k: v for k, v in self.config_entry.data.items()}
             await self._log_event("settings", hash=snapshot["hash"], build=self.build, previous=self._settings_hash, values=snapshot["values"], roles=roles)
@@ -310,22 +321,6 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             _LOGGER.info("%s", "\n".join(tree))
         await self._note_windows(output)
 
-    def _water_heater_plan(self) -> tuple[list, float]:
-        """The water heater module's planned runs and the energy of a normal run, from its plan entity (Home Assistant is the interface).
-
-        ([], 0.0) when the option is empty or the entity is missing or unavailable: then the water heater stays in the load history,
-        as before. The energy per run (`heating_energy_kwh` attribute, a setting of that module) is how much of each day's peak hour
-        counts as the heater when the history is cleaned."""
-        entity = {**DEFAULT_OPTIONS, **self.config_entry.options}["water_heater_plan_entity"]
-        state = self.hass.states.get(entity) if entity else None
-        if state is None or state.state in ("unavailable", "unknown", ""):
-            return [], 0.0
-        try:
-            cap = float(state.attributes.get("heating_energy_kwh") or 0.0)
-        except (TypeError, ValueError):
-            cap = 0.0
-        return parse_runs(state.attributes.get("windows")), max(cap, 0.0)
-
     async def _async_update_data(self) -> HemsSnapshot:
         """One planning cycle: inputs -> engine -> trace -> snapshot for the sensors."""
         now = dt_util.utcnow()
@@ -342,13 +337,10 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
                                   source="setting" if {**DEFAULT_OPTIONS, **self.config_entry.options}["pv_gain_w_per_wm2"] else "fit")
             self._last_gain = gain
         price_state = self.hass.states.get(self._entity(CONF_PRICE_CURVE) or "")
-        heating_runs, heater_cap = self._water_heater_plan()
-        settings = replace(settings, heater_cap_kwh=heater_cap)
         inputs = EngineInputs(
             now=now, soc_pct=reading_from_state(self.hass.states.get(self._entity(CONF_SOC) or "")),
             import_curve=parse_price_curve(price_state.attributes.get("price_curve") if price_state else None),
-            load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market,
-            heating_runs=heating_runs)
+            load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market)
         output = await self.hass.async_add_executor_job(step, inputs, settings, self._previous)
         if output.decision:
             self._previous = output.decision

@@ -12,6 +12,8 @@ from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_
 _ROLES_REQUIRED = (CONF_SOC, CONF_BATTERY_POWER, CONF_PV, CONF_GRID)
 _ROLES_OPTIONAL = (CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE)
 _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+_WEEKDAY = selector.SelectSelector(selector.SelectSelectorConfig(
+    options=["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], mode=selector.SelectSelectorMode.DROPDOWN, translation_key="weekday"))
 
 
 def _user_schema(defaults: dict[str, Any]) -> vol.Schema:
@@ -43,11 +45,12 @@ def _options_schema(current: dict[str, Any]) -> vol.Schema:
                "round_trip_eff": (0.5, 1.0, 0.01), "min_profit_margin": (0, 1, 0.01), "hold_cost_kwh_h": (0, 0.05, 0.0005), "pv_gain_w_per_wm2": (0, 30, 0.1), "pv_max_ac_w": (0, 30000, 100),
                "import_vat_multiplier": (1, 2, 0.01), "import_markup": (-0.5, 0.5, 0.0001), "import_energy_tax": (0, 1, 0.00001),
                "export_vat_multiplier": (1, 2, 0.01), "export_bonus_pct": (0, 1, 0.01), "export_fixed_bonus": (-0.5, 0.5, 0.0001),
-               "export_energy_tax": (0, 1, 0.00001)}
+               "export_energy_tax": (0, 1, 0.00001), "water_heater_energy_kwh": (0, 15, 0.1), "water_heater_hours": (1, 6, 1), "water_heater_night_energy_kwh": (0, 15, 0.1),
+               "water_heater_legionella_energy_kwh": (0, 15, 0.1), "water_heater_legionella_hours": (1, 6, 1)}
     fields: dict[Any, Any] = {vol.Required(k, default=current[k]): _number(*bounds) for k, bounds in numbers.items()}
     fields[vol.Required("delivery_area", default=current["delivery_area"])] = str
-    fields[vol.Optional("water_heater_plan_entity", description={"suggested_value": current.get("water_heater_plan_entity")})] = str
-    for flag in ("weather_enabled", "nordpool_enabled", "trace_full_plan", "salderen", "bonus_only_daylight", "bonus_only_positive_price"):
+    fields[vol.Required("water_heater_legionella_weekday", default=current["water_heater_legionella_weekday"])] = _WEEKDAY
+    for flag in ("water_heater_enabled", "weather_enabled", "nordpool_enabled", "trace_full_plan", "salderen", "bonus_only_daylight", "bonus_only_positive_price"):
         fields[vol.Required(flag, default=current[flag])] = bool
     return vol.Schema(fields)
 
@@ -82,6 +85,5 @@ class HemsOptionsFlow(OptionsFlowWithReload):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show the current settings; store them as given."""
         if user_input is not None:
-            # An emptied text field is absent from the form data, and an absent option falls back to its default: say 'off' explicitly.
-            return self.async_create_entry(data={"water_heater_plan_entity": "", **user_input})
+            return self.async_create_entry(data=user_input)
         return self.async_show_form(step_id="init", data_schema=_options_schema({**DEFAULT_OPTIONS, **self.config_entry.options}))

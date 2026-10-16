@@ -52,7 +52,13 @@
           "nordpool_enabled": "Dagprijzen zelf ophalen bij Nord Pool",
           "delivery_area": "Nord Pool-biedzone",
           "trace_full_plan": "Elk kwartier het volledige plan loggen (plans.jsonl, ongeveer 1 MB per dag)",
-          "water_heater_plan_entity": "Entiteit met het plan van de boiler (een sensor met een attribuut `windows` met geplande verwarmingsruns, zoals sensor.wh_heating_plan; leeg = boiler niet meenemen)"
+          "water_heater_enabled": "Boilermodule aan (plant de dagelijkse verwarmingsrun voor de verbruiksverwachting; HEMS stuurt de verwarming niet aan)",
+          "water_heater_energy_kwh": "Boiler: energie van een normale verwarmingsrun (kWh)",
+          "water_heater_hours": "Boiler: duur van een normale verwarmingsrun (uren)",
+          "water_heater_legionella_energy_kwh": "Boiler: energie van de legionellarun (kWh)",
+          "water_heater_legionella_hours": "Boiler: duur van de legionellarun (uren)",
+          "water_heater_legionella_weekday": "Boiler: legionelladag",
+          "water_heater_night_energy_kwh": "Boiler: energie van de nachtrun (kWh, 0 = geen nachtrun)"
         }
       }
     }
@@ -129,11 +135,27 @@
       },
       "sell_window": {
         "name": "Volgend verkoopvenster"
+      },
+      "water_heater_plan": {
+        "name": "Boilerplan"
       }
     },
     "binary_sensor": {
       "tomorrow_prices_available": {
         "name": "Prijzen van morgen beschikbaar"
+      }
+    }
+  },
+  "selector": {
+    "weekday": {
+      "options": {
+        "monday": "Maandag",
+        "tuesday": "Dinsdag",
+        "wednesday": "Woensdag",
+        "thursday": "Donderdag",
+        "friday": "Vrijdag",
+        "saturday": "Zaterdag",
+        "sunday": "Zondag"
       }
     }
   }

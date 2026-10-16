@@ -596,38 +596,55 @@ async def test_the_pv_forecast_is_clipped_at_the_panels_peak_not_at_the_inverter
     assert DEFAULT_OPTIONS["pv_max_ac_w"] == 5000.0
 
 
-def plan_entity_state(hass: HomeAssistant, energy: float = 1.9) -> None:
-    """The water heater module's plan entity with one 1.9 kWh run from 11:00 to 12:00 local on 6 Oct (the hour of NOW)."""
-    hass.states.async_set("sensor.wh_heating_plan", "2026-10-06T11:00+02:00", {
-        "windows": [{"kind": "day", "start": "2026-10-06T11:00+02:00", "end": "2026-10-06T12:00+02:00", "energy_kwh": energy, "avg_price": 0.236}],
-        "heating_energy_kwh": 1.9})
+def forecast_by_start(hass: HomeAssistant) -> dict[str, float]:
+    """The load forecast sensor's quarters by local start time."""
+    return {point["start"]: point["kwh"] for point in hass.states.get("sensor.hems_load_forecast_next_hour").attributes["forecast"]}
 
 
-async def test_the_water_heaters_planned_run_is_part_of_the_load_forecast(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
-    """The load forecast of the next hour includes the run the water heater module plans in it (0.4 kWh default load + 1.9 kWh), and says so in the trace."""
+async def test_the_water_heater_module_plans_the_cheapest_hour_and_puts_it_in_the_load_forecast(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Module on: the cheapest hour of 6 Oct (13:00-14:00) is the run, the sensor says so in local time, those four quarters carry the run's 1.9 kWh on top of the
+    flat 0.1 kWh, the others do not, and the trace counts the run."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")             # the module plans local days; the test default is US/Pacific
     set_states(hass)
-    plan_entity_state(hass)
-    await setup_entry(hass, freezer, aioclient_mock)
-    assert float(hass.states.get("sensor.hems_load_forecast_next_hour").state) == pytest.approx(0.4 + 1.9, abs=0.01)
+    freezer.move_to(NOW)
+    aioclient_mock.get(OPEN_METEO_URL, json=weather_payload())
+    mock_nordpool(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=ROLES, options={**DEFAULT_OPTIONS, "water_heater_enabled": True}, unique_id=DOMAIN)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    plan = hass.states.get("sensor.hems_water_heater_plan")
+    assert plan.state == "2026-10-06T11:00:00+00:00"
+    assert [(w["kind"], w["start"], w["end"], w["energy_kwh"]) for w in plan.attributes["windows"]] == [("heating", "2026-10-06T13:00+02:00", "2026-10-06T14:00+02:00", 1.9)]
+    quarters = forecast_by_start(hass)
+    inside = {k: v for k, v in quarters.items() if k[11:13] == "13" and k.startswith("2026-10-06")}
+    assert len(inside) == 4 and all(v == pytest.approx(0.1 + 1.9 / 4, abs=0.002) for v in inside.values())
+    assert all(v == pytest.approx(0.1, abs=0.002) for k, v in quarters.items() if k not in inside)
     record = read_jsonl(hass, "decision_trace.jsonl")[-1]
-    assert record["inputs"]["heating_runs"] == 1
+    assert record["inputs"]["heating_runs"] == 1 and record["load_source"] == "default"
 
 
-async def test_without_the_plan_entity_the_forecast_is_unchanged(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
-    """Entity missing (the add-on is not updated yet), unavailable, or the option emptied: the water heater stays in the history, no run is added."""
+async def test_the_water_heater_module_is_off_by_default_and_changes_nothing(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Off: no state on the plan sensor, a flat forecast, no run in the trace."""
     set_states(hass)
     await setup_entry(hass, freezer, aioclient_mock)
-    assert float(hass.states.get("sensor.hems_load_forecast_next_hour").state) == pytest.approx(0.4, abs=0.01)
+    plan = hass.states.get("sensor.hems_water_heater_plan")
+    assert plan.state == "unknown" and plan.attributes["windows"] == []
+    assert all(v == pytest.approx(0.1, abs=0.002) for v in forecast_by_start(hass).values())
     assert read_jsonl(hass, "decision_trace.jsonl")[-1]["inputs"]["heating_runs"] == 0
 
 
-async def test_emptying_the_plan_entity_option_switches_the_water_heater_model_off(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
-    """A cleared text field is not in the form data; the options flow must save '' so the default does not come back."""
+async def test_the_options_form_switches_the_water_heater_module_on_and_the_plan_follows(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The settings form shows the module's fields (the weekday as a choice), saving reloads the entry and the plan appears; a legionella weekday of today
+    (Tuesday 6 Oct) makes today's run the three-hour, 2.6 kWh one."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
     set_states(hass)
-    plan_entity_state(hass)
     entry = await setup_entry(hass, freezer, aioclient_mock)
     form = await hass.config_entries.options.async_init(entry.entry_id)
-    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"reserve_soc_pct": 30.0})
+    assert form["type"] == FlowResultType.FORM and {"water_heater_enabled", "water_heater_legionella_weekday", "water_heater_hours"} <= {str(k) for k in form["data_schema"].schema}
+    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"water_heater_enabled": True, "water_heater_legionella_weekday": "tuesday"})
     await hass.async_block_till_done()
-    assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["water_heater_plan_entity"] == ""
-    assert float(hass.states.get("sensor.hems_load_forecast_next_hour").state) == pytest.approx(0.4, abs=0.01)
+    assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["water_heater_enabled"] is True
+    window, = hass.states.get("sensor.hems_water_heater_plan").attributes["windows"]
+    assert (window["kind"], window["energy_kwh"]) == ("legionella", 2.6)
+    assert datetime.fromisoformat(window["end"]) - datetime.fromisoformat(window["start"]) == timedelta(hours=3)

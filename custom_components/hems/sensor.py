@@ -28,6 +28,19 @@ class HemsSensorDescription(SensorEntityDescription):
     attributes: Callable[[HemsSnapshot], dict[str, Any]] | None = None
 
 
+def _heating_start(snap: HemsSnapshot):
+    """Start of the next planned water heater run (a run that is going on counts); None when the module is off or no day has a complete price curve."""
+    runs = snap.output.heating_runs
+    return runs[0].start if runs else None
+
+
+def _heating_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """Every planned heating run in local time: kind, start, end, expected kWh and mean price; the module is switched on in the settings."""
+    tz = dt_util.get_default_time_zone()
+    return {"windows": [{"kind": r.kind, "start": r.start.astimezone(tz).isoformat(timespec="minutes"), "end": r.end.astimezone(tz).isoformat(timespec="minutes"),
+                         "energy_kwh": round(r.energy_kwh, 2), "avg_price_eur_kwh": round(r.avg_price, 4)} for r in snap.output.heating_runs]}
+
+
 def _decision(snap: HemsSnapshot):
     """The battery decision of this cycle, or None."""
     return snap.output.decision
@@ -176,6 +189,8 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           value=lambda s: _window_start(s, "charge"), attributes=lambda s: _window_attrs(s, "charge")),
     HemsSensorDescription(key="discharge_window", translation_key="discharge_window", device_class=SensorDeviceClass.TIMESTAMP,
                           value=lambda s: _window_start(s, "discharge"), attributes=lambda s: _window_attrs(s, "discharge")),
+    HemsSensorDescription(key="water_heater_plan", translation_key="water_heater_plan", device_class=SensorDeviceClass.TIMESTAMP,
+                          value=_heating_start, attributes=_heating_attrs),
     HemsSensorDescription(key="pv_forecast_24h", translation_key="pv_forecast_24h", device_class=SensorDeviceClass.ENERGY,
                           native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
                           value=lambda s: round(sum(v for t, v in s.output.pv_kwh.items() if s.output.decision and

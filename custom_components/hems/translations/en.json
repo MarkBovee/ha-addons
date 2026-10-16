@@ -52,7 +52,13 @@
           "nordpool_enabled": "Fetch day-ahead prices from Nord Pool",
           "delivery_area": "Nord Pool delivery area",
           "trace_full_plan": "Log the full plan every cycle (plans.jsonl, about 1 MB per day)",
-          "water_heater_plan_entity": "Water heater plan entity (a sensor with a `windows` attribute of planned heating runs, like sensor.wh_heating_plan; empty = do not model the water heater)"
+          "water_heater_enabled": "Water heater module on (plans the daily heating run for the load forecast; HEMS does not control the heating)",
+          "water_heater_energy_kwh": "Water heater: energy of a normal heating run (kWh)",
+          "water_heater_hours": "Water heater: length of a normal heating run (hours)",
+          "water_heater_legionella_energy_kwh": "Water heater: energy of the legionella run (kWh)",
+          "water_heater_legionella_hours": "Water heater: length of the legionella run (hours)",
+          "water_heater_legionella_weekday": "Water heater: legionella day",
+          "water_heater_night_energy_kwh": "Water heater: energy of the night run (kWh, 0 = no night run)"
         }
       }
     }
@@ -129,11 +135,27 @@
       },
       "sell_window": {
         "name": "Next sell window"
+      },
+      "water_heater_plan": {
+        "name": "Water heater plan"
       }
     },
     "binary_sensor": {
       "tomorrow_prices_available": {
         "name": "Tomorrow prices available"
+      }
+    }
+  },
+  "selector": {
+    "weekday": {
+      "options": {
+        "monday": "Monday",
+        "tuesday": "Tuesday",
+        "wednesday": "Wednesday",
+        "thursday": "Thursday",
+        "friday": "Friday",
+        "saturday": "Saturday",
+        "sunday": "Sunday"
       }
     }
   }
