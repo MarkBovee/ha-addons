@@ -500,3 +500,81 @@ async def test_an_unsold_window_is_warned_once_and_only_again_when_the_picture_c
     await coordinator._note_windows(SimpleNamespace(trace={"windows": [{**window, "status": "planned", "sold_kwh": 3.0}], "windows_outside_kwh": 0.0}))
     assert sum("HEMS window check" in r.getMessage() for r in caplog.records) == 1                      # now fine: no new warning
     assert [e["windows"][0]["status"] for e in read_jsonl(hass, "events.jsonl") if e["event"] == "windows"][-2:] == ["unsold", "planned"]
+
+
+def weather_calls(aioclient_mock) -> int:
+    """How many times Open-Meteo was asked."""
+    return sum(1 for call in aioclient_mock.mock_calls if OPEN_METEO_URL in str(call[1]))
+
+
+async def test_a_weather_outage_right_after_a_restart_is_retried_after_a_minute_and_only_once(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """16 Oct 08:38 and 15 Oct 09:37: Open-Meteo answered 503 on the first fetch and the plan ran half an hour without a PV forecast.
+    Without a copy of the forecast one quick retry follows; if that fails too the normal 30 minutes apply (no fetch every minute)."""
+    set_states(hass)
+    freezer.move_to(NOW)
+    aioclient_mock.get(OPEN_METEO_URL, status=503)
+    mock_nordpool(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=ROLES, options=dict(DEFAULT_OPTIONS), unique_id=DOMAIN)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert read_jsonl(hass, "decision_trace.jsonl")[-1]["weather"] is False and weather_calls(aioclient_mock) == 1
+    assert any(e["event"] == "retry" and e["status"] == "weather" for e in read_jsonl(hass, "events.jsonl"))
+    for _ in range(3):                                                  # the outage goes on: no further fetch for the next minutes
+        freezer.tick(timedelta(seconds=61))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert weather_calls(aioclient_mock) == 2
+    aioclient_mock.clear_requests()                                     # Open-Meteo is back; the regular 30 minutes pass
+    aioclient_mock.get(OPEN_METEO_URL, json=weather_payload())
+    mock_nordpool(aioclient_mock)
+    freezer.tick(timedelta(minutes=31))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert [e["ok"] for e in read_jsonl(hass, "events.jsonl") if e["event"] == "weather"][-1] is True
+
+
+async def test_the_quick_weather_retry_gets_the_forecast_back_within_two_minutes(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """When the second fetch works the next planning cycle already has the weather."""
+    set_states(hass)
+    freezer.move_to(NOW)
+    aioclient_mock.get(OPEN_METEO_URL, status=503)
+    mock_nordpool(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=ROLES, options=dict(DEFAULT_OPTIONS), unique_id=DOMAIN)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(OPEN_METEO_URL, json=weather_payload())
+    mock_nordpool(aioclient_mock)
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert read_jsonl(hass, "decision_trace.jsonl")[-1]["weather"] is True and float(hass.states.get("sensor.hems_pv_forecast_next_hour").state) >= 0
+
+
+async def test_a_second_outage_that_costs_the_forecast_again_gets_its_own_quick_retry(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The quick retry is once per outage, not once per run: after the forecast was back and then went stale (6 hours without a fetch) it is available again."""
+    set_states(hass)
+    freezer.move_to(NOW)
+    aioclient_mock.get(OPEN_METEO_URL, status=503)
+    mock_nordpool(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=ROLES, options=dict(DEFAULT_OPTIONS), unique_id=DOMAIN)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(OPEN_METEO_URL, json=weather_payload())
+    mock_nordpool(aioclient_mock)
+    freezer.tick(timedelta(minutes=31))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert read_jsonl(hass, "decision_trace.jsonl")[-1]["weather"] is True
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(OPEN_METEO_URL, status=503)
+    mock_nordpool(aioclient_mock)
+    for _ in range(16):                                                  # eight hours of a 503 every half hour: the copy goes stale after six
+        freezer.tick(timedelta(minutes=31))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert sum(e["event"] == "retry" and e["status"] == "weather" for e in read_jsonl(hass, "events.jsonl")) == 2

@@ -98,6 +98,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._market: MarketPrices | None = None
         self._market_tried_at: datetime | None = None
         self._weather_tried_at: datetime | None = None
+        self._weather_retry_used = False            # one quick retry per outage: an outage must not turn into a fetch every minute
+        self._weather_retry_wanted = False
         self._gain = 0.0
         self._retry_cancel = None
 
@@ -207,6 +209,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
                     timeout=aiohttp.ClientTimeout(total=20)) as response:
                 response.raise_for_status()
                 self._weather = parse_open_meteo(await response.json(), now)
+            self._weather_retry_used = False
             await self._log_event("weather", ok=True, quarters=len(self._weather.ghi_w_m2))
         except (aiohttp.ClientError, TimeoutError, KeyError, ValueError) as err:
             _LOGGER.warning("Weather fetch failed (%s); using the last copy if it is recent enough", err)
@@ -214,6 +217,11 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             if dropped:
                 self._weather = None
             await self._log_event("weather", ok=False, error=str(err)[:200], kept_previous=self._weather is not None, dropped_stale=dropped)
+            if self._weather is None and not self._weather_retry_used:
+                # Right after a restart Open-Meteo may answer 503 once; without a copy the plan would run on no PV forecast for
+                # half an hour. Try again at the next retry (a minute away) instead of after WEATHER_REFRESH, once per outage.
+                self._weather_retry_used = self._weather_retry_wanted = True
+                self._weather_tried_at = None
 
     def _calibrated_gain(self, settings: EngineSettings) -> float:
         """PV gain: the setting when given, otherwise fitted from recorded PV against the weather series."""
@@ -327,9 +335,11 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         weather_age = (now - self._weather.fetched_at).total_seconds() / 60 if self._weather else None
         execution = execute(output.decision, now, inputs.soc_pct, settings.battery, settings.soc_max_age)
         await self._log_cycle(output, now, gain, weather_age, bool(inputs.import_curve), execution)
-        if output.status in RETRY_STATUSES and self._retry_cancel is None:
+        reason = output.status if output.status in RETRY_STATUSES else "weather" if self._weather_retry_wanted else None
+        if reason and self._retry_cancel is None:
+            self._weather_retry_wanted = False
             self._retry_cancel = async_call_later(self.hass, RETRY_DELAY, self._retry)
-            await self._log_event("retry", in_seconds=RETRY_DELAY.total_seconds(), status=output.status)
+            await self._log_event("retry", in_seconds=RETRY_DELAY.total_seconds(), status=reason)
         known = set(self._market.starts if self._market else ()) | {t for t, _ in inputs.import_curve}
         prices_until = max(known) + timedelta(minutes=15) if known else None
         text, windows, table = self._plan_for_users(output)
