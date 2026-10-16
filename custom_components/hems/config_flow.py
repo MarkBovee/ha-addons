@@ -69,10 +69,17 @@ def _field(key: str) -> Any:
 
 
 def _options_schema(current: dict[str, Any]) -> vol.Schema:
-    """The settings form: one collapsible section per part, every setting with its current value as default."""
-    return vol.Schema({vol.Optional(name, default={}): section(vol.Schema({vol.Required(key, default=current[key]): _field(key) for key in keys}),
+    """The settings form: one collapsible section per part. Every setting has its current value as default (the server fills a field left out) and
+    as suggested value (what the screen shows: Home Assistant's screen starts a section from an empty object when the section itself has a default,
+    and does not apply the defaults of the fields inside it)."""
+    return vol.Schema({vol.Optional(name): section(vol.Schema({vol.Required(key, default=current[key]): _field(key) for key in keys}),
                                                    {"collapsed": name not in OPEN_SECTIONS})
                        for name, keys in SECTIONS.items()})
+
+
+def suggested_by_section(current: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The current settings grouped like the form, in the shape Home Assistant wants suggested values for sections."""
+    return {name: {key: current[key] for key in keys} for name, keys in SECTIONS.items()}
 
 
 def flatten_sections(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -108,7 +115,8 @@ class HemsOptionsFlow(OptionsFlowWithReload):
     """Edit battery, forecast and price-component settings."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Show the current settings; store them as given."""
+        """Show the current settings; store what was submitted on top of what was set (a section that is not submitted keeps its values)."""
+        current = {**DEFAULT_OPTIONS, **self.config_entry.options}
         if user_input is not None:
-            return self.async_create_entry(data=flatten_sections(user_input))
-        return self.async_show_form(step_id="init", data_schema=_options_schema({**DEFAULT_OPTIONS, **self.config_entry.options}))
+            return self.async_create_entry(data={**self.config_entry.options, **flatten_sections(user_input)})
+        return self.async_show_form(step_id="init", data_schema=self.add_suggested_values_to_schema(_options_schema(current), suggested_by_section(current)))

@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
@@ -667,3 +668,20 @@ async def test_the_settings_form_is_split_into_parts_that_cover_every_option_and
     await hass.config_entries.options.async_configure(form["flow_id"], {"module_water_heater": {"water_heater_hours": 2}})
     await hass.async_block_till_done()
     assert entry.options["water_heater_hours"] == 2 and {k: v for k, v in entry.options.items() if k != "water_heater_hours"} == {k: v for k, v in before.items() if k != "water_heater_hours"}
+
+
+async def test_the_settings_form_shows_the_current_values_inside_every_section(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The screen fills a field from its suggested value: every field of every section carries the current option, a changed option included, and
+    no section has a default of its own (that made the screen start every section empty)."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    first = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(first["flow_id"], {"module_battery": {"reserve_soc_pct": 40.0}})
+    await hass.async_block_till_done()
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    shown = {}
+    for marker, part in form["data_schema"].schema.items():
+        assert marker.default is vol.UNDEFINED, "a section default empties the section on screen"
+        shown.update({str(key): (key.description or {}).get("suggested_value", "missing") for key in part.schema.schema})
+    assert set(shown) == set(DEFAULT_OPTIONS) and "missing" not in shown.values()
+    assert shown["reserve_soc_pct"] == 40.0 and shown["capacity_kwh"] == DEFAULT_OPTIONS["capacity_kwh"]
