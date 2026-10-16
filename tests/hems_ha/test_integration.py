@@ -578,3 +578,19 @@ async def test_a_second_outage_that_costs_the_forecast_again_gets_its_own_quick_
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
     assert sum(e["event"] == "retry" and e["status"] == "weather" for e in read_jsonl(hass, "events.jsonl")) == 2
+
+
+async def test_the_pv_forecast_is_clipped_at_the_panels_peak_not_at_the_inverter(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Full sun (1000 W/m2) would give 7 kW at the default gain; this installation peaks at 5 kW, so the next hour is 5 kWh, not 7 or 8."""
+    set_states(hass)
+    freezer.move_to(NOW)
+    payload = weather_payload()
+    payload["minutely_15"]["shortwave_radiation"] = [1000.0] * 60
+    aioclient_mock.get(OPEN_METEO_URL, json=payload)
+    mock_nordpool(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=ROLES, options=dict(DEFAULT_OPTIONS), unique_id=DOMAIN)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert float(hass.states.get("sensor.hems_pv_forecast_next_hour").state) == pytest.approx(5.0, abs=0.01)
+    assert DEFAULT_OPTIONS["pv_max_ac_w"] == 5000.0

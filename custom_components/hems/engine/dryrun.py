@@ -33,7 +33,7 @@ class EngineSettings:
     latitude: float = 52.0907
     longitude: float = 5.1214
     pv_gain_w_per_wm2: float = 7.0
-    pv_max_ac_w: float = 8000.0
+    pv_max_ac_w: float = 5000.0                # peak PV output: this installation's panels peaked at 4964 W on 3-16 Oct 2026, below its 8 kW inverter
     soc_max_age: timedelta = timedelta(minutes=15)    # a SoC older than this is not planned on
     load_days: int = 7
     default_load_w: float = 400.0                     # base load until the history has samples

@@ -37,7 +37,7 @@
           "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
           "hold_cost_kwh_h": "Waiting cost (EUR per stored kWh per hour; 0 = off, higher charges later before a sale)",
           "pv_gain_w_per_wm2": "PV gain (W per W/m2, 0 = calibrate automatically)",
-          "pv_max_ac_w": "Inverter AC limit (W)",
+          "pv_max_ac_w": "Peak PV output (W): the PV forecast is clipped here; use what the panels peak at, or the inverter AC limit if that is lower",
           "weather_enabled": "Fetch weather from Open-Meteo",
           "import_vat_multiplier": "Import VAT multiplier",
           "import_markup": "Import markup (EUR/kWh)",

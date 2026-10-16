@@ -24,7 +24,7 @@ DEFAULT_OPTIONS = {
     "min_profit_margin": 0.10,
     "hold_cost_kwh_h": 0.002,                  # EUR per kWh per hour of waiting; 0 = off (charge as early as equal prices allow)
     "pv_gain_w_per_wm2": 0.0,                  # 0 = calibrate from recorded PV against the weather data
-    "pv_max_ac_w": 8000.0,
+    "pv_max_ac_w": 5000.0,
     "weather_enabled": True,
     "trace_full_plan": True,                   # also log every planned quarter each cycle (about 1 MB per day)
     "nordpool_enabled": True,                  # HEMS fetches day-ahead prices itself

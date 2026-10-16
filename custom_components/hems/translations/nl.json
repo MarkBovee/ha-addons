@@ -37,7 +37,7 @@
           "min_profit_margin": "Minimale winstmarge (EUR per ontladen kWh, na verliezen)",
           "hold_cost_kwh_h": "Wachtkosten (EUR per opgeslagen kWh per uur; 0 = uit, hoger laadt later vóór een verkoop)",
           "pv_gain_w_per_wm2": "PV-factor (W per W/m2, 0 = automatisch kalibreren)",
-          "pv_max_ac_w": "AC-limiet omvormer (W)",
+          "pv_max_ac_w": "Piekvermogen PV (W): de PV-verwachting wordt hier afgekapt; neem wat de panelen maximaal halen, of de AC-limiet van de omvormer als die lager is",
           "weather_enabled": "Weer ophalen bij Open-Meteo",
           "import_vat_multiplier": "Import btw-factor",
           "import_markup": "Import opslag (EUR/kWh)",

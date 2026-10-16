@@ -22,7 +22,7 @@ Snelste route: `python3 hems/deploy.py --dry-run` en daarna `python3 hems/deploy
 | EV-vermogen (optioneel) | `sensor.charge_amps_monitor_charger_current_power` | wordt van het basisverbruik afgetrokken |
 | Prijscurve (optioneel) | `sensor.energy_prices_electricity_import_price` | terugval als Nord Pool uitvalt en controle op de eigen prijsberekening; moet een `price_curve`-attribuut hebben (`start`, `end`, `price`) |
 
-4. Instellingen, HEMS, Configureren: de standaardwaarden zijn de besluiten uit `docs/hems/intake-decisions.md` (capaciteit 25 kWh, 8 kW, vloer 5 %, reserve 30 %, round trip 0,82, minimale winstmarge 0,10, wachtkosten 0,002, prijscomponenten zoals energy-prices, Nord Pool aan voor zone NL). PV-factor 0 betekent automatisch kalibreren op de opgenomen PV.
+4. Instellingen, HEMS, Configureren: de standaardwaarden zijn de besluiten uit `docs/hems/intake-decisions.md` (capaciteit 25 kWh, 8 kW, vloer 5 %, reserve 30 %, round trip 0,82, minimale winstmarge 0,10, wachtkosten 0,002, prijscomponenten zoals energy-prices, Nord Pool aan voor zone NL). PV-factor 0 betekent automatisch kalibreren op de opgenomen PV. Het piekvermogen PV (standaard 5000 W: de panelen haalden deze week maximaal 4964 W, de omvormer kan 8 kW) kapt de PV-verwachting af; staat het te hoog, dan voorspelt HEMS op zonnige dagen meer PV dan de panelen kunnen leveren.
 
 ## Wat je ziet
 
