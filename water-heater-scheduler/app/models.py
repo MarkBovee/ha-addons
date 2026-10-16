@@ -100,6 +100,11 @@ class ScheduleConfig:
     min_cycle_gap_minutes: int = 50
     log_level: str = "info"
     dynamic_window_mode: bool = False
+
+    # Expected electricity per heating run (kWh), published in the heating plan for energy planning
+    heating_energy_kwh: float = 1.9
+    night_heating_energy_kwh: float = 0.0
+    legionella_energy_kwh: float = 2.6
     
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "ScheduleConfig":
@@ -136,6 +141,9 @@ class ScheduleConfig:
             min_cycle_gap_minutes=config.get("min_cycle_gap_minutes", 50),
             log_level=config.get("log_level", "info"),
             dynamic_window_mode=to_bool(config.get("dynamic_window_mode", False)),
+            heating_energy_kwh=float(config.get("heating_energy_kwh", 1.9)),
+            night_heating_energy_kwh=float(config.get("night_heating_energy_kwh", 0.0)),
+            legionella_energy_kwh=float(config.get("legionella_energy_kwh", 2.6)),
         )
     
     def get_preset(self) -> TemperaturePreset:

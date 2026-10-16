@@ -4,10 +4,12 @@ Schedules domestic hot water heating based on electricity prices.
 Logic ported directly from NetDaemon WaterHeater.cs for reliability.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, time, timezone
 from typing import Optional, Tuple, Dict, Any
 
+from .heating_plan import build_heating_plan, plan_attributes, plan_state
 from .models import ScheduleConfig, HeaterState, ProgramType
 from .water_heater_controller import WaterHeaterController, EntityStateReader
 
@@ -34,6 +36,9 @@ WH_CONFIG_DEFAULTS = {
     'legionella_duration_hours': 3,
     'bath_auto_off_temp': 50,
     'temperature_preset': 'comfort',
+    'heating_energy_kwh': 1.9,
+    'night_heating_energy_kwh': 0.0,
+    'legionella_energy_kwh': 2.6,
     'min_cycle_gap_minutes': 50,
     'log_level': 'info',
 }
@@ -43,6 +48,8 @@ WH_REQUIRED_FIELDS = ['water_heater_entity_id']
 # Status entity to update (compatible with NetDaemon WaterHeater app)
 STATUS_TEXT_ENTITY = 'input_text.heating_schedule_status'
 LEGIONELLA_ENTITY = 'sensor.wh_last_legionella'
+HEATING_PLAN_ENTITY = 'sensor.wh_heating_plan'
+PLAN_REPUBLISH = timedelta(hours=1)  # states set over REST vanish when Home Assistant restarts: repost at least hourly
 LEGIONELLA_TEMP_THRESHOLD = 60  # °C that counts as completed protection
 LEGIONELLA_INTERVAL_DAYS = 7
 
@@ -410,6 +417,30 @@ def update_status_entity(ha_api: HomeAssistantApi, status_msg: str,
     _previous_status_state['color'] = status_color
     
     logger.info("Status updated: %s", status_msg)
+
+
+_previous_plan: Dict[str, Any] = {'signature': None, 'at': None}
+
+
+def publish_heating_plan(config: ScheduleConfig, ha_api: HomeAssistantApi, entity_reader: EntityStateReader, state: HeaterState,
+                         prices_today: Dict[datetime, float], prices_tomorrow: Dict[datetime, float], now: datetime) -> None:
+    """Publish the planned heating windows and their expected consumption as `sensor.wh_heating_plan`.
+
+    Other modules (an energy manager forecasting the house load) read this entity instead of guessing when the heat pump
+    runs. Posted when the plan changes and at least hourly, since a state set over REST is gone after a Home Assistant restart."""
+    windows = build_heating_plan(
+        config, {now.date(): prices_today, (now + timedelta(days=1)).date(): prices_tomorrow}, now, get_lowest_price_window,
+        away=entity_reader.is_entity_on(config.away_mode_entity_id),
+        legionella_due=state.needs_legionella_protection(LEGIONELLA_INTERVAL_DAYS),
+        legionella_weekday=DAYS_OF_WEEK.get(config.legionella_day, 5))
+    plan_state_text, attributes = plan_state(windows), plan_attributes(windows, config)
+    signature = json.dumps([plan_state_text, attributes], sort_keys=True)
+    last_at = _previous_plan['at']
+    if signature == _previous_plan['signature'] and last_at is not None and now - last_at < PLAN_REPUBLISH:
+        return
+    ha_api.create_or_update_entity(entity_id=HEATING_PLAN_ENTITY, state=plan_state_text, attributes=attributes, log_success=False)
+    _previous_plan.update(signature=signature, at=now)
+    logger.info("Heating plan published: %s", plan_state_text if windows else "nothing planned")
 
 
 def update_legionella_entity(ha_api: HomeAssistantApi, last_protection: Optional[datetime]) -> None:
@@ -927,6 +958,10 @@ def main():
                         prices_tomorrow=prices_tomorrow,
                         current_price=current_price,
                     )
+                    try:
+                        publish_heating_plan(config, ha_api, entity_reader, state, prices_today, prices_tomorrow, datetime.now())
+                    except Exception as plan_error:  # the plan is informational: it must never stop the heater logic
+                        logger.warning("Could not publish the heating plan: %s", plan_error)
             
         except Exception as e:
             logger.error("Error in evaluation cycle: %s", e, exc_info=True)

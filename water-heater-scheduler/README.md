@@ -106,6 +106,29 @@ When `dynamic_window_mode: true`, the scheduler no longer relies on the current 
 
 This keeps the add-on independent from the Price Helper while still adjusting automatically between “winter nights” and “summer days.” The option defaults to `false` to preserve legacy behavior.
 
+### Heating Plan Entity (for energy planning)
+
+The add-on publishes `sensor.wh_heating_plan` so other Home Assistant modules (for instance an energy manager forecasting the house load) can see when the heat pump is expected to heat and how much electricity that takes, without knowing how this add-on works. The state is the start of the next planned run (local ISO time) or `none`. The attribute `windows` lists every planned run of today and, once its prices are known, tomorrow:
+
+```yaml
+windows:
+  - kind: day            # night, day or legionella
+    start: "2026-10-15T13:00+02:00"
+    end: "2026-10-15T14:00+02:00"
+    energy_kwh: 1.9
+    avg_price: 0.236
+```
+
+A day's run is the cheapest `heating_duration_hours` window of the night window (00-06) or the day window (06-24), whichever is cheaper; on the legionella day it is the `legionella_duration_hours` window in the day window. Nothing is planned in away mode or for a window that has ended. The entity is posted when the plan changes and at least hourly.
+
+The add-on controls a temperature, not a power, so the consumption is a setting:
+
+```yaml
+heating_energy_kwh: 1.9          # kWh of one heating run (measured: 1.7-3.4 kWh, median 1.9)
+night_heating_energy_kwh: 0.0    # 0 = the night window is not planned as a consumer
+legionella_energy_kwh: 2.6       # kWh of the weekly legionella run
+```
+
 ## How It Works
 
 ### Decision Tree

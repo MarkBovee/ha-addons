@@ -2,6 +2,13 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.3.0] - 2026-10-16
+
+### Added
+- **Heating plan entity** `sensor.wh_heating_plan`: the planned heating runs of today and tomorrow (kind, start, end, expected kWh, average price) and the start of the next run as its state, so energy managers can forecast the heat pump's consumption without guessing. A day's run is the cheapest window of the night or day window, the long window on the legionella day; nothing is planned in away mode or for a window that has ended. Posted when the plan changes and at least hourly.
+- Options `heating_energy_kwh` (1.9), `night_heating_energy_kwh` (0.0) and `legionella_energy_kwh` (2.6): the expected electricity per run. The add-on sets a temperature, not a power, so these are measured values (1.7-3.4 kWh per heating run on 7-15 Oct 2026, 2.6 kWh on the legionella Saturday).
+- Tests: `tests/test_heating_plan.py` on the real prices of 2026-10-15.
+
 ## [1.2.13] - 2026-10-16
 
 ### Fixed
