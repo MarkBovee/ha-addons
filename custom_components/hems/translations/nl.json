@@ -96,7 +96,7 @@
   "entity": {
     "sensor": {
       "battery_action": {
-        "name": "Batterij-actie",
+        "name": "Battery action",
         "state": {
           "charge": "Laden",
           "discharge": "Ontladen",
@@ -104,10 +104,10 @@
         }
       },
       "battery_setpoint": {
-        "name": "Batterij-setpoint"
+        "name": "Battery setpoint"
       },
       "expected_saving": {
-        "name": "Verwachte opbrengst"
+        "name": "Expected revenue"
       },
       "status": {
         "name": "Status",
@@ -120,19 +120,19 @@
         }
       },
       "import_price": {
-        "name": "Importprijs"
+        "name": "Import price"
       },
       "export_price": {
-        "name": "Exportprijs"
+        "name": "Export price"
       },
       "pv_forecast_24h": {
-        "name": "PV-verwachting komende 24 uur"
+        "name": "PV forecast next 24 h"
       },
       "plan": {
         "name": "Plan"
       },
       "executor": {
-        "name": "Uitvoerder",
+        "name": "Executor",
         "state": {
           "as_planned": "Volgens plan",
           "no_plan": "Geen plan",
@@ -146,33 +146,33 @@
         }
       },
       "pv_forecast_next_hour": {
-        "name": "PV-verwachting komend uur"
+        "name": "PV forecast next hour"
       },
       "load_forecast_next_hour": {
-        "name": "Huisverbruik-verwachting komend uur"
+        "name": "House load forecast next hour"
       },
       "irradiance_forecast": {
-        "name": "Zoninstraling komend uur"
+        "name": "Solar irradiance forecast next hour"
       },
       "temperature_forecast": {
-        "name": "Temperatuur komend uur"
+        "name": "Temperature forecast next hour"
       },
       "charge_window": {
-        "name": "Laadvenster"
+        "name": "Charge window"
       },
       "discharge_window": {
-        "name": "Ontlaadvenster"
+        "name": "Discharge window"
       },
       "sell_window": {
-        "name": "Volgend verkoopvenster"
+        "name": "Next sell window"
       },
       "water_heater_plan": {
-        "name": "Boilerplan"
+        "name": "Water heater plan"
       }
     },
     "binary_sensor": {
       "tomorrow_prices_available": {
-        "name": "Prijzen van morgen beschikbaar"
+        "name": "Tomorrow prices available"
       }
     }
   },

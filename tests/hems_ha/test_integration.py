@@ -720,3 +720,12 @@ async def test_the_sell_window_follows_a_sale_of_stock_and_the_saving_sensor_is_
     sell = hass.states.get("sensor.hems_sell_window")
     assert sell.state not in ("unknown", "unavailable") and sell.attributes["outside_kwh"] == 0
     assert "revenue" in hass.states.get("sensor.hems_expected_saving").attributes["friendly_name"].lower()
+
+
+def test_entity_names_are_english_in_every_language():
+    """Mark wants the entity names in English whatever the language of Home Assistant (names are fixed when the entity is registered); the Dutch file
+    only translates settings text and state labels."""
+    names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
+                    for key, ent in group.items()} for file in ("strings", "translations/en", "translations/nl")}
+    assert names["translations/nl"] == names["translations/en"] == names["strings"]
+    assert len(names["strings"]) == 18 and names["strings"][("sensor", "charge_window")] == "Charge window"
