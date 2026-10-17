@@ -2,6 +2,11 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.2.13] - 2026-10-16
+
+### Fixed
+- **Heating windows were chosen on UTC hours.** `parse_price_curve` stripped the offset from the UTC `price_curve` timestamps instead of converting them to local time, so the cheapest window was found two hours early in summer time (one hour in winter time): on 15 Oct 2026 the 13:00-14:00 hour (0.236) was the cheapest, the scheduler heated around 11:00 (0.312), and the day's price window mixed 22 hours of today with two of the day before. The curve is now converted to local time. The heating therefore moves to the genuinely cheapest hour; expect the boiler to start later than before.
+
 ## [1.2.11] - 2026-04-24
 
 ### Fixed
