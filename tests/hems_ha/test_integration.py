@@ -685,3 +685,38 @@ async def test_the_settings_form_shows_the_current_values_inside_every_section(r
         shown.update({str(key): (key.description or {}).get("suggested_value", "missing") for key in part.schema.schema})
     assert set(shown) == set(DEFAULT_OPTIONS) and "missing" not in shown.values()
     assert shown["reserve_soc_pct"] == 40.0 and shown["capacity_kwh"] == DEFAULT_OPTIONS["capacity_kwh"]
+
+
+async def test_a_charge_window_the_plan_does_not_have_shows_the_cheapest_price_block_and_says_so(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """A full battery gets no charge in the plan; the charge window sensor then shows the cheapest three-hour block of import prices (not 'unknown')
+    with `planned` False, so nobody reads it as an instruction."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
+    set_states(hass, soc="100")
+    await setup_entry(hass, freezer, aioclient_mock)
+    charge = hass.states.get("sensor.hems_charge_window")
+    curve = hass.states.get("sensor.hems_import_price").attributes["curve"]
+    start = datetime.fromisoformat(charge.state)
+    block = [p["price"] for p in curve if start <= datetime.fromisoformat(p["start"]) < start + timedelta(hours=3)]
+    assert charge.attributes["planned"] is False and len(block) == 12
+    assert charge.attributes["avg_price_eur_kwh"] == pytest.approx(sum(block) / 12, abs=0.0001)
+    assert all(sum(block) <= sum(p["price"] for p in curve[i:i + 12]) + 1e-9 for i in range(len(curve) - 11)), "no cheaper three-hour block exists"
+    assert datetime.fromisoformat(charge.attributes["end"]) - start == timedelta(hours=3)
+
+
+async def test_a_charge_the_plan_makes_is_marked_planned(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """With room in the battery the plan charges and the charge window is the plan's: `planned` True."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    assert hass.states.get("sensor.hems_charge_window").attributes["planned"] is True
+
+
+async def test_the_sell_window_follows_a_sale_of_stock_and_the_saving_sensor_is_named_revenue(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """A full battery sells stock; the sale is inside a window (no kWh outside), the sell window sensor has a start, and the sensor that holds the gross
+    revenue of the planned sale is called revenue, not saving."""
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
+    set_states(hass, soc="95")
+    await setup_entry(hass, freezer, aioclient_mock)
+    sell = hass.states.get("sensor.hems_sell_window")
+    assert sell.state not in ("unknown", "unavailable") and sell.attributes["outside_kwh"] == 0
+    assert "revenue" in hass.states.get("sensor.hems_expected_saving").attributes["friendly_name"].lower()

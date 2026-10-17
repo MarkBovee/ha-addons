@@ -6,6 +6,9 @@ the same prices and the finished plan from the outside, for people and for monit
   detect   the stretches of the horizon where selling beats the cheapest charge it can lean on (before it: a fresh
            charge, also one of the last day that lies before the horizon; after it: replacing what is sold), with the
            thresholds and the headroom to them;
+  stock    a third basis for energy that is in the battery already: selling it beats the value the plan itself gives to
+           keeping it (its marginal 'keep' value). It adds the windows of a sale whose energy cost nothing more to hold
+           (PV or an earlier night charge), which the two charge bases cannot see;
   analyse  per window what the plan does (sold, kept, nothing left to sell), which charges feed it, and which sales
            fall outside every window.
 
@@ -13,7 +16,7 @@ It never changes a decision. A window is not a candidate filter: the same peak i
 and none without it, so only the plan (which knows the SoC) can say whether it is sold.
 """
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Mapping, Sequence
 
@@ -33,9 +36,9 @@ MAX_GAP_QUARTERS = int(MAX_PERIOD_GAP / QUARTER)
 
 @dataclass(frozen=True)
 class Basis:
-    """What a window can lean on: the cheapest charge before it (fresh) or after it (replacement)."""
-    at: datetime                     # the quarter of that charge
-    import_price: float
+    """What a window can lean on: the cheapest charge before it (fresh), after it (replacement), or the plan's value of keeping the stock."""
+    at: datetime                     # the quarter of that charge (for the stock basis: the quarter whose keep value it is)
+    import_price: float              # for the stock basis: the keep value per stored kWh, not an import price
     threshold: float                 # export price the window needs on this basis: import / round trip + margin (+ carrying cost)
     headroom: float                  # best export price of the window minus the threshold (negative: does not pay on this basis)
 
@@ -52,12 +55,14 @@ class Window:
     fresh: Basis | None
     replace: Basis | None
     reference_at: datetime           # the quarter with the most headroom: the thresholds belong to it
+    stock: Basis | None = None       # selling what is in the battery already, against the plan's own value of keeping it
 
     @property
     def viable(self) -> str:
-        """'both', 'fresh' (a charge before it pays), 'replace' (only buying the energy back later pays) or 'none'."""
+        """'both', 'fresh' (a charge before it pays), 'replace' (only buying the energy back later pays), 'stock' (only the energy already in the battery pays) or 'none'."""
         fresh_ok, replace_ok = bool(self.fresh and self.fresh.headroom >= 0), bool(self.replace and self.replace.headroom >= 0)
-        return "both" if fresh_ok and replace_ok else "fresh" if fresh_ok else "replace" if replace_ok else "none"
+        stock_ok = bool(self.stock and self.stock.headroom >= 0)
+        return "both" if fresh_ok and replace_ok else "fresh" if fresh_ok else "replace" if replace_ok else "stock" if stock_ok else "none"
 
 
 @dataclass(frozen=True)
@@ -203,12 +208,53 @@ def _usable_room(window: Window, starts: Sequence[datetime], imp: Sequence[float
     return round(exp_at_reference - min(candidates), 4) if candidates else None
 
 
+def _stock_basis(starts: Sequence[datetime], slots: Sequence[Slot], result: Plan, soc0_kwh: float, cfg: BatteryConfig) -> list[Basis | None]:
+    """Per quarter the stock basis, or None where the battery holds nothing above the floor to sell.
+
+    The threshold is the export price at which selling a stored kWh beats the plan's own value of keeping it (`stored_value`, the marginal
+    value from the DP): keep / round trip share + margin. It is the planner's own comparison seen from the price side, so it explains the
+    sale of energy that cost nothing to hold (PV, an earlier night charge) which the charge bases cannot."""
+    eff = cfg.round_trip_eff ** 0.5
+    out: list[Basis | None] = []
+    for t, planned in enumerate(result.slots):
+        before = result.slots[t - 1].soc_kwh if t else soc0_kwh
+        keep = planned.stored_value
+        if keep is None or before - floor_fraction(slots[t], cfg) * cfg.capacity_kwh < STOCK_TOLERANCE_KWH:
+            out.append(None)
+            continue
+        threshold = keep / eff + cfg.min_profit_margin
+        out.append(Basis(starts[t], round(keep, 4), round(threshold, 4), round(slots[t].export_price - threshold, 4)))
+    return out
+
+
+def _with_stock(windows: list[Window], starts: Sequence[datetime], exp: Sequence[float], stock: Sequence[Basis | None]) -> list[Window]:
+    """The windows with the stock basis attached, plus a window for every stretch where only the stock pays.
+
+    A price window gets the stock basis of its reference quarter (information only). Quarters that pay on the stock basis and lie in no
+    price window are grouped with the same gap rule into windows of their own, so a sale of stock is never 'outside every window'."""
+    covered = {t for t, start in enumerate(starts) for w in windows if w.start <= start < w.end}
+    attached = [replace(w, stock=stock[next(t for t, start in enumerate(starts) if start == w.reference_at)]) for w in windows]
+    paying = [t for t, basis in enumerate(stock) if basis and basis.headroom >= 0 and t not in covered]
+    groups: list[list[int]] = []
+    for t in paying:
+        if groups and t - groups[-1][-1] <= MAX_GAP_QUARTERS + 1:
+            groups[-1].append(t)
+        else:
+            groups.append([t])
+    for group in groups:
+        reference = max(group, key=lambda t: stock[t].headroom)
+        peak = max(group, key=lambda t: exp[t])
+        attached.append(Window(starts[group[0]], starts[group[-1]] + QUARTER, len(group), round(exp[peak], 4), starts[peak],
+                               round(sum(exp[t] for t in group) / len(group), 4), None, None, starts[reference], stock[reference]))
+    return sorted(attached, key=lambda w: w.start)
+
+
 def analyse(starts: Sequence[datetime], slots: Sequence[Slot], result: Plan, soc0_kwh: float, cfg: BatteryConfig,
             past_imp: Sequence[float] = ()) -> WindowAnalysis:
     """Detect the windows of the horizon and say what the plan does with each: sold, from which energy, and why not when unsold."""
     imp, exp = [s.import_price for s in slots], [s.export_price for s in slots]
     past = list(past_imp)[-MAX_LOOKBACK:]
-    windows = detect(starts, imp, exp, cfg, past)
+    windows = _with_stock(detect(starts, imp, exp, cfg, past), starts, exp, _stock_basis(starts, slots, result, soc0_kwh, cfg))
     where = _window_index(starts, windows)
     eff = cfg.round_trip_eff ** 0.5
     floor_kwh = floor_fraction(slots[0], cfg) * cfg.capacity_kwh
@@ -289,6 +335,7 @@ def record(report: WindowReport, tz: tzinfo = timezone.utc) -> dict:
     return {"from": iso(w.start), "to": iso(w.end), "quarters": w.quarters, "peak": w.peak_price, "peak_at": iso(w.peak_at), "avg": w.avg_price,
             "viable": w.viable, "need_fresh": w.fresh and w.fresh.threshold, "room_fresh": w.fresh and w.fresh.headroom, "charge_at": w.fresh and iso(w.fresh.at),
             "need_replace": w.replace and w.replace.threshold, "room_replace": w.replace and w.replace.headroom, "refill_at": w.replace and iso(w.replace.at),
+            "need_stock": w.stock and w.stock.threshold, "room_stock": w.stock and w.stock.headroom, "keep_value": w.stock and w.stock.import_price,
             "room_usable": report.usable_room, "status": report.status, "sold_kwh": report.sold_kwh, "sold_from": iso(report.sold_from), "sold_to": iso(report.sold_to),
             "from_stock_kwh": report.from_stock_kwh, "soc_before_kwh": report.soc_before_kwh,
             "charges": [{"from": iso(c.start), "to": iso(c.end), "kwh": c.kwh, "avg_import": c.avg_import} for c in report.charges]}

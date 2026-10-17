@@ -107,7 +107,7 @@
         "name": "Batterij-setpoint"
       },
       "expected_saving": {
-        "name": "Verwachte besparing"
+        "name": "Verwachte opbrengst"
       },
       "status": {
         "name": "Status",

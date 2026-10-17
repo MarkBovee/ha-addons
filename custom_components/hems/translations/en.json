@@ -107,7 +107,7 @@
         "name": "Battery setpoint"
       },
       "expected_saving": {
-        "name": "Expected saving"
+        "name": "Expected revenue"
       },
       "status": {
         "name": "Status",

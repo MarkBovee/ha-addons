@@ -4,7 +4,8 @@ from test_rolling import recorded_day
 
 from hems.battery import BatteryConfig
 from hems.forecast import LOCAL_TZ
-from hems.outlook import first_window, forecast_series, hour_mean, hour_total, price_curve, window_total
+from hems.outlook import cheapest_block, first_window, forecast_series, hour_mean, hour_total, price_curve, window_total
+from hems.prices import PriceSeries
 from hems.rolling import HorizonInputs, plan_next
 
 START = datetime(2026, 10, 14, 8, 0, tzinfo=timezone.utc)          # 10:00 local
@@ -102,3 +103,21 @@ def test_a_rest_of_more_than_an_hour_splits_a_period_so_the_window_is_not_a_whol
     segments = [segment("charge", 0, 8, 5.0, 0.20, (30, 60)), segment("idle", 8, 20), segment("charge", 20, 24, 2.0, 0.25, (60, 70))]
     first = first_window(segments, "charge")
     assert first["end"] == START + 8 * QUARTER and first["kwh"] == 5.0
+
+
+def import_series(*prices: float, start: datetime = START) -> PriceSeries:
+    """Import prices (export the same) per quarter from `start`."""
+    return PriceSeries(tuple(start + i * QUARTER for i in range(len(prices))), tuple(prices), tuple(prices))
+
+
+def test_the_cheapest_block_is_the_cheapest_run_of_consecutive_quarters_from_now_on():
+    """Three quarters of 0.20 sit between dear ones; the block of 3 starting there wins, an earlier valley before `start` does not count, and the average is reported."""
+    series = import_series(0.05, 0.05, 0.05, 0.40, 0.30, 0.20, 0.20, 0.20, 0.35, 0.40)
+    block = cheapest_block(series, START + 3 * QUARTER, quarters=3)
+    assert (block["begin"], block["end"], block["avg_price"]) == (START + 5 * QUARTER, START + 8 * QUARTER, 0.20)
+
+
+def test_equal_blocks_take_the_earliest_and_a_short_horizon_has_no_block():
+    """A flat curve starts at once; fewer known quarters than the block needs is None, never a shorter block that reads cheaper."""
+    assert cheapest_block(import_series(0.3, 0.3, 0.3, 0.3), START, quarters=2)["begin"] == START
+    assert cheapest_block(import_series(0.3, 0.3), START, quarters=3) is None

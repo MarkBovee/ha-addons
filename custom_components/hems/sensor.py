@@ -13,7 +13,7 @@ from homeassistant.util import dt as dt_util
 from . import HemsConfigEntry
 from .coordinator import HemsCoordinator, HemsSnapshot
 from .engine import executor
-from .engine.outlook import first_window, forecast_series, hour_mean, hour_total, price_curve, window_total
+from .engine.outlook import cheapest_block, first_window, forecast_series, hour_mean, hour_total, price_curve, window_total
 from .engine.windows import record
 from .entity import HemsEntity
 
@@ -129,19 +129,32 @@ def _price_attrs(snap: HemsSnapshot, field: str) -> dict[str, Any]:
     return {"curve": price_curve(prices, field, start, dt_util.get_default_time_zone())} if start and prices else {}
 
 
+def _cheapest_charge(snap: HemsSnapshot) -> dict | None:
+    """The cheapest three-hour block of import prices from this quarter on, or None without prices or a quarter to start from."""
+    start, prices = _start(snap), snap.output.prices
+    return cheapest_block(prices, start) if start and prices else None
+
+
 def _window_start(snap: HemsSnapshot, action: str):
-    """Start of the first planned run of `action` (it may be going on now), or None when the plan has none."""
+    """Start of the first planned run of `action` (it may be going on now); for a charge the plan does not plan, the start of the cheapest price block."""
     window = first_window(snap.output.trace.get("segments") or [], action)
-    return window["begin"] if window else None
+    if window:
+        return window["begin"]
+    block = _cheapest_charge(snap) if action == "charge" else None
+    return block["begin"] if block else None
 
 
 def _window_attrs(snap: HemsSnapshot, action: str) -> dict[str, Any]:
-    """The first window of `action` in numbers: end, energy, power, price, SoC at both ends, and the PV and house load expected inside it."""
+    """The first window of `action` in numbers: end, energy, power, price, SoC at both ends, and the PV and house load expected inside it.
+
+    `planned` says whether the plan does it; a charge window the plan does not have shows the cheapest price block instead (`planned` False)."""
     window = first_window(snap.output.trace.get("segments") or [], action)
     if not window:
-        return {}
+        block = _cheapest_charge(snap) if action == "charge" else None
+        return {"planned": False, "end": block["end"].astimezone(dt_util.get_default_time_zone()).isoformat(), "avg_price_eur_kwh": block["avg_price"],
+                "note": "The plan charges nothing now; this is the cheapest three-hour block of import prices."} if block else {"planned": False}
     begin, end = window["begin"], window["end"]
-    return {"end": end.astimezone(dt_util.get_default_time_zone()).isoformat(), "kwh": window["kwh"], "power_w": window["avg_w"],
+    return {"planned": True, "end": end.astimezone(dt_util.get_default_time_zone()).isoformat(), "kwh": window["kwh"], "power_w": window["avg_w"],
             "avg_price_eur_kwh": window["avg_price"], "soc_from_pct": window["soc_from_pct"], "soc_to_pct": window["soc_to_pct"],
             "pv_kwh": window_total(snap.output.pv_kwh, begin, end), "load_kwh": window_total(snap.output.load_kwh, begin, end)}
 

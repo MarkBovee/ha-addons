@@ -135,13 +135,14 @@ def test_over_the_48_hours_the_planner_runs_on_it_never_sells_outside_a_window(d
     assert analyse(list(prices.starts), slots, result, soc * CFG.capacity_kwh, CFG).outside_kwh == 0
 
 
-def test_the_end_of_a_one_day_horizon_sells_stock_outside_any_window():
+def test_the_end_of_a_one_day_horizon_dumps_stock_inside_a_stock_window():
     """Known model edge: stock left at the end of the horizon is valued at the cheapest import price, so a short horizon dumps it.
-    HEMS plans 48 hours ahead, so this shows up at most in the last quarters; the monitor reports it as outside_kwh."""
+    That sale is a window on the stock basis (selling beats the plan's own value of keeping), so it is no longer reported as outside."""
     prices = recorded_day("2026-10-09")
     slots = [Slot(i, e, 0.1, 0.0) for i, e in zip(prices.import_eur_kwh, prices.export_eur_kwh)]
     result = plan(slots, 0.83 * CFG.capacity_kwh, CFG)
-    assert analyse(list(prices.starts), slots, result, 0.83 * CFG.capacity_kwh, CFG).outside_kwh > 4
+    analysis = analyse(list(prices.starts), slots, result, 0.83 * CFG.capacity_kwh, CFG)
+    assert analysis.outside_kwh == 0 and sum(r.sold_kwh for r in analysis.reports if r.window.viable == "stock") > 4
 
 
 def test_a_window_record_is_plain_json_with_times_prices_thresholds_and_the_charges_that_feed_it():
@@ -198,12 +199,13 @@ def earlier_prices(starts: list[datetime]) -> list[float]:
 
 
 def test_the_evening_sale_of_stock_bought_at_noon_is_still_a_window_when_noon_is_behind_the_horizon():
-    """15 Oct 16:45 (logged): 98% in the battery, charged at 14:00 for 0.23. Without the earlier prices that charge is out of sight and 13.6 kWh of
-    the evening sale falls outside every window; with them the window is found and the sale is 'planned'."""
+    """15 Oct 16:45 (logged): 98% in the battery, charged at 14:00 for 0.23. Without the earlier prices that charge is out of sight, and the sale
+    (about 10 kWh in its own window) is a window only on the stock basis; with them the window is found on the fresh charge and the sale is 'planned'."""
     starts, slots, soc, result = logged_cycle("15_1645")
     blind = analyse(starts, slots, result, soc, CFG)
     seen = analyse(starts, slots, result, soc, CFG, earlier_prices(starts))
-    assert blind.outside_kwh > 10
+    assert blind.outside_kwh == 0, "without the earlier prices the sale still has a window: the stock basis"
+    assert sum(r.sold_kwh for r in blind.reports if r.window.viable == "stock") > 9.5
     assert seen.outside_kwh == 0
     evening = next(r for r in seen.reports if hhmm(r.window.start) == "17:45" or hhmm(r.window.peak_at) == "18:30")
     assert evening.status == PLANNED and evening.window.fresh.threshold < 0.42 and hhmm(evening.window.fresh.at) in ("14:00", "14:15", "14:30", "13:45")
@@ -235,3 +237,42 @@ def test_a_window_that_pays_on_a_charge_that_is_still_there_and_gets_nothing_is_
     slots = [Slot(i, e, 0.0, 0.0) for i, e in zip(imp, exp)]
     report = analyse(starts, slots, manual_plan({}, soc=7.5), 7.5, CFG).reports[0]
     assert report.status == "unsold" and report.usable_room > 0.05 and report.window.viable in ("fresh", "both")
+
+
+def cycle_with_past(name: str, margin: float):
+    """A logged cycle with the earlier prices the coordinator knew (`past_imp`) and the margin in force then: starts, slots, SoC, past, plan, config."""
+    data = json.loads((FIXTURES / f"cycle_2026_10_{name}.json").read_text())
+    cfg = BatteryConfig(min_profit_margin=margin)
+    start = datetime.fromisoformat(data["start"])
+    starts = [start + k * QUARTER for k in range(len(data["imp"]))]
+    slots = [Slot(i, e, l, v) for i, e, l, v in zip(data["imp"], data["exp"], data["load"], data["pv"])]
+    return starts, slots, data["soc_kwh"], data["past_imp"], plan(slots, data["soc_kwh"], cfg), cfg
+
+
+def test_the_sale_of_17_oct_06_30_from_a_battery_the_night_charged_is_a_stock_window():
+    """17 Oct 06:30 (logged, margin 0.12): 50.6 % in the battery after a night charge, the plan sells 4.75 kWh at 0.431 in the evening. The price
+    bases need 0.452 (fresh) and 0.499 (replace), so the monitor saw 4.75 kWh outside every window. On the stock basis the sale beats the plan's own
+    keep value and is a window of its own; nothing is outside."""
+    starts, slots, soc, past, result, cfg = cycle_with_past("17_0630", 0.12)
+    analysis = analyse(starts, slots, result, soc, cfg, past)
+    assert analysis.outside_kwh == 0
+    window, = analysis.reports
+    assert window.window.viable == "stock" and window.window.fresh is None and window.window.replace is None
+    assert window.status == PLANNED and window.sold_kwh == pytest.approx(4.75, abs=0.05) and window.from_stock_kwh == pytest.approx(4.75, abs=0.05)
+    assert window.window.stock.headroom >= 0 and window.window.stock.threshold < window.window.peak_price
+
+
+def test_without_stock_there_is_no_stock_window():
+    """A battery on the floor has nothing to sell, so the stock basis offers no window even where the plan's keep value is low."""
+    starts, slots, soc, past, result, cfg = cycle_with_past("17_0630", 0.12)
+    empty = analyse(starts, slots, plan(slots, 0.3 * CFG.capacity_kwh, cfg), 0.3 * CFG.capacity_kwh, cfg, past)
+    assert all(r.window.viable != "stock" for r in empty.reports)
+
+
+def test_a_stock_window_record_carries_its_basis_and_leaves_the_charge_fields_empty():
+    """The trace record of a stock-only window: the keep value, the export price it needs and the headroom; no charge or buy-back to name."""
+    starts, slots, soc, past, result, cfg = cycle_with_past("17_0630", 0.12)
+    rec = record(analyse(starts, slots, result, soc, cfg, past).reports[0])
+    json.dumps(rec)
+    assert rec["viable"] == "stock" and rec["need_fresh"] is None and rec["need_replace"] is None
+    assert rec["room_stock"] >= 0 and rec["need_stock"] > rec["keep_value"] and rec["from_stock_kwh"] > 4

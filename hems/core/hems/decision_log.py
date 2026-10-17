@@ -289,6 +289,8 @@ def window_tree(trace: Mapping, tz: tzinfo) -> list[str]:
             needs.append(f"after a charge at {at(w['charge_at'])} needs {w['need_fresh']:.3f} ({w['room_fresh']:+.3f})")
         if w["need_replace"] is not None:
             needs.append(f"bought back at {at(w['refill_at'])} needs {w['need_replace']:.3f} ({w['room_replace']:+.3f})")
+        if w.get("need_stock") is not None and w["need_fresh"] is None and w["need_replace"] is None:
+            needs.append(f"energy in the battery, kept at {w['keep_value']:.3f} per stored kWh, needs {w['need_stock']:.3f} ({w['room_stock']:+.3f})")
         lines.append(f"  {at(w['from'])} - {at(w['to'])} {w['status']:<14} peak {w['peak']:.3f} at {at(w['peak_at'])}; {sold}; {'; '.join(needs)}")
     if trace.get("windows_outside_kwh"):
         lines.append(f"  {trace['windows_outside_kwh']:.1f} kWh sold outside every window")

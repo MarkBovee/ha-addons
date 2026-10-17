@@ -95,6 +95,23 @@ def periods(segments: Sequence[Mapping]) -> list[dict]:
     return found
 
 
+CHEAP_BLOCK_QUARTERS = 12              # the block shown when the plan does not charge: three hours
+
+
+def cheapest_block(prices: PriceSeries, start: datetime, quarters: int = CHEAP_BLOCK_QUARTERS) -> dict | None:
+    """The cheapest run of `quarters` consecutive import-price quarters from `start` on, as {begin, end, avg_price}; None when the prices do not cover one.
+
+    It answers 'when is charging cheapest?' on a day the plan itself does not charge (the battery is full enough, PV covers it): the window of the
+    prices, not of the plan, so the sensor that shows it says so."""
+    known = {t: p for t, p in zip(prices.starts, prices.import_eur_kwh) if t >= start}
+    firsts = [t for t in sorted(known) if all(t + k * QUARTER in known for k in range(quarters))]
+    if not firsts:
+        return None
+    mean = lambda t: sum(known[t + k * QUARTER] for k in range(quarters)) / quarters
+    begin = min(firsts, key=lambda t: (mean(t), t))
+    return {"begin": begin, "end": begin + quarters * QUARTER, "avg_price": round(mean(begin), 4)}
+
+
 def first_window(segments: Sequence[Mapping], action: str) -> dict | None:
     """The first period of `action` ('charge' or 'discharge'); None when the plan has none.
 
