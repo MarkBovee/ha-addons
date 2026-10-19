@@ -10,7 +10,7 @@ Rules for creating and maintaining documentation in this repository.
 
 ## Core Principles
 
-1. **Single Source of Truth** - One comprehensive README per project/module + canonical specs in `openspec/specs/`
+1. **Single Source of Truth** - One comprehensive README per project/module
 2. **Always Up-to-Date** - Update documentation with every related code change
 3. **No Temporary Files** - Never create report, summary, or status files (see below)
 
@@ -22,8 +22,6 @@ Rules for creating and maintaining documentation in this repository.
 |----------|---------|---------|
 | `README.md` (root) | Project overview, installation, add-on list, development guide | Add-on descriptions, quick start |
 | `<addon>/README.md` | Add-on-specific docs, config options, usage | Energy Prices templates, Battery Manager thresholds |
-| `openspec/specs/` | Canonical specifications per capability | `specs/energy-prices/spec.md` |
-| `openspec/changes/` | Change proposals (temporary until archived) | `changes/add-solar-bonus/proposal.md` |
 | `docs/` | Deep-dive guides only (>100 lines, complex topics) | Architecture details, integration guides |
 
 ---
@@ -41,26 +39,9 @@ Rules for creating and maintaining documentation in this repository.
 | Information | Correct Location |
 |-------------|-----------------|
 | What the project does | `README.md` |
-| Current requirements | `openspec/specs/[capability]/spec.md` |
-| Why we're changing something | `openspec/changes/[id]/proposal.md` |
-| Task progress | Checkmarks in `tasks.md` (`[x]` done, `[-]` in progress) |
+| Current behavior and requirements | `README.md` and `CHANGELOG.md` of the add-on |
+| Why we're changing something | Git commit messages and `CHANGELOG.md` |
 | Historical information | Git commit messages |
-
----
-
-## OpenSpec Change Folder Structure
-
-Strict. Only these files are allowed:
-
-```
-openspec/changes/[change-id]/
-+-- proposal.md       # REQUIRED - Why, what, impact
-+-- tasks.md          # REQUIRED - Implementation checklist
-+-- design.md         # OPTIONAL - Complex technical decisions only
-+-- specs/            # REQUIRED - Delta specifications
-    +-- [capability]/
-        +-- spec.md   # ADDED/MODIFIED/REMOVED requirements
-```
 
 ---
 
@@ -87,21 +68,3 @@ Root README should include:
 - **Renamed/removed entity:** Update README entity list
 - **New add-on:** Update root README add-on list and `repository.json`
 - **Shared module change:** Note impact in commit message
-
----
-
-## Spec Writing Format
-
-Use SHALL/MUST language with testable scenarios:
-
-```markdown
-### Requirement: Feature Name
-The system SHALL [behavior statement].
-
-#### Scenario: Success case
-- **WHEN** [trigger]
-- **THEN** [expected result]
-- **AND** [additional validation]
-```
-
-For spec deltas in change proposals, use `## ADDED`, `## MODIFIED`, or `## REMOVED Requirements` headers. Check `openspec/specs/` first to determine which header to use.

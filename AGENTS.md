@@ -1,25 +1,3 @@
-<!-- OPENSPEC:START -->
-
-# OpenSpec Instructions
-
-These instructions are for AI assistants working in this project.
-
-Always open `@/openspec/AGENTS.md` when the request:
-
-* Mentions planning or proposals (words like proposal, spec, change, plan)
-* Introduces new capabilities, breaking changes, architecture shifts, or big performance/security work
-* Sounds ambiguous and you need the authoritative spec before coding
-
-Use `@/openspec/AGENTS.md` to learn:
-
-* How to create and apply change proposals
-* Spec format and conventions
-* Project structure and guidelines
-
-Keep this managed block so `openspec update` can refresh the instructions.
-
-<!-- OPENSPEC:END -->
-
 # AI Agent Guidelines
 
 High-level conventions for AI agents working in this repository. For detailed rules, see `.github/instructions/`.
@@ -46,8 +24,6 @@ A collection of **Home Assistant Supervisor add-ons** for home energy management
 | Directory           | Purpose                                                                |
 | ------------------- | ---------------------------------------------------------------------- |
 | `shared/`           | Common Python modules (source of truth - never edit `<addon>/shared/`) |
-| `openspec/specs/`   | Canonical specifications per capability                                |
-| `openspec/changes/` | Active change proposals                                                |
 | `docs/`             | Long-form design documents and plans                                   |
 
 ---
@@ -413,33 +389,9 @@ When professionalizing an add-on for HEMS:
   * `fix(scope): description`
   * `refactor(scope): description`
   * `docs(scope): description`
-* New capabilities require an OpenSpec proposal.
-* Breaking changes require explicit OpenSpec documentation.
+* Breaking changes are documented in the add-on's `CHANGELOG.md` and `README.md`.
 * Keep changes focused.
 * Do not mix unrelated refactoring into feature work.
-
----
-
-# OpenSpec
-
-Use OpenSpec for:
-
-* New capabilities
-* Architecture changes
-* Breaking changes
-* Significant behavioral changes
-* Significant performance/security work
-
-Before implementing a qualifying change:
-
-1. Read `openspec/AGENTS.md`.
-2. Inspect the relevant existing specifications.
-3. Create or update the appropriate proposal.
-4. Define requirements and scenarios.
-5. Implement only after the proposal is understood and approved according to repository workflow.
-6. Update the canonical specification when the capability is completed.
-
-Do not invent requirements that conflict with existing specifications.
 
 ---
 
@@ -482,7 +434,6 @@ Detailed repository rules are maintained in `.github/instructions/`:
 * `agent.instructions.md` — Workflow steps (branch, plan, implement, verify, document, commit)
 * `coding.instructions.md` — Tech stack, project structure, Python patterns, Docker conventions
 * `documentation.instructions.md` — Documentation hierarchy, prohibited files, README standards
-* `openspec.instructions.md` — Change proposals, spec deltas, CLI commands
 
 When a more specific instruction file applies, follow it in addition to this document.
 
