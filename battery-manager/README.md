@@ -53,7 +53,7 @@ Because of that, provider switch in `Battery API` should not require dashboard o
 - Future sell windows are pruned when the SOC projected at their start (current SOC + planned grid charge + forecast PV share − earlier sells) cannot support them
 - Top-X sell hours are picked per price peak: from the quarters after the day's main charge window (the evening) and, with their own budget, from the profitable quarters before it (the morning) (`heuristics.discharge_after_charge_only`); `top_x_discharge_hours` applies to each peak, not to the whole day
 - The day's charge is sized to refill what the morning sale takes out, so the evening keeps its full budget; the sell buffer is the SOC a sale needs at its start (`soc.sell_buffer_min_soc`): a battery below it is charged back up to exactly that value before the sale, at the cheapest quarters before it and at any price; above it nothing is bought for the sale
-- Grid charging outside the cheapest top-X slots (spread-only windows) must earn `sell × round_trip_efficiency − charge ≥ grid_charge_min_margin`
+- Grid charging must earn `sell × round_trip_efficiency − charge ≥ grid_charge_min_margin` on the sell windows that follow it (before the next charge window), for the cheapest top-X slots as well as for spread-only windows. A top-X window with no sell window after it is kept; a spread-only window like that is dropped
 - The power of a charge window is held for an hour unless SoC or the solar forecast moves noticeably; the schedule is only re-sent to battery-api when its periods change
 
 ### Live Adaptive Control
@@ -117,7 +117,7 @@ Defaults live in `battery-manager/config.yaml`.
 | `heuristics.charge_spread_enabled` | Spread charging over almost-equal cheap hours instead of always charging flat-out |
 | `heuristics.charge_spread_max_price_delta` | Extra cheap-hour tolerance band in EUR/kWh for spread charging |
 | `heuristics.min_profit_threshold` | Margin in EUR/kWh a sell price must exceed the cost basis by |
-| `heuristics.grid_charge_min_margin` | Minimum net margin for grid charging outside the top-X slots (default: `min_profit_threshold`) |
+| `heuristics.grid_charge_min_margin` | Minimum net margin for grid charging against the sale it is meant for (default: `min_profit_threshold`) |
 | `heuristics.round_trip_efficiency` | Efficiency applied to the sell price in the margin check (default 0.90) |
 | `heuristics.margin_basis` | Cost basis for the profit margin: `day_min_import` (default) or `solar_export` (lowest export price in the PV charge window) |
 | `heuristics.discharge_after_charge_only` | Pick top-X sell hours per peak: after the main charge window, and separately from the profitable quarters before it (default true); false ranks the whole day with one budget |
