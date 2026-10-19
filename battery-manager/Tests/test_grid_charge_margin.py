@@ -103,6 +103,36 @@ def test_gate_applies_to_top_x_windows_too():
     assert records[0]["margin"] == pytest.approx(0.056, abs=1e-3)
 
 
+def test_gate_judges_a_block_of_split_windows_against_the_sale_behind_it():
+    """2026-10-19 20:11: 20:45, 21:15 and 22:15 are one block for the 0.443 sale; the first two kept hiding behind the next charge window."""
+    config = make_config(**{"heuristics.min_profit_threshold": 0.12})
+
+    def window(offset_h, hours, price):
+        start = T0 + timedelta(hours=offset_h)
+        return {"start": start, "end": start + timedelta(hours=hours), "avg_price": price, "slots": [{"start": start}]}
+
+    block = [window(0, 0.25, 0.340), window(0.5, 0.75, 0.346), window(1.5, 1.75, 0.343)]
+    next_day = window(14, 4, 0.268)
+    exact = {w["start"] for w in block + [next_day]}
+
+    kept, records = _gate(config, block + [next_day], [_sell(10, 0.443, 120)], exact=exact)
+
+    assert kept == [next_day]
+    assert [r["allowed"] for r in records] == [False, False, False, True] or len(records) == 4
+    assert sorted(r["start"] for r in records) == [r["start"] for r in records]  # chronological
+
+
+def test_gate_keeps_the_block_when_the_sale_behind_it_pays():
+    config = make_config(**{"heuristics.min_profit_threshold": 0.12})
+    first = {"start": T0, "end": T0 + timedelta(minutes=15), "avg_price": 0.30, "slots": [{"start": T0}]}
+    second_start = T0 + timedelta(minutes=30)
+    second = {"start": second_start, "end": second_start + timedelta(hours=1), "avg_price": 0.30, "slots": [{"start": second_start}]}
+
+    kept, _ = _gate(config, [first, second], [_sell(10, 0.55, 120)], exact={T0, second_start})
+
+    assert kept == [first, second]
+
+
 def test_gate_keeps_a_top_x_window_that_earns_the_margin():
     config = make_config(**{"heuristics.min_profit_threshold": 0.12})
     tonight = {"start": T0, "end": T0 + timedelta(hours=2), "avg_price": 0.30, "slots": [{"start": T0}]}
