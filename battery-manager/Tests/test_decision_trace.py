@@ -45,7 +45,10 @@ def test_dropped_and_truncated_windows_carry_their_reason(monkeypatch, amsterdam
     trace_path = tmp_path / "trace.jsonl"
     monkeypatch.setenv("DECISION_TRACE_PATH", str(trace_path))
 
-    replay(monkeypatch, "17:00", 80, 0.0)  # 13.75 kWh above the floor < 16 kWh needed
+    # The midday top-X charge (0.300 for a 0.413 sale) would fail the 0.10 margin and drop out of the plan;
+    # a lower margin keeps the scenario about the truncation: 13.75 kWh above the floor < 16 kWh needed.
+    config = make_config(**{"heuristics.grid_charge_min_margin": 0.05})
+    replay(monkeypatch, "17:00", 80, 0.0, config=config)
 
     record = json.loads(trace_path.read_text().splitlines()[0])
     truncated = [w for w in record["discharge_windows"] if w["decision"] == "truncated"]

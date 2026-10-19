@@ -1,4 +1,4 @@
-"""Margin checks for grid charging that is not part of the cheapest top-X slots."""
+"""Margin checks for grid charging: a charge must earn its round-trip loss and a minimum margin."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def evaluate_grid_charge(
     efficiency: float,
     min_margin: float,
 ) -> Dict[str, Any]:
-    """Decide whether a non-top-X grid charge earns the required margin.
+    """Decide whether a grid charge earns the required margin.
 
     The result carries everything the decision trace needs: ``allowed``,
     ``reason``, ``expected_sell_price`` and ``margin``.

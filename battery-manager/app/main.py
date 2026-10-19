@@ -1914,12 +1914,17 @@ def _apply_grid_charge_margin_gate(
     now: datetime,
     records: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Drop charge windows outside the cheapest top-X slots that earn too little margin.
+    """Drop grid charge windows that earn too little margin on the sale they are meant for.
 
-    A window made only of spread/other slots is kept only when
+    A window is kept only when
     ``sell * round_trip_efficiency - charge_price >= grid_charge_min_margin`` for
-    the sell windows following it. Windows with a strict top-X slot and
-    negative-price windows are never gated.
+    the sell windows following it, before the next charge window. That holds for
+    top-X windows too: the cheapest hours left in the evening are not worth buying
+    for a sale the spread does not pay for (2026-10-19: 0.343 tonight for 0.443
+    tomorrow morning is a margin of 0.056 against 0.12). A top-X window with no sell
+    window after it is kept (nothing to measure it against; adaptive discharge and
+    the house load use the energy), a spread-only window like that is dropped.
+    Negative-price windows and windows that already ended are never gated.
     """
 
     heur = config["heuristics"]
@@ -1930,9 +1935,10 @@ def _apply_grid_charge_margin_gate(
     kept: List[Dict[str, Any]] = []
     for window in upcoming.get("charge", []):
         price = float(window.get("avg_price", 0.0))
-        if price < 0 or window["end"] <= now or window_has_exact_slot(window, exact_start_dts):
+        if price < 0 or window["end"] <= now:
             kept.append(window)
             continue
+        is_top_x = window_has_exact_slot(window, exact_start_dts)
         verdict = evaluate_grid_charge(
             charge_price=price,
             charge_end=window["end"],
@@ -1941,8 +1947,12 @@ def _apply_grid_charge_margin_gate(
             efficiency=efficiency,
             min_margin=min_margin,
         )
+        if is_top_x and verdict["expected_sell_price"] is None:
+            # Nothing to measure a top-X charge against: keep it, as before the gate covered top-X slots.
+            verdict = {**verdict, "allowed": True, "reason": "top-X slot, no sell window follows"}
         records.append({
             "kind": "charge_window",
+            "top_x": is_top_x,
             "start": window["start"].astimezone().isoformat(),
             "end": window["end"].astimezone().isoformat(),
             "charge_price": round(price, 4),
