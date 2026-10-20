@@ -2,7 +2,7 @@
 
 HEMS v0.1 plant elk kwartier wat de batterij zou moeten doen, publiceert dat als sensoren en schrijft per kwartier één regel in een trace. Het **schrijft nooit naar een apparaat**: battery-manager en battery-api blijven de batterij sturen. Doel: een paar dagen naast de bestaande sturing draaien en vergelijken.
 
-Getest tegen Home Assistant 2026.9.4 (de versie op de server) met `pytest-homeassistant-custom-component` 0.13.367.
+Getest tegen Home Assistant 2026.10.2 (de versie op de server) met `pytest-homeassistant-custom-component` 0.13.373.
 
 ## Installeren
 
@@ -194,7 +194,7 @@ cd hems/core && python3 -m pytest
 # na elke wijziging in hems/core: engine-kopie in de integratie bijwerken
 python3 scripts/sync_hems_core.py
 # integratietests (eigen venv met exact de serverversie van HA)
-python3 -m venv .venv-ha && .venv-ha/bin/pip install "pytest-homeassistant-custom-component==0.13.367"
+python3 -m venv .venv-ha && .venv-ha/bin/pip install "pytest-homeassistant-custom-component==0.13.373"
 .venv-ha/bin/python -m pytest tests/hems_ha
 # replay op de lokale data
 python3 scripts/hems_replay.py --write docs/hems/observations/replay.md

@@ -44,8 +44,8 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 cd hems/core && python3 -m pytest                 # core, replay, price/Nord Pool/forecast logic
 python3 -m pytest hems/tests                      # deploy script
 python3 scripts/sync_hems_core.py --check         # engine copy current?
-# integration tests: a venv with the plugin that pins the server's Home Assistant version (2026.9.4)
-python3 -m venv .venv-ha && .venv-ha/bin/pip install "pytest-homeassistant-custom-component==0.13.367"
+# integration tests: a venv with the plugin that pins the server's Home Assistant version (2026.10.2)
+python3 -m venv .venv-ha && .venv-ha/bin/pip install "pytest-homeassistant-custom-component==0.13.373"
 .venv-ha/bin/python -m pytest tests/hems_ha       # the recorder_mock fixture must be requested before hass
 python3 scripts/hems_replay.py                    # replay on the local recorded days (needs the gitignored data)
 ```
