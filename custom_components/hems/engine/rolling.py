@@ -13,6 +13,7 @@ from .contracts import BatteryCommand
 from .decision_log import best_later, plan_segments
 from .prices import PriceSeries
 from .slots import SLOT_H, SLOT_MINUTES
+from .terminal import terminal_value
 from .trace import explain
 from .windows import MAX_LOOKBACK, WindowAnalysis, analyse, record
 
@@ -37,6 +38,7 @@ class HorizonInputs:
     pv_kwh: Mapping[datetime, float]         # PV production per quarter start (UTC)
     max_slots: int = 192                     # 48 h; the known prices usually end earlier
     terminal_value: float | None = None
+    history_peak: float | None = None        # typical recent peak (hems.terminal.reference_peak): values energy kept past the horizon; None = the default
 
 
 @dataclass(frozen=True)
@@ -69,7 +71,11 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
     slots, missing = _build_slots(inputs, start)
     if not slots:
         return None
-    result = plan(slots, inputs.soc_kwh, cfg, inputs.terminal_value)
+    default = min(s.import_price for s in slots) * cfg.round_trip_eff ** 0.5
+    terminal = inputs.terminal_value
+    if terminal is None and inputs.history_peak is not None:
+        terminal = terminal_value(inputs.history_peak, default, cfg)
+    result = plan(slots, inputs.soc_kwh, cfg, terminal)
     first = result.slots[0]
     command = BatteryCommand(start, start + QUARTER, round(first.battery_kwh / SLOT_H * 1000))
     trace = {
@@ -81,6 +87,8 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
         "compare": {"code": first.reason_code, "sell": _r(first.sell_value), "buy": _r(first.buy_cost), "keep": _r(first.stored_value),
                     "at_floor": first.at_floor, "at_full": first.at_full, **best_later(result, start)},
         "segments": plan_segments(result, slots, start, inputs.soc_kwh, cfg.capacity_kwh),
+        "terminal": {"default": round(default, 4), "history_peak": None if inputs.history_peak is None else round(inputs.history_peak, 4),
+                     "value": round(default if terminal is None else terminal, 4)},
     }
     earlier = dict(zip(inputs.prices.starts, inputs.prices.import_eur_kwh))
     past: list[float] = []
