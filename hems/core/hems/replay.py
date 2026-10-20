@@ -6,7 +6,8 @@ caller passes the oracle). Both the simulation and the recorded battery flows go
 comparison does not depend on sensor quirks that cancel out.
 """
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Mapping
 from zoneinfo import ZoneInfo
 
 from hems.battery import BatteryConfig
@@ -16,6 +17,7 @@ from hems.forecast import LOCAL_TZ
 from hems.prices import PriceSeries
 from hems.rolling import QUARTER, Decision, HorizonInputs, plan_next, plan_shift
 from hems.slots import SLOT_H
+from hems.terminal import reference_peak
 
 
 @dataclass(frozen=True)
@@ -71,8 +73,12 @@ def account(data: ReplayData, battery_kwh: list[float] | tuple[float, ...], soc_
     return Account(cost, base, soc_delta_kwh)
 
 
-def run_replay(data: ReplayData, cfg: BatteryConfig, tz: ZoneInfo = LOCAL_TZ, publish_hour: int = 13) -> ReplayResult:
-    """Walk the quarters; each step plans with the prices known then, executes one quarter on the fake battery."""
+def run_replay(data: ReplayData, cfg: BatteryConfig, tz: ZoneInfo = LOCAL_TZ, publish_hour: int = 13,
+               peaks: Mapping[date, float] | None = None) -> ReplayResult:
+    """Walk the quarters; each step plans with the prices known then, executes one quarter on the fake battery.
+
+    `peaks` (hems.terminal.daily_peaks of a price series that reaches further back than the replay) values the energy kept past the horizon
+    with the typical peak of the days before each quarter's day, as the live planner does; without it the default terminal value is used."""
     starts = data.prices.starts
     load = dict(zip(starts, data.house_kwh))
     pv = dict(zip(starts, data.pv_kwh))
@@ -82,7 +88,8 @@ def run_replay(data: ReplayData, cfg: BatteryConfig, tz: ZoneInfo = LOCAL_TZ, pu
     for index, start in enumerate(starts):
         horizon = int((known_until(start, tz, publish_hour) - start) / QUARTER)
         soc = battery.soc_pct / 100 * cfg.capacity_kwh
-        decision = plan_next(HorizonInputs(start, soc, data.prices, load, pv, max_slots=horizon), cfg)
+        history_peak = reference_peak(peaks, start.astimezone(tz).date()) if peaks else None
+        decision = plan_next(HorizonInputs(start, soc, data.prices, load, pv, max_slots=horizon, history_peak=history_peak), cfg)
         command = decision.command if decision else None
         battery.apply([command] if command else [])
         battery.advance(QUARTER)

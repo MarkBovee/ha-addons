@@ -25,6 +25,7 @@ class BatteryConfig:
     hold_cost_kwh_h: float = 0.002   # EUR per kWh stored per hour: a waiting premium, so equal prices charge late instead of early (replay 4-11 Oct)
     step_kwh: float = 0.25           # SoC grid resolution
     allow_grid_charge: bool = True
+    future_peak_haircut: float = 0.0  # EUR per kWh taken off the typical recent peak when valuing energy kept past the horizon (hems.terminal); a setting
 
     def __post_init__(self) -> None:
         """Fail fast on an inconsistent floor: the reserve cannot sit below the hard minimum."""

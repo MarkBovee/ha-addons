@@ -13,6 +13,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 | `scripts/hems_trace.py` | Reads the decision logs (`/config/hems/*.jsonl`): `--pull`, `tail`, `show`, `why`, `diff`, `events`. See `../docs/hems/install.md`. |
 | `hems/core/hems/windows.py` | Read-only analysis of sell windows: detection (two cost bases), which charge feeds which sale, status per window, kWh sold outside any window. |
 | `hems/core/hems/heater.py` | The switchable water heater module: plans the daily heating runs with the water-heater add-on's rule (cheapest night and day window) for the load forecast; it never controls the heater. |
+| `hems/core/hems/terminal.py` | Value of energy kept past the horizon from the typical peak of the last days (replay-tested, not wired into the live integration: the 12-day simulation showed little gain, see `../docs/hems/observations/margin-study-2026-10-17.md`). |
 | `hems/core/hems/decision_log.py` | What makes a decision followable: plan segments, best later opportunities, the compact full-plan record, settings hash. |
 | `tests/hems_ha/` | Integration tests (need the pinned Home Assistant test plugin, see below). |
 | `hems/tests/` | Tests of the deploy script. |

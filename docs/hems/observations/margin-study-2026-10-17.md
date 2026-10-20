@@ -57,3 +57,17 @@ De eerste studie speelde elke dag los af. Hieronder dezelfde planner als doorlop
 | echt (BM) | +8,42 | | +7,28 | |
 
 Lezing: bij marge 0,05 verkoopt de planner ongeveer een volle bruikbare cyclus per dag (15 tot 18 kWh); onder 0,05 komen er tweede cycli bij op kleine spreads (0,00: ruim 1,5 cyclus per dag) en de winst per extra kWh daalt snel (0,05 naar 0,00: +2,6 en +1,7 EUR in zes dagen). Boven 0,05 blijft capaciteit onbenut (0,10: ongeveer een halve cyclus). Een grotere piek na de horizon (de dag na morgen) kent de planner niet; zijn restwaarde voor energie aan het eind van de horizon is de goedkoopste inkoopprijs binnen de horizon (`terminal_value` in `battery.py`). Dat is de plek waar Marks punt in te bouwen is: een restwaarde uit de pieken van de laatste dagen in plaats van uit de goedkoopste inkoop, zodat een lagere marge niet alles voor de volgende piek leegverkoopt.
+
+## Restwaarde uit de pieken van de laatste dagen (20 okt): gebouwd en gesimuleerd
+
+Gebouwd (`hems/core/hems/terminal.py`, getest): de energie die aan het eind van de horizon in de batterij blijft is `eff x (typische piek - marge - haircut)` waard in plaats van de goedkoopste inkoopprijs, nooit lager dan die. De typische piek is de mediaan van de laatste 7 dagen van het gemiddelde van de beste 8 kwartieren (twee uur) exportprijs per dag. De replay (`run_replay(..., peaks=...)`) gebruikt de dagen vóór elke dag, dus geen voorkennis. Cash in EUR over 12 dagen (twee ketens) / kWh per dag, `default` = huidige restwaarde, `h0`, `h03`, `h06` = restwaarde uit de pieken met haircut 0, 0,03 en 0,06 EUR/kWh:
+
+| Marge | default | h0 | h03 | h06 |
+|---|---|---|---|---|
+| 0,03 | +27,88 / 19,9 | +27,05 / 20,0 | +27,64 / 20,0 | +27,93 / 20,0 |
+| 0,05 | +26,13 / 16,4 | +25,42 / 16,5 | +26,06 / 16,4 | +26,13 / 16,4 |
+| 0,08 | +20,93 / 10,4 | +21,05 / 10,6 | +21,11 / 10,6 | +20,93 / 10,4 |
+| 0,10 | +16,67 / 7,2 | +18,21 / 8,3 | +18,16 / 8,3 | +18,14 / 8,2 |
+| 0,12 | +15,32 / 6,2 | +15,96 / 6,7 | +15,93 / 6,7 | +15,32 / 6,2 |
+
+Lezing: de restwaarde verandert op deze twaalf dagen weinig. Bij lage marges (0,03 en 0,05) is ze neutraal of iets negatief (-0,7 EUR bij haircut 0); bij marge 0,10 en 0,12 voegt ze +1,5 en +0,6 EUR toe doordat de planner meer laadt voor een verkoop voorbij de horizon. Dat is een winst van circa 9 % bij 0,10, niet het verschil tussen 0,10 en 0,05 (+9,5 EUR). Het vermoeden dat een lage marge alles vóór de grote pieken leegverkoopt komt in deze data niet voor: de horizon (prijzen tot het eind van morgen) bevat de pieken al. Wat de replay niet kan laten zien is de dag na morgen en voorspelfouten; daarvoor is de replay met de eigen voorspellingen van HEMS nodig. De restwaarde staat daarom nog niet in de live integratie.
