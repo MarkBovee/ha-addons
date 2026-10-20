@@ -41,7 +41,8 @@ def blocks(first: str, last: str) -> list[tuple[str, str]]:
     The recorder export of prices ends on 12 Oct and the logged plans start on 13 Oct at about 12:30, so a window that crosses
     that gap has no prices for part of a day: 13 Oct is left out, and from 14 Oct on each day is replayed from its own recorded start."""
     out, day, end = [], datetime.fromisoformat(first), datetime.fromisoformat(last) + timedelta(days=1)
-    out.append((first, "2026-10-13"))
+    if day < datetime(2026, 10, 13):
+        out.append((first, "2026-10-13"))
     day = max(day, datetime(2026, 10, 14))
     while day < end:
         out.append((day.date().isoformat(), (day + timedelta(days=1)).date().isoformat()))
