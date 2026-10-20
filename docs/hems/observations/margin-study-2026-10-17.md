@@ -39,3 +39,21 @@ Eén beslissing van Mark per hendel, in deze volgorde van opbrengst:
 1. **Marge naar 0,05** voor de rest van de proefweek (HEMS blijft dry-run, BM blijft 0,12): het verschil wordt dan echt zichtbaar in de dagrapporten, zonder dat het geld kost.
 2. **Slijtage als getal**: de prijs van de batterij gedeeld door cycli en bruikbare kWh geeft een slijtagekost per kWh. Is dat 0,03, dan hoort de marge ongeveer daar en niet op 0,12; is het 0,08, dan klopt 0,12 bijna.
 3. **Reserve** pas aanpassen als 1 en 2 bevestigd zijn.
+
+## Aanvulling 20 okt: doorlopende keten en de schaarste van de capaciteit
+
+Opmerking van Mark: je kunt niet meer verkopen dan er in zit (100 % naar de ondergrens van 30 % is ongeveer 15 tot 17,5 kWh, één cyclus), dus een lage marge verkoopt alles al vóór de grote pieken. De marge is daarmee vooral de prijs van die schaarse dagcapaciteit, niet van slijtage (slijtage uit €7000 en 90 % na 10 jaar: ongeveer €0,01 per kWh).
+
+De eerste studie speelde elke dag los af. Hieronder dezelfde planner als doorlopende keten (eigen SoC meegenomen, prijzen zoals gepubliceerd, rolling horizon), cash in EUR en kWh per dag aan de batterij:
+
+| Marge | 7 tot 12 okt cash | kWh/dag | 14 tot 19 okt cash | kWh/dag |
+|---|---|---|---|---|
+| 0,00 | +14,90 | 29,7 | +15,46 | 27,4 |
+| 0,03 | +13,16 | 18,6 | +14,72 | 21,2 |
+| 0,05 | +12,33 | 14,8 | +13,80 | 17,9 |
+| 0,08 | +10,06 | 9,5 | +10,87 | 11,3 |
+| 0,10 | +7,74 | 5,8 | +8,93 | 8,6 |
+| 0,12 | +7,49 | 5,3 | +7,83 | 7,2 |
+| echt (BM) | +8,42 | | +7,28 | |
+
+Lezing: bij marge 0,05 verkoopt de planner ongeveer een volle bruikbare cyclus per dag (15 tot 18 kWh); onder 0,05 komen er tweede cycli bij op kleine spreads (0,00: ruim 1,5 cyclus per dag) en de winst per extra kWh daalt snel (0,05 naar 0,00: +2,6 en +1,7 EUR in zes dagen). Boven 0,05 blijft capaciteit onbenut (0,10: ongeveer een halve cyclus). Een grotere piek na de horizon (de dag na morgen) kent de planner niet; zijn restwaarde voor energie aan het eind van de horizon is de goedkoopste inkoopprijs binnen de horizon (`terminal_value` in `battery.py`). Dat is de plek waar Marks punt in te bouwen is: een restwaarde uit de pieken van de laatste dagen in plaats van uit de goedkoopste inkoop, zodat een lagere marge niet alles voor de volgende piek leegverkoopt.
