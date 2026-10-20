@@ -29,6 +29,7 @@ from .margin import (
 from .plan_stability import ChargePowerLock, apply_charge_power_locks, diff_plan_powers
 from .power_calculator import calculate_rank_scaled_power
 from .price_analyzer import (
+    average_price_between,
     calculate_discharge_top_x_count,
     PriceRange,
     calculate_price_ranges,
@@ -1907,6 +1908,53 @@ def _parse_start_set(starts: set[str]) -> set[datetime]:
     return parsed
 
 
+# Read the margin rule every grid charge is held to: (round-trip efficiency, minimum margin per kWh).
+def _grid_charge_margin_settings(config: Dict[str, Any]) -> tuple[float, float]:
+    """Return ``(efficiency, min_margin)``; the margin falls back to ``min_profit_threshold``."""
+
+    heur = config["heuristics"]
+    efficiency = float(heur.get("round_trip_efficiency", DEFAULT_ROUND_TRIP_EFFICIENCY))
+    min_margin = heur.get("grid_charge_min_margin")
+    min_margin = float(heur.get("min_profit_threshold", 0.1) if min_margin is None else min_margin)
+    return efficiency, min_margin
+
+
+# Hold the pre-sell charge to the margin rule, priced on the quarters it would really run in.
+def _evaluate_precharge(
+    config: Dict[str, Any],
+    import_curve: List[Dict[str, Any]],
+    upcoming: Dict[str, List[Dict[str, Any]]],
+    precharge_start: datetime,
+    precharge_until: datetime,
+) -> Dict[str, Any]:
+    """Return the margin verdict of a pre-sell charge from ``precharge_start`` to ``precharge_until``.
+
+    The cost is the import price of the quarters the charge runs in, not the day's cheapest price: this energy is
+    bought in the hours before the sale, so that price has to leave the margin against the sale it feeds (2026-10-20:
+    0.338 at 05:30 and 0.387 at 07:00 for a sale of 0.443, while the day's cheapest import was 0.243). The sale is
+    measured from where the charge starts, because a charge that starts now may still run when the sale begins.
+    """
+
+    efficiency, min_margin = _grid_charge_margin_settings(config)
+    charge_price = average_price_between(import_curve, precharge_start, precharge_until)
+    if charge_price is None:
+        return {
+            "allowed": False,
+            "reason": "no import price for the pre-sell charge",
+            "expected_sell_price": None,
+            "margin": None,
+        }
+    verdict = evaluate_grid_charge(
+        charge_price=charge_price,
+        charge_end=precharge_start,
+        discharge_windows=upcoming.get("discharge", []),
+        charge_windows=upcoming.get("charge", []),
+        efficiency=efficiency,
+        min_margin=min_margin,
+    )
+    return {**verdict, "charge_price": round(charge_price, 4)}
+
+
 def _apply_grid_charge_margin_gate(
     config: Dict[str, Any],
     upcoming: Dict[str, List[Dict[str, Any]]],
@@ -1927,10 +1975,7 @@ def _apply_grid_charge_margin_gate(
     Negative-price windows and windows that already ended are never gated.
     """
 
-    heur = config["heuristics"]
-    efficiency = float(heur.get("round_trip_efficiency", DEFAULT_ROUND_TRIP_EFFICIENCY))
-    min_margin = heur.get("grid_charge_min_margin")
-    min_margin = float(heur.get("min_profit_threshold", 0.1) if min_margin is None else min_margin)
+    efficiency, min_margin = _grid_charge_margin_settings(config)
 
     kept: List[Dict[str, Any]] = []
     for window in upcoming.get("charge", []):
@@ -2570,8 +2615,9 @@ def generate_schedule(
         and not skip_charge
     ):
         # buffer_required_soc is sell_buffer_min_soc, the SOC a sale needs at its start. Below it the battery is
-        # charged back up to exactly that value, at any price: the sale cannot start without it. Above it nothing
-        # is bought (2026-10-15: a battery at 74% was charged to 100% at 0.33 for a thin morning peak).
+        # charged back up to exactly that value, but only when that charge earns the grid-charge margin on the sale it
+        # feeds (2026-10-20: 0.338 and 0.387 bought for a sale of 0.443). Above it nothing is bought (2026-10-15: a
+        # battery at 74% was charged to 100% at 0.33 for a thin morning peak).
         capacity_kwh = float(config["soc"].get("battery_capacity_kwh", 25))
         charge_power_watts = float(config["power"].get("max_charge_power", 8000))
         soc_per_hour_charge = max(0.0, (charge_power_watts / 1000.0) / max(capacity_kwh, 0.1) * 100.0)
@@ -2593,22 +2639,37 @@ def generate_schedule(
             )
             actual_minutes = int((precharge_until - precharge_start).total_seconds() / 60)
             if actual_minutes > 0:
+                verdict = _evaluate_precharge(config, import_curve, upcoming_windows, precharge_start, precharge_until)
                 precharge_trace = {
-                    "decision": "added",
+                    "decision": "added" if verdict["allowed"] else "skipped",
                     "minutes": actual_minutes,
                     "start": precharge_start.astimezone().isoformat(),
                     "until": precharge_until.astimezone().isoformat(),
                     "soc": soc,
                     "target_soc": buffer_required_soc,
+                    **verdict,
                 }
-                logger.info(
-                    "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min from %s until %s",
-                    soc,
-                    buffer_required_soc,
-                    actual_minutes,
-                    precharge_start.astimezone().strftime("%H:%M"),
-                    precharge_until.astimezone().strftime("%H:%M"),
-                )
+                if verdict["allowed"]:
+                    logger.info(
+                        "🔋 Pre-sell buffer active: SOC %.1f%% < %.1f%%, adding pre-charge window %d min from %s until %s (%s)",
+                        soc,
+                        buffer_required_soc,
+                        actual_minutes,
+                        precharge_start.astimezone().strftime("%H:%M"),
+                        precharge_until.astimezone().strftime("%H:%M"),
+                        verdict["reason"],
+                    )
+                else:
+                    logger.info(
+                        "🚫 Pre-sell charge skipped: SOC %.1f%% < %.1f%%, %d min from %s would not pay for the sale: %s",
+                        soc,
+                        buffer_required_soc,
+                        actual_minutes,
+                        precharge_start.astimezone().strftime("%H:%M"),
+                        verdict["reason"],
+                    )
+                    precharge_until = None
+                    precharge_start = None
             else:
                 precharge_until = None
                 precharge_start = None
