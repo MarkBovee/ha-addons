@@ -77,16 +77,82 @@ def _gate(config, charge_windows, discharge_windows, exact=frozenset()):
     return kept, records
 
 
-def test_gate_exempts_top_x_negative_and_past_windows():
+def test_gate_exempts_negative_and_past_windows():
     config = make_config()
-    top_x = {"start": T0, "end": T0 + timedelta(hours=1), "avg_price": 0.30, "slots": [{"start": T0}]}
     negative = {"start": T0 + timedelta(hours=2), "end": T0 + timedelta(hours=3), "avg_price": -0.1}
     past = {"start": T0 - timedelta(hours=5), "end": T0 - timedelta(hours=4), "avg_price": 0.30}
 
-    kept, records = _gate(config, [top_x, negative, past], [], exact={T0})
+    kept, records = _gate(config, [negative, past], [_sell(8, 0.20)])
 
-    assert kept == [top_x, negative, past]
+    assert kept == [negative, past]
     assert records == []
+
+
+def test_gate_applies_to_top_x_windows_too():
+    """2026-10-19: tonight's top-X quarters at 0.343 for a 0.443 sale tomorrow morning earn 0.056 < 0.12."""
+    config = make_config(**{"heuristics.min_profit_threshold": 0.12})
+    tonight = {"start": T0, "end": T0 + timedelta(hours=2), "avg_price": 0.343, "slots": [{"start": T0}]}
+    morning_sale = _sell(10, 0.443, 120)
+    next_start = T0 + timedelta(hours=14)
+    next_charge = {"start": next_start, "end": T0 + timedelta(hours=18), "avg_price": 0.268, "slots": [{"start": next_start}]}
+
+    kept, records = _gate(config, [tonight, next_charge], [morning_sale], exact={T0, next_start})
+
+    assert kept == [next_charge]
+    assert records[0]["top_x"] and not records[0]["allowed"]
+    assert records[0]["margin"] == pytest.approx(0.056, abs=1e-3)
+
+
+def test_gate_judges_a_block_of_split_windows_against_the_sale_behind_it():
+    """2026-10-19 20:11: 20:45, 21:15 and 22:15 are one block for the 0.443 sale; the first two kept hiding behind the next charge window."""
+    config = make_config(**{"heuristics.min_profit_threshold": 0.12})
+
+    def window(offset_h, hours, price):
+        start = T0 + timedelta(hours=offset_h)
+        return {"start": start, "end": start + timedelta(hours=hours), "avg_price": price, "slots": [{"start": start}]}
+
+    block = [window(0, 0.25, 0.340), window(0.5, 0.75, 0.346), window(1.5, 1.75, 0.343)]
+    next_day = window(14, 4, 0.268)
+    exact = {w["start"] for w in block + [next_day]}
+
+    kept, records = _gate(config, block + [next_day], [_sell(10, 0.443, 120)], exact=exact)
+
+    assert kept == [next_day]
+    assert [r["allowed"] for r in records] == [False, False, False, True] or len(records) == 4
+    assert sorted(r["start"] for r in records) == [r["start"] for r in records]  # chronological
+
+
+def test_gate_keeps_the_block_when_the_sale_behind_it_pays():
+    config = make_config(**{"heuristics.min_profit_threshold": 0.12})
+    first = {"start": T0, "end": T0 + timedelta(minutes=15), "avg_price": 0.30, "slots": [{"start": T0}]}
+    second_start = T0 + timedelta(minutes=30)
+    second = {"start": second_start, "end": second_start + timedelta(hours=1), "avg_price": 0.30, "slots": [{"start": second_start}]}
+
+    kept, _ = _gate(config, [first, second], [_sell(10, 0.55, 120)], exact={T0, second_start})
+
+    assert kept == [first, second]
+
+
+def test_gate_keeps_a_top_x_window_that_earns_the_margin():
+    config = make_config(**{"heuristics.min_profit_threshold": 0.12})
+    tonight = {"start": T0, "end": T0 + timedelta(hours=2), "avg_price": 0.30, "slots": [{"start": T0}]}
+
+    kept, records = _gate(config, [tonight], [_sell(10, 0.55, 120)], exact={T0})  # 0.495 - 0.30 = 0.195
+
+    assert kept == [tonight] and records[0]["allowed"]
+
+
+def test_gate_keeps_a_top_x_window_without_a_following_sale_but_not_a_spread_window():
+    """Nothing to measure a top-X charge against; a spread-only window without a sale is dropped."""
+    config = make_config()
+    top_x = {"start": T0, "end": T0 + timedelta(hours=1), "avg_price": 0.30, "slots": [{"start": T0}]}
+    spread = {"start": T0 + timedelta(hours=2), "end": T0 + timedelta(hours=3), "avg_price": 0.31, "slots": []}
+
+    kept, records = _gate(config, [top_x, spread], [], exact={T0})
+
+    assert kept == [top_x]
+    assert records[0]["allowed"] and "no sell window" in records[0]["reason"]
+    assert not records[1]["allowed"]
 
 
 def test_gate_defaults_follow_min_profit_and_options_override():
@@ -166,17 +232,19 @@ def _precharge_schedule(monkeypatch, config, sell_price):
     return bm_main.generate_schedule(config, object(), None)
 
 
-def test_precharge_below_the_start_soc_does_not_need_a_sell_margin(monkeypatch):
-    """Below sell_buffer_min_soc the battery is charged back up to it: the sale cannot start without it."""
+def test_precharge_below_the_start_soc_needs_the_sell_margin(monkeypatch):
+    """Below sell_buffer_min_soc the battery is charged back up to it, but only when the sale pays for the charge."""
     config = _precharge_config()
     config["soc"]["sell_buffer_min_soc"] = 40  # SoC is 30
-    for sell_price in (0.60, 0.28):  # a rich and a thin sale: 0.54 - 0.20 = 0.34 and 0.252 - 0.20 = 0.05
-        schedule = _precharge_schedule(monkeypatch, config, sell_price=sell_price)
-        assert any(p["window_type"] == "precharge" for p in schedule["charge"])
+    # a rich and a thin sale against a charge at 0.20: 0.54 - 0.20 = 0.34 clears the 0.10 margin, 0.252 - 0.20 = 0.052 does not
+    rich = _precharge_schedule(monkeypatch, config, sell_price=0.60)
+    assert any(p["window_type"] == "precharge" for p in rich["charge"])
+    thin = _precharge_schedule(monkeypatch, config, sell_price=0.28)
+    assert not any(p["window_type"] == "precharge" for p in thin["charge"])
 
 
 def test_nothing_is_precharged_at_or_above_the_start_soc(monkeypatch):
-    """The sell margin only rules the top-X charge slots; at 30% a start SOC of 30 (or less) buys nothing for the sale."""
+    """At 30% a start SOC of 30 (or less) buys nothing for the sale, whatever the margin."""
     for start_soc in (20, 30):
         config = _precharge_config()
         config["soc"]["sell_buffer_min_soc"] = start_soc

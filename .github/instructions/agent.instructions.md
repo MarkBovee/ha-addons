@@ -52,11 +52,6 @@ Each add-on has its own instructions file scoped to its directory:
 
 **These files are mandatory to update** after any change that affects architecture, config options, entities, window types, price bands, or modules. Check the relevant add-on instructions file before starting work in that add-on.
 
-## 8) OpenSpec Rule
-
-OpenSpec proposal required for new capabilities and breaking changes.
-Skip OpenSpec for bug fixes, typos, formatting, and non-breaking maintenance.
-
-## 9) Completion Default
+## 8) Completion Default
 
 - When a task or change is complete, merge back to `main` and clean up the branch/worktree unless the user explicitly asks to keep it open or there is an active review/PR.

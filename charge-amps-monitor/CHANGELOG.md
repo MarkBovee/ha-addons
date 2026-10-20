@@ -18,7 +18,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `pytest -q tests`: 33 passed.
-- OpenSpec change `professionalize-charge-amps-charger` validates with `--strict`.
 
 ## [2.0.0] - 2026-09-10
 
@@ -46,7 +45,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `pytest -q tests`: 26 passed.
-- OpenSpec change `professionalize-charge-amps-charger` validates with `--strict`.
 
 ## [1.3.10] - 2026-03-24
 

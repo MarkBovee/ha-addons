@@ -33,7 +33,7 @@ The system exits Passive Mode if **ANY** of these are true:
 
 ## Porting to HA-Addons (`battery-strategy-optimizer`)
 
-This logic has been incorporated into the OpenSpec for the new add-on (Version 2.3).
+This logic was planned for the new add-on (Version 2.3).
 
 ### New Component: `solar_monitor.py`
 *   **Responsibility**: Polls HA sensors every minute.
@@ -46,7 +46,6 @@ This logic has been incorporated into the OpenSpec for the new add-on (Version 2
 
 ### Reference Files
 *   **NetDaemon**: `Apps/Energy/SolarMonitor.cs` (Logic), `Apps/Energy/InverterController.cs` (Command)
-*   **HA-Addon Spec**: `openspec/changes/2.3-add-battery-strategy-optimizer/specs/battery-strategy/spec.md`
 
 ---
 *Created: 2026-02-02*

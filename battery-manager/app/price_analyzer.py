@@ -469,6 +469,32 @@ def min_price_between(curve: Sequence[dict], start: datetime, end: datetime) -> 
     return min(prices) if prices else None
 
 
+# Price what a charge between two moments really costs: the time-weighted mean of the quarters it runs through.
+def average_price_between(curve: Sequence[dict], start: datetime, end: datetime) -> Optional[float]:
+    """Return the duration-weighted mean price over [start, end), counting partly covered intervals pro rata.
+
+    Returns None when the span is empty or an interval of it has no price, so a caller never prices a charge on
+    a curve with a hole in it.
+    """
+
+    if end <= start:
+        return None
+    weighted = 0.0
+    covered_seconds = 0.0
+    for entry in curve:
+        bounds = _entry_bounds(entry, 15)
+        if bounds is None or entry.get("price") is None:
+            continue
+        overlap = (min(end, bounds[1]) - max(start, bounds[0])).total_seconds()
+        if overlap <= 0:
+            continue
+        weighted += float(entry["price"]) * overlap
+        covered_seconds += overlap
+    if covered_seconds + 1e-6 < (end - start).total_seconds():
+        return None
+    return weighted / covered_seconds
+
+
 # Find when a charge of ``minutes`` is cheapest before ``deadline``, so a pre-sell charge is not bought at the first price on offer.
 def find_cheapest_block_start(
     curve: Sequence[dict],

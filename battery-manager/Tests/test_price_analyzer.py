@@ -4,6 +4,8 @@ import sys
 import os
 from datetime import datetime, timedelta, timezone
 
+from pytest import approx as pytest_approx
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.price_analyzer import (
@@ -263,3 +265,30 @@ def test_cheapest_block_start_is_none_when_the_block_does_not_fit_or_the_curve_h
     gap = [curve[0], curve[2]]  # the 00:15 quarter is missing: two quarters, but not consecutive
     assert find_cheapest_block_start(gap, midnight, midnight + timedelta(hours=1), 30, 15) is None
     assert find_cheapest_block_start(curve, midnight, midnight + timedelta(hours=1), 0, 15) is None
+
+
+def test_average_price_between_weighs_by_time_and_counts_partial_quarters_pro_rata():
+    from datetime import datetime, timedelta, timezone
+
+    from app.price_analyzer import average_price_between
+
+    midnight = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
+    curve = _quarter_curve([0.30, 0.40, 0.50])
+    assert average_price_between(curve, midnight, midnight + timedelta(minutes=30)) == pytest_approx(0.35)
+    # 05.30: 15 minutes at 0.30 and 5 minutes at 0.40 (the 2026-10-20 precharge shape)
+    assert average_price_between(curve, midnight, midnight + timedelta(minutes=20)) == pytest_approx((0.30 * 15 + 0.40 * 5) / 20)
+    # starting inside a quarter
+    assert average_price_between(curve, midnight + timedelta(minutes=10), midnight + timedelta(minutes=20)) == pytest_approx((0.30 * 5 + 0.40 * 5) / 10)
+
+
+def test_average_price_between_is_none_for_an_empty_span_or_a_hole_in_the_curve():
+    from datetime import datetime, timedelta, timezone
+
+    from app.price_analyzer import average_price_between
+
+    midnight = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
+    curve = _quarter_curve([0.30, 0.40, 0.50])
+    assert average_price_between(curve, midnight, midnight) is None
+    assert average_price_between(curve, midnight, midnight + timedelta(hours=1)) is None  # the curve ends at 00:45
+    gap = [curve[0], curve[2]]
+    assert average_price_between(gap, midnight, midnight + timedelta(minutes=45)) is None  # 00:15 is missing

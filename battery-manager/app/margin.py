@@ -1,4 +1,4 @@
-"""Margin checks for grid charging that is not part of the cheapest top-X slots."""
+"""Margin checks for grid charging: a charge must earn its round-trip loss and a minimum margin."""
 
 from __future__ import annotations
 
@@ -48,6 +48,20 @@ def intended_sell_price(
     return weighted / total_minutes, used
 
 
+def first_sale_start_after(
+    charge_end: datetime,
+    discharge_windows: Sequence[Dict[str, Any]],
+) -> Optional[datetime]:
+    """Return the start of the first sell window beginning at/after ``charge_end``."""
+
+    starts = [
+        window["start"]
+        for window in discharge_windows
+        if isinstance(window.get("start"), datetime) and window["start"] >= charge_end
+    ]
+    return min(starts) if starts else None
+
+
 def next_window_start_after(
     charge_end: datetime,
     charge_windows: Sequence[Dict[str, Any]],
@@ -80,16 +94,19 @@ def evaluate_grid_charge(
     efficiency: float,
     min_margin: float,
 ) -> Dict[str, Any]:
-    """Decide whether a non-top-X grid charge earns the required margin.
+    """Decide whether a grid charge earns the required margin.
 
     The result carries everything the decision trace needs: ``allowed``,
     ``reason``, ``expected_sell_price`` and ``margin``.
     """
 
+    # A charge feeds the next sale. Charge windows between the charge and that sale belong to the same
+    # block and do not end it; only a charge window after the sale's start bounds the sales it is for.
+    first_sale_start = first_sale_start_after(charge_end, discharge_windows)
     target = intended_sell_price(
         charge_end,
         discharge_windows,
-        next_window_start_after(charge_end, charge_windows),
+        next_window_start_after(first_sale_start, charge_windows) if first_sale_start is not None else None,
     )
     if target is None:
         return {

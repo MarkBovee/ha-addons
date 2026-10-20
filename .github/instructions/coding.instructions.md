@@ -29,7 +29,6 @@ ha-addons/
 +-- water-heater-scheduler/   # Price-based water heater control (prefix: wh_)
 +-- run_addon.py              # Universal local runner (auto-syncs shared/)
 +-- sync_shared.py            # Manual shared module sync
-+-- openspec/                 # Specifications and change proposals
 ```
 
 ### Add-on Directory Layout
