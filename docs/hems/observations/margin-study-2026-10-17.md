@@ -71,3 +71,16 @@ Gebouwd (`hems/core/hems/terminal.py`, getest): de energie die aan het eind van 
 | 0,12 | +15,32 / 6,2 | +15,96 / 6,7 | +15,93 / 6,7 | +15,32 / 6,2 |
 
 Lezing: de restwaarde verandert op deze twaalf dagen weinig. Bij lage marges (0,03 en 0,05) is ze neutraal of iets negatief (-0,7 EUR bij haircut 0); bij marge 0,10 en 0,12 voegt ze +1,5 en +0,6 EUR toe doordat de planner meer laadt voor een verkoop voorbij de horizon. Dat is een winst van circa 9 % bij 0,10, niet het verschil tussen 0,10 en 0,05 (+9,5 EUR). Het vermoeden dat een lage marge alles vóór de grote pieken leegverkoopt komt in deze data niet voor: de horizon (prijzen tot het eind van morgen) bevat de pieken al. Wat de replay niet kan laten zien is de dag na morgen en voorspelfouten; daarvoor is de replay met de eigen voorspellingen van HEMS nodig. De restwaarde staat daarom nog niet in de live integratie.
+
+## Replay met de voorspellingen die HEMS toen had (20 okt)
+
+`scripts/hems_forecast_study.py`: 14 tot 19 okt als één keten; de planner van elk kwartier krijgt de belasting- en PV-voorspelling van de cyclus die HEMS toen logde (`plans.jsonl`, alle 576 kwartieren hebben een cyclus), de gesimuleerde batterij en de afrekening gebruiken wat echt gebeurde. Cash in EUR over zes dagen / kWh per dag:
+
+| Marge | orakel (echte belasting en PV) | eigen voorspellingen | echt (BM) |
+|---|---|---|---|
+| 0,05 | +13,80 / 17,9 | +13,95 / 18,2 | +7,28 |
+| 0,08 | +10,87 / 11,3 | +11,06 / 11,6 | +7,28 |
+| 0,10 | +8,93 / 8,6 | +9,13 / 8,8 | +7,28 |
+| 0,12 | +7,83 / 7,2 | +7,89 / 7,2 | +7,28 |
+
+De voorspelfouten van belasting en PV kosten in deze zes herfstdagen vrijwel niets (het verschil met het orakel is +0,06 tot +0,20 EUR, dus eerder iets beter dan slechter): de opbrengst wordt bepaald door de prijzen, niet door de verbruiks- en PV-verwachting. In de zomer, met veel PV, kan dat anders zijn. Wat de replay nog steeds niet kent is de dag na morgen. Netto na slijtage (EUR 0,01 per kWh): marge 0,05 +12,9, 0,08 +10,4, 0,10 +8,6, 0,12 +7,2 (de echte batterij: +7,28 zonder slijtage te rekenen).

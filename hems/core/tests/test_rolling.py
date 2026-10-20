@@ -117,3 +117,19 @@ def test_replay_does_not_cycle_at_a_loss_on_a_thin_spread_day():
     sim = run_replay(data, cfg)
     result = account(data, sim.battery_kwh, sim.soc_kwh[-1] - data.soc0_kwh)
     assert result.valued_saving(0.20) > -0.05
+
+
+def test_a_replay_plans_on_the_forecast_it_is_given_and_every_quarter_asks_for_one():
+    """The planner uses what `forecasts` returns (an empty forecast shows as missing slots in every decision's trace), a function that returns None is
+    the oracle (same flows, no missing slots), and it is asked once per quarter. The simulated battery and the accounting stay on the recorded load and PV."""
+    prices = recorded_day("2026-10-06")
+    data = synthetic_home(prices, 8.0)
+    cfg = BatteryConfig()
+    asked: list[datetime] = []
+    oracle = run_replay(data, cfg)
+    same = run_replay(data, cfg, forecasts=lambda start: asked.append(start))
+    blind = run_replay(data, cfg, forecasts=lambda start: ({}, {}))
+    assert same.battery_kwh == oracle.battery_kwh and asked == list(prices.starts)
+    assert all(d.trace["missing_forecast_slots"] == 0 for d in oracle.decisions)
+    assert all(d.trace["missing_forecast_slots"] == d.trace["horizon_slots"] > 0 for d in blind.decisions)
+    assert len(blind.soc_kwh) == len(prices.starts), "the simulated battery still runs every quarter"

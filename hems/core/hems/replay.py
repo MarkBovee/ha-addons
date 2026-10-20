@@ -7,7 +7,7 @@ comparison does not depend on sensor quirks that cancel out.
 """
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Mapping
+from typing import Callable, Mapping
 from zoneinfo import ZoneInfo
 
 from hems.battery import BatteryConfig
@@ -73,12 +73,18 @@ def account(data: ReplayData, battery_kwh: list[float] | tuple[float, ...], soc_
     return Account(cost, base, soc_delta_kwh)
 
 
+Forecast = tuple[Mapping[datetime, float], Mapping[datetime, float]]      # (base load kWh, PV kWh) per quarter start (UTC)
+
+
 def run_replay(data: ReplayData, cfg: BatteryConfig, tz: ZoneInfo = LOCAL_TZ, publish_hour: int = 13,
-               peaks: Mapping[date, float] | None = None) -> ReplayResult:
+               peaks: Mapping[date, float] | None = None, forecasts: Callable[[datetime], Forecast | None] | None = None) -> ReplayResult:
     """Walk the quarters; each step plans with the prices known then, executes one quarter on the fake battery.
 
     `peaks` (hems.terminal.daily_peaks of a price series that reaches further back than the replay) values the energy kept past the horizon
-    with the typical peak of the days before each quarter's day, as the live planner does; without it the default terminal value is used."""
+    with the typical peak of the days before each quarter's day, as the live planner does; without it the default terminal value is used.
+
+    `forecasts(start)` returns the load and PV forecast the planner would have had at that quarter (None: use the recorded load and PV, an oracle).
+    Planning uses the forecast; the simulated battery and the accounting always use what really happened, so forecast errors cost what they cost."""
     starts = data.prices.starts
     load = dict(zip(starts, data.house_kwh))
     pv = dict(zip(starts, data.pv_kwh))
@@ -89,7 +95,9 @@ def run_replay(data: ReplayData, cfg: BatteryConfig, tz: ZoneInfo = LOCAL_TZ, pu
         horizon = int((known_until(start, tz, publish_hour) - start) / QUARTER)
         soc = battery.soc_pct / 100 * cfg.capacity_kwh
         history_peak = reference_peak(peaks, start.astimezone(tz).date()) if peaks else None
-        decision = plan_next(HorizonInputs(start, soc, data.prices, load, pv, max_slots=horizon, history_peak=history_peak), cfg)
+        expected = forecasts(start) if forecasts else None
+        plan_load, plan_pv = expected if expected else (load, pv)
+        decision = plan_next(HorizonInputs(start, soc, data.prices, plan_load, plan_pv, max_slots=horizon, history_peak=history_peak), cfg)
         command = decision.command if decision else None
         battery.apply([command] if command else [])
         battery.advance(QUARTER)
