@@ -17,14 +17,18 @@ _WEEKDAY = selector.SelectSelector(selector.SelectSelectorConfig(
     options=["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], mode=selector.SelectSelectorMode.DROPDOWN, translation_key="weekday"))
 
 
+def _optional_roles_schema(defaults: dict[str, Any]) -> dict[Any, Any]:
+    """Entity pickers for the optional roles only; a cleared picker means the role is not used."""
+    return {vol.Optional(role, description={"suggested_value": defaults.get(role)}): _SENSOR for role in _ROLES_OPTIONAL}
+
+
 def _user_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Entity pickers for every role; optional roles stay optional, sign convention is a plain switch."""
     fields: dict[Any, Any] = {}
     for role in _ROLES_REQUIRED:
         fields[vol.Required(role, default=defaults.get(role, vol.UNDEFINED))] = _SENSOR
     fields[vol.Required(CONF_BATTERY_POSITIVE_DISCHARGING, default=defaults.get(CONF_BATTERY_POSITIVE_DISCHARGING, True))] = bool
-    for role in _ROLES_OPTIONAL:
-        fields[vol.Optional(role, description={"suggested_value": defaults.get(role)})] = _SENSOR
+    fields.update(_optional_roles_schema(defaults))
     return vol.Schema(fields)
 
 
@@ -103,6 +107,20 @@ class HemsConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title="HEMS", data=user_input, options=dict(DEFAULT_OPTIONS))
             errors["base"] = "entity_not_found"
         return self.async_show_form(step_id="user", data_schema=_user_schema(user_input or {}), errors=errors)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Change the optional roles (inverter output, EV power, price curve) of the existing entry; the required roles stay as they are.
+
+        The entry is saved and reloaded in one go; a role left empty is removed, so the EV or inverter can be switched off again."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if all(self.hass.states.get(user_input[role]) is not None for role in _ROLES_OPTIONAL if user_input.get(role)):
+                kept = {key: value for key, value in entry.data.items() if key not in _ROLES_OPTIONAL}
+                return self.async_update_reload_and_abort(entry, data={**kept, **{r: user_input[r] for r in _ROLES_OPTIONAL if user_input.get(r)}})
+            errors["base"] = "entity_not_found"
+        schema = vol.Schema(_optional_roles_schema(user_input or dict(entry.data)))
+        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
 
     @staticmethod
     @callback

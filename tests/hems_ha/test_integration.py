@@ -11,7 +11,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.hems.config_flow import SECTIONS
-from custom_components.hems.const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_GRID, CONF_PRICE_CURVE, CONF_PV,
+from custom_components.hems.const import (CONF_EV, CONF_INVERTER, CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_GRID, CONF_PRICE_CURVE, CONF_PV,
                                           CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
 from custom_components.hems.engine.nordpool import NORD_POOL_URL, nordpool_params
 from custom_components.hems.engine.weather import OPEN_METEO_URL
@@ -91,6 +91,25 @@ async def test_config_flow_creates_an_entry_and_rejects_unknown_entities(recorde
     assert bad["type"] == FlowResultType.FORM and bad["errors"] == {"base": "entity_not_found"}
     good = await hass.config_entries.flow.async_configure(result["flow_id"], ROLES)
     assert good["type"] == FlowResultType.CREATE_ENTRY and good["options"]["reserve_soc_pct"] == 30.0
+
+
+async def test_reconfigure_changes_only_the_optional_roles_and_can_clear_one(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The reconfigure step swaps the EV role, rejects an unknown entity, keeps the required roles, and clearing a field removes the role."""
+    set_states(hass)
+    hass.states.async_set("sensor.ev_old", "0")
+    hass.states.async_set("sensor.ev_new", "0")
+    entry = await setup_entry(hass, freezer, aioclient_mock, roles={**ROLES, CONF_EV: "sensor.ev_old"})
+    form = await entry.start_reconfigure_flow(hass)
+    assert form["type"] == FlowResultType.FORM and form["step_id"] == "reconfigure"
+    assert set(form["data_schema"].schema) == {CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE}
+    bad = await hass.config_entries.flow.async_configure(form["flow_id"], {CONF_EV: "sensor.nope", CONF_PRICE_CURVE: "sensor.import_price"})
+    assert bad["type"] == FlowResultType.FORM and bad["errors"] == {"base": "entity_not_found"}
+    done = await hass.config_entries.flow.async_configure(form["flow_id"], {CONF_EV: "sensor.ev_new", CONF_PRICE_CURVE: "sensor.import_price"})
+    assert done["type"] == FlowResultType.ABORT and done["reason"] == "reconfigure_successful"
+    assert entry.data[CONF_EV] == "sensor.ev_new" and entry.data[CONF_SOC] == "sensor.soc" and entry.data[CONF_PRICE_CURVE] == "sensor.import_price"
+    again = await entry.start_reconfigure_flow(hass)
+    await hass.config_entries.flow.async_configure(again["flow_id"], {CONF_PRICE_CURVE: "sensor.import_price"})
+    assert CONF_EV not in entry.data and entry.data[CONF_GRID] == "sensor.grid_power"
 
 
 async def test_plans_in_dry_run_and_publishes_sensors_with_a_reason(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):

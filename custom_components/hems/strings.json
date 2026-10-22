@@ -14,13 +14,23 @@
           "ev_power_entity": "EV charger power (W, optional; excluded from the base load)",
           "price_curve_entity": "Import price sensor with a price_curve attribute (optional; fallback and cross-check)"
         }
+      },
+      "reconfigure": {
+        "title": "HEMS: change the optional entities",
+        "description": "Only the optional roles can change here; the battery, PV and grid entities stay as set up. Clear a field to stop using that role.",
+        "data": {
+          "inverter_output_entity": "Inverter AC output (W, optional; improves the house-load estimate)",
+          "ev_power_entity": "EV charger power (W, optional; excluded from the base load)",
+          "price_curve_entity": "Import price sensor with a price_curve attribute (optional; fallback and cross-check)"
+        }
       }
     },
     "error": {
       "entity_not_found": "One of the chosen entities does not exist."
     },
     "abort": {
-      "already_configured": "HEMS is already set up."
+      "already_configured": "HEMS is already set up.",
+      "reconfigure_successful": "The entities were changed and HEMS was reloaded."
     }
   },
   "options": {

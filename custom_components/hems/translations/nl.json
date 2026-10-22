@@ -14,13 +14,23 @@
           "ev_power_entity": "EV-laadvermogen (W, optioneel; telt niet mee in het basisverbruik)",
           "price_curve_entity": "Importprijs-sensor met een price_curve-attribuut (optioneel; terugval en controle)"
         }
+      },
+      "reconfigure": {
+        "title": "HEMS: wijzig de optionele entiteiten",
+        "description": "Alleen de optionele rollen kunnen hier wijzigen; batterij, PV en net blijven zoals ingesteld. Maak een veld leeg om die rol niet meer te gebruiken.",
+        "data": {
+          "inverter_output_entity": "AC-uitgang omvormer (W, optioneel; verbetert de huisverbruik-schatting)",
+          "ev_power_entity": "EV-laadvermogen (W, optioneel; telt niet mee in het basisverbruik)",
+          "price_curve_entity": "Importprijs-sensor met een price_curve-attribuut (optioneel; terugval en controle)"
+        }
       }
     },
     "error": {
       "entity_not_found": "Een gekozen entiteit bestaat niet."
     },
     "abort": {
-      "already_configured": "HEMS is al ingesteld."
+      "already_configured": "HEMS is al ingesteld.",
+      "reconfigure_successful": "De entiteiten zijn gewijzigd en HEMS is herladen."
     }
   },
   "options": {
