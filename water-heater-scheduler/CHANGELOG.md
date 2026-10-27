@@ -2,6 +2,12 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.3.1] - 2026-10-27
+
+### Fixed
+- **The weekly legionella protection was skipped when the previous run was recorded late.** The 7-day guard counted elapsed hours as whole days: the run of Saturday 17 Oct 2026 started at 13:00 but was stamped 18:30 (the stamp is refreshed every hour while the water stays above 60 °C), so on Saturday 24 Oct the day window at 14:00 was 6 days and 19.5 hours later, counted as 6 days, and the protection was skipped. The next scheduled day was 31 Oct: 14 days between two runs. The guard now counts calendar days (due seven days after the *day* of the last run) and the published heating plan follows the same rule. The protection still runs only on the chosen weekday; there is no catch-up on other days.
+- Tests: `tests/test_legionella.py` on the 17 and 24 Oct 2026 situation, the other weekdays, the night window and the heating plan.
+
 ## [1.3.0] - 2026-10-16
 
 ### Added

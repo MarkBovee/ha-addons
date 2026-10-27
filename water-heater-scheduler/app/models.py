@@ -3,10 +3,12 @@
 import json
 import logging
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, time
+from datetime import date, datetime, time
 from enum import Enum
 from typing import Dict, Optional, Any
 from pathlib import Path
+
+from . import legionella
 
 logger = logging.getLogger(__name__)
 
@@ -264,10 +266,6 @@ class HeaterState:
         """Set last_legionella_protection from datetime."""
         self.last_legionella_protection = dt.isoformat()
 
-    def needs_legionella_protection(self, interval_days: int = 7) -> bool:
-        """Check if legionella protection is needed based on last run."""
-        last_run = self.get_last_legionella_protection()
-        if last_run is None:
-            return True  # Never run, need protection
-        days_since = (datetime.now() - last_run).days
-        return days_since >= interval_days
+    def needs_legionella_protection(self, interval_days: int = 7, today: Optional[date] = None) -> bool:
+        """Check if legionella protection is needed: calendar days since the day of the last run (see app.legionella)."""
+        return legionella.is_due(self.get_last_legionella_protection(), today or datetime.now().date(), interval_days)

@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timedelta, time, timezone
 from typing import Optional, Tuple, Dict, Any
 
+from . import legionella
 from .heating_plan import build_heating_plan, plan_attributes, plan_state
 from .models import ScheduleConfig, HeaterState, ProgramType
 from .water_heater_controller import WaterHeaterController, EntityStateReader
@@ -553,9 +554,9 @@ def set_water_temperature(
     
     # Check legionella day (Saturday by default)
     legionella_weekday = DAYS_OF_WEEK.get(config.legionella_day, 5)
-    is_legionella_day = not use_night_program and now.weekday() == legionella_weekday
-    needs_legionella = state.needs_legionella_protection(LEGIONELLA_INTERVAL_DAYS)
-    use_legionella_protection = is_legionella_day and needs_legionella
+    legionella_decision = legionella.decide(last_legionella, now, legionella_weekday, not use_night_program, LEGIONELLA_INTERVAL_DAYS)
+    is_legionella_day, needs_legionella = legionella_decision.is_day, legionella_decision.needs
+    use_legionella_protection = legionella_decision.use
 
     last_legionella_str = last_legionella.isoformat(timespec="minutes") if last_legionella else "never"
     logger.info(
@@ -569,9 +570,9 @@ def set_water_temperature(
     )
 
     if is_legionella_day and not needs_legionella:
-        days_since = (now - last_legionella).days if last_legionella else 0
+        days_since = (now.date() - last_legionella.date()).days if last_legionella else 0
         logger.info(
-            "Legionella day but protection not needed (last run %d days ago, interval %d days)",
+            "Legionella day but protection not needed (last run %d calendar days ago, interval %d days)",
             days_since,
             LEGIONELLA_INTERVAL_DAYS,
         )
