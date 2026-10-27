@@ -134,6 +134,20 @@ Gate: Marks ja per stap. Rollback: BM weer starten en HEMS op dry-run; het schem
 
 **Fase 6, afbouwen.** battery-manager en energy-prices verwijderen (na een rustige periode), repository-docs bijwerken (AGENTS.md, install.md, README van de add-ons), HEMS-versie vastzetten en een releaseproces voor de integratie.
 
+### Voortgang fase 1 (27 okt 2026)
+
+Gedaan, met Marks akkoord:
+- HEMS-build `b988d0f`: `sensor.hems_import_price` en `sensor.hems_export_price` hebben nu `price_curve` (hele lokale dag, UTC, start/end/price, de vorm van energy-prices) naast `curve`; vier nieuwe sensoren `hems_price_average_today`, `hems_price_min_today`, `hems_price_max_today`, `hems_max_profit_today`.
+- Pariteit gemeten: importcurve 96 van 96 kwartieren, maximaal 0,0001 verschil; gemiddelde gelijk (0,3216), minimum en maximum binnen 0,0001. **Export wijkt bewust af** (HEMS geeft de zonnebonus alleen overdag en bij een positieve prijs): gemiddeld 0,012, maximaal 0,035 lager; `max_profit_today` is daardoor 0,3421 tegen 0,3755 bij energy-prices.
+- `sensor.current_price` (helper) leest nu `sensor.hems_import_price`; de zes airco- en kachelautomations volgen.
+- Water-heater-add-on: `price_sensor_entity_id` is `sensor.hems_import_price` (alleen dat veld gewijzigd, de rest van de opties is intact), add-on herstart; hij leest €0,336 en plant hetzelfde venster als eerst (12:00 tot 13:00). `sensor.wh_heating_plan` bestaat weer.
+- Overzichtsdashboard: de negen verwijzingen naar energy-prices (drie tegels, vier chartreeksen) wijzen naar HEMS. Back-up van de vorige configuratie: scratchpad van deze sessie (`lovelace-overview-backup.json`).
+
+Nog niet gedaan: energy-prices stoppen (na een week meekijken, beslist), de `price_curve_entity`-rol van HEMS (terugval en controle) omzetten of verwijderen, het dashboard `battery-management` (BM-tegels, fase 2).
+
+Opgemerkt: `sensor.energy_prices_electricity_import_price` heeft een staat (0,1783) die niet bij zijn eigen curve past (0,3236 in dat kwartier); wie de staat leest, kreeg al een afwijkende waarde. De helper en de boiler lazen de curve.
+**Legionella:** de water-heater-add-on meldt `needs_protection=True, next_due=Now` met laatste run 17 okt; de run van zaterdag 24 okt is uitgebleven en de add-on voert hem ook nu niet uit. Niet door deze wijziging veroorzaakt; wel uit te zoeken.
+
 ## 7. Voorwaarden, risico's en beslissingen
 
 ### 7.1 Risico's
