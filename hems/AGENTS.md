@@ -13,6 +13,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 | `scripts/hems_trace.py` | Reads the decision logs (`/config/hems/*.jsonl`): `--pull`, `tail`, `show`, `why`, `diff`, `events`. See `../docs/hems/install.md`. |
 | `hems/core/hems/windows.py` | Read-only analysis of sell windows: detection (two cost bases), which charge feeds which sale, status per window, kWh sold outside any window. |
 | `hems/core/hems/heater.py` | The switchable water heater module: plans the daily heating runs with the water-heater add-on's rule (cheapest night and day window) for the load forecast; it never controls the heater. |
+| `hems/core/hems/ev.py` | The switchable EV module: one planner with a deadline schedule, a price threshold and PV surplus as priced terms, plus the setpoint with minimum on/off times. Proposes only; the HA layer reads the entities and never writes to the charger. See `../docs/hems/ev-module-plan.md`. |
 | `hems/core/hems/terminal.py` | Value of energy kept past the horizon from the typical peak of the last days (replay-tested, not wired into the live integration: the 12-day simulation showed little gain, see `../docs/hems/observations/margin-study-2026-10-17.md`). |
 | `hems/core/hems/decision_log.py` | What makes a decision followable: plan segments, best later opportunities, the compact full-plan record, settings hash. |
 | `tests/hems_ha/` | Integration tests (need the pinned Home Assistant test plugin, see below). |
@@ -22,7 +23,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 ## Rules that are easy to break
 
 - Edit `hems/core`, then run `python3 scripts/sync_hems_core.py`. A core test fails when the engine copy is stale.
-- The integration only plans (dry-run). It must not call a device service. Writing to a device is a separate, explicitly approved change.
+- The integration only plans (dry-run). It must not call a device service. The one switch HEMS owns (`switch.hems_ev_force_charge`) changes the plan, not a device. Writing to a device is a separate, explicitly approved change.
 - Every function gets a short intent docstring, tests included. Verify with an AST scan before finishing.
 - Prices: the percentage Zonnebonus applies only in daylight and for a positive price (both switchable); the energy-prices add-on code applies it always, do not copy that.
 - The minimum profit margin (`min_profit_margin`, default 0.10 EUR/kWh) is a planner threshold, never a cost. Replay and sensors report cash.

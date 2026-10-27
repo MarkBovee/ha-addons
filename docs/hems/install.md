@@ -19,7 +19,7 @@ Snelste route: `python3 hems/deploy.py --dry-run` en daarna `python3 hems/deploy
 | PV-vermogen | `sensor.battery_api_pv_power` | |
 | Netvermogen | `sensor.power_usage` | positief = import |
 | AC-uitgang omvormer (optioneel) | `sensor.saj_total_grid_power` | geeft het huisverbruik als P1 + omvormer, zoals in de ontwerpregels |
-| EV-vermogen (optioneel) | `sensor.charge_amps_monitor_charger_current_power` | wordt van het basisverbruik afgetrokken |
+| EV-vermogen (optioneel) | `sensor.ocpp_hub_ed13009a_power` | wordt van het basisverbruik afgetrokken (sinds 22 okt de NEO; de Charge Amps is uit) |
 | Prijscurve (optioneel) | `sensor.energy_prices_electricity_import_price` | terugval als Nord Pool uitvalt en controle op de eigen prijsberekening; moet een `price_curve`-attribuut hebben (`start`, `end`, `price`) |
 
 4. Instellingen, HEMS, Configureren: de standaardwaarden zijn de besluiten uit `docs/hems/intake-decisions.md` (capaciteit 25 kWh, 8 kW, vloer 5 %, reserve 30 %, round trip 0,82, minimale winstmarge 0,10, wachtkosten 0,002, prijscomponenten zoals energy-prices, Nord Pool aan voor zone NL). PV-factor 0 betekent automatisch kalibreren op de opgenomen PV. Het piekvermogen PV (standaard 5000 W: de panelen haalden deze week maximaal 4964 W, de omvormer kan 8 kW) kapt de PV-verwachting af; staat het te hoog, dan voorspelt HEMS op zonnige dagen meer PV dan de panelen kunnen leveren.
@@ -168,6 +168,26 @@ python3 scripts/hems_trace.py why 18:30              # waarom het plan om 18:30 
 python3 scripts/hems_trace.py diff 15:00 15:15       # welke kwartieren het nieuwe plan anders plant dan het vorige
 python3 scripts/hems_trace.py events --type market   # Nord Pool-ophaalacties
 ```
+
+### EV-module (aan/uit, dry-run)
+
+De EV-module plant per kwartier wanneer en hoe hard de auto laadt. Hij schrijft **nooit** naar de lader: je ziet een plan en een setpoint dat verstuurd zou worden. Ontwerp en beslissingen: `docs/hems/ev-module-research.md` en `docs/hems/ev-module-plan.md`.
+
+Eén planner met drie geprijsde termen: de *verplichte* energie (doel-SoC bij de volgende deadline van het weekschema, standaard maandag en donderdag 07:30) gaat naar de goedkoopste kwartieren ervoor; de *extra* energie (tot de maximale doel-SoC) alleen naar kwartieren waarvan de effectieve prijs onder de drempel ligt; een kwartier met PV-overschot kost tegen de exportprijs in plaats van de importprijs, dus laden op zon volgt uit de prijs. Zonder deadline (of op een dag zonder) werkt alleen de prijsdrempel. De EV-planning komt als vaste last in de belastingsverwachting, zodat de batterijplanner eromheen plant, en in de batterijplanning geldt een plafond op laden uit het net per kwartier (3 x (limiet min marge) ampère) zodra de module aan staat.
+
+**Rollen** (alle optioneel; Instellingen, HEMS, Opnieuw configureren): `EV: auto aangesloten` (`binary_sensor.ocpp_hub_ed13009a_plugged_in`), `EV: auto laadt` (`…_car_charging`), `EV: socket probleem` (`…_problem`), `EV: laadtoestand auto` (`sensor.ev4_ev_battery_level`), `EV: laadlimiet-number` (`number.ocpp_hub_ed13009a_charge_limit`, alleen het maximum wordt gelezen), laderstroom L1 tot L3 (`sensor.ocpp_hub_ed13009a_current_l1` …), netmeterstroom L1 tot L3 (`sensor.electricity_meter_current_phase_l1` …) en terugleververmogen L1 tot L3 (`sensor.electricity_meter_power_production_phase_l1` …; boven 0 betekent terugleveren, want de stroomsensor heeft geen teken). `EV-vermogen` blijft de lader-vermogenssensor die van het basisverbruik wordt afgetrokken. Met `Meer PV-sensoren` tel je meerdere velden of omvormers bij de PV-sensor op.
+
+**Instellingen** (sectie Module: EV en Basis: netaansluiting): aan/uit, accucapaciteit (81,4 kWh), laadrendement (0,90, nog te meten), verplichte en maximale doel-SoC (80 en 100 %), prijsdrempel (EUR/kWh, effectieve prijs), alleen-op-overschot, minimale en maximale stroom (6 en 16 A), minimaal aan en uit (10 minuten), de zeven deadlines (UU:MM, leeg = geen) en de aansluitlimiet per fase (25 A) met marge (1 A).
+
+| Entiteit | Betekenis |
+|---|---|
+| `sensor.hems_ev_plan` | begin van het eerste geplande laadkwartier; attributen `status`, `reason`, `deadline`, `required_kwh`, `optional_kwh`, `planned_kwh`, `shortfall_kwh` en `quarters` (stroom, kWh, effectieve prijs, overschot, laag) |
+| `sensor.hems_ev_status` | `off`, `not_plugged`, `no_soc`, `problem`, `idle`, `planned`, `deadline_at_risk` of `forced` |
+| `sensor.hems_ev_setpoint` | de stroom per fase die nu verstuurd zou worden, na de minimale aan- en uittijd en de ruimte per fase uit de live meter; attributen `planned_a`, `code`, `reason`, `allowed_a` |
+| `switch.hems_ev_force_charge` | override: zo vroeg en zo hard als toegestaan laden tot de verplichte doel-SoC, ongeacht de prijs; eindigt bij loskoppelen of bij het doel en staat na een herstart uit |
+
+De salderingsregeling stopt op 1 januari 2027: `Saldering stopt op` (Basis: prijzen, standaard 2027-01-01) laat de exportprijs vanaf die dag zonder btw en zonder energiebelasting-teruggave rekenen, kwartier voor kwartier. Controleer bij je leverancier of btw nog meespeelt.
+
 
 ## Beoordelen
 
