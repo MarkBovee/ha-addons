@@ -245,6 +245,18 @@
       },
       "ev_setpoint": {
         "name": "EV setpoint"
+      },
+      "price_average_today": {
+        "name": "Average price today"
+      },
+      "price_min_today": {
+        "name": "Minimum price today"
+      },
+      "price_max_today": {
+        "name": "Maximum price today"
+      },
+      "max_profit_today": {
+        "name": "Max profit today"
       }
     },
     "binary_sensor": {

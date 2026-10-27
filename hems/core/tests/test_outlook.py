@@ -121,3 +121,33 @@ def test_equal_blocks_take_the_earliest_and_a_short_horizon_has_no_block():
     """A flat curve starts at once; fewer known quarters than the block needs is None, never a shorter block that reads cheaper."""
     assert cheapest_block(import_series(0.3, 0.3, 0.3, 0.3), START, quarters=2)["begin"] == START
     assert cheapest_block(import_series(0.3, 0.3), START, quarters=3) is None
+
+
+def _day_series() -> PriceSeries:
+    """A local day of 96 quarters (UTC grid) plus the first quarter of the next day: imports 0.10 to 0.40, exports 0.05 to 0.35."""
+    first = datetime(2026, 10, 26, 23, 0, tzinfo=timezone.utc)                  # 00:00 local on 27 Oct (CET after the clock change on 25 Oct)
+    starts = tuple(first + i * QUARTER for i in range(97))
+    imports = tuple(round(0.10 + 0.30 * (i % 96) / 95, 4) for i in range(97))
+    return PriceSeries(starts, imports, tuple(round(p - 0.05, 4) for p in imports))
+
+
+def test_the_price_curve_for_a_day_keeps_the_past_quarters_in_the_shape_of_the_energy_prices_sensor():
+    """Intent: the curve starts at local midnight even late in the day, carries start, end and price in UTC, and includes the following day's known quarters.
+    Why: the water heater add-on and the dashboard charts read the whole day from the old sensor; a curve that starts at 'now' would break them."""
+    from hems.outlook import price_curve_for_day
+    series = _day_series()
+    now = datetime(2026, 10, 27, 12, 7, tzinfo=timezone.utc)
+    curve = price_curve_for_day(series, "import", now, LOCAL_TZ)
+    assert len(curve) == 97 and curve[0] == {"start": "2026-10-26T23:00:00+00:00", "end": "2026-10-26T23:15:00+00:00", "price": 0.1}
+    assert price_curve_for_day(series, "export", now, LOCAL_TZ)[0]["price"] == 0.05
+
+
+def test_the_day_statistics_are_those_of_the_local_day_only():
+    """Intent: average, minimum, maximum import, maximum export and maximum profit cover the 96 quarters of the local day, not the quarter of tomorrow.
+    Why: the dashboard tiles say 'today'; tomorrow's first quarter must not move them."""
+    from hems.outlook import day_price_stats
+    series = _day_series()
+    stats = day_price_stats(series, datetime(2026, 10, 27, 12, 7, tzinfo=timezone.utc), LOCAL_TZ)
+    assert stats["minimum"] == 0.10 and stats["maximum"] == 0.40 and abs(stats["average"] - 0.25) < 1e-6
+    assert stats["max_export"] == 0.35 and abs(stats["max_profit"] - 0.25) < 1e-6
+    assert day_price_stats(series, datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc), LOCAL_TZ) is None

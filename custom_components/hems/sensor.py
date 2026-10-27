@@ -13,7 +13,7 @@ from homeassistant.util import dt as dt_util
 from . import HemsConfigEntry
 from .coordinator import HemsCoordinator, HemsSnapshot
 from .engine import ev as ev_module, executor
-from .engine.outlook import cheapest_block, first_window, forecast_series, hour_mean, hour_total, price_curve, window_total
+from .engine.outlook import cheapest_block, day_price_stats, first_window, forecast_series, hour_mean, hour_total, price_curve, price_curve_for_day, window_total
 from .engine.windows import record
 from .entity import HemsEntity
 
@@ -151,9 +151,23 @@ def _weather_series(snap: HemsSnapshot, field: str):
 
 
 def _price_attrs(snap: HemsSnapshot, field: str) -> dict[str, Any]:
-    """Every known price from this quarter on (today and, once published, tomorrow), in local time."""
+    """Every known price from this quarter on (today and, once published, tomorrow), in local time as `curve`; and as `price_curve` the whole
+    current day onward in UTC with start, end and price, which is the shape of the energy-prices sensor so its consumers can read this one."""
     start, prices = _start(snap), snap.output.prices
-    return {"curve": price_curve(prices, field, start, dt_util.get_default_time_zone())} if start and prices else {}
+    if not start or not prices:
+        return {}
+    tz = dt_util.get_default_time_zone()
+    return {"curve": price_curve(prices, field, start, tz), "price_curve": price_curve_for_day(prices, field, start, tz)}
+
+
+def _day_stat(key: str):
+    """A sensor value: one statistic of today's prices (EUR/kWh, four decimals), or None without prices for the local day."""
+    def value(snap: HemsSnapshot) -> float | None:
+        """The statistic for the day of the current quarter."""
+        start, prices = _start(snap), snap.output.prices
+        stats = day_price_stats(prices, start, dt_util.get_default_time_zone()) if start and prices else None
+        return round(stats[key], 4) if stats else None
+    return value
 
 
 def _cheapest_charge(snap: HemsSnapshot) -> dict | None:
@@ -231,6 +245,9 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           value=lambda s: _window_start(s, "discharge"), attributes=lambda s: _window_attrs(s, "discharge")),
     HemsSensorDescription(key="water_heater_plan", translation_key="water_heater_plan", device_class=SensorDeviceClass.TIMESTAMP,
                           value=_heating_start, attributes=_heating_attrs),
+    *(HemsSensorDescription(key=key, translation_key=key, native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+                            state_class=SensorStateClass.MEASUREMENT, value=_day_stat(stat))
+      for key, stat in (("price_average_today", "average"), ("price_min_today", "minimum"), ("price_max_today", "maximum"), ("max_profit_today", "max_profit"))),
     HemsSensorDescription(key="ev_plan", translation_key="ev_plan", device_class=SensorDeviceClass.TIMESTAMP, value=_ev_start, attributes=_ev_attrs),
     HemsSensorDescription(key="ev_status", translation_key="ev_status", device_class=SensorDeviceClass.ENUM, options=EV_STATUSES,
                           value=lambda s: s.output.ev_plan.status if s.output.ev_plan else None),
@@ -255,7 +272,7 @@ class HemsSensor(HemsEntity, SensorEntity):
     entity_description: HemsSensorDescription
 
     # Series of up to a few thousand characters change every quarter and say nothing in history: keep them out of the recorder.
-    _unrecorded_attributes = frozenset({"slots", "curve", "forecast", "windows", "markdown", "quarters"})
+    _unrecorded_attributes = frozenset({"slots", "curve", "price_curve", "forecast", "windows", "markdown", "quarters"})
 
     def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry, description: HemsSensorDescription) -> None:
         """Bind to the coordinator under the shared device."""

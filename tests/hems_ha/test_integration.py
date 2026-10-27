@@ -748,7 +748,7 @@ def test_entity_names_are_english_in_every_language():
     names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
                     for key, ent in group.items()} for file in ("strings", "translations/en", "translations/nl")}
     assert names["translations/nl"] == names["translations/en"] == names["strings"]
-    assert len(names["strings"]) == 22 and names["strings"][("sensor", "charge_window")] == "Charge window"
+    assert len(names["strings"]) == 26 and names["strings"][("sensor", "charge_window")] == "Charge window"
 
 
 EV_ROLES = {**ROLES, CONF_EV_PLUGGED: "binary_sensor.car_plugged", CONF_EV_CHARGING: "binary_sensor.car_charging", CONF_EV_SOC: "sensor.car_soc",
@@ -809,3 +809,17 @@ async def test_the_netting_date_can_be_cleared_in_the_settings_form(recorder_moc
     await hass.config_entries.options.async_configure(form["flow_id"], {"base_prices": {"salderen_until": ""}})
     await hass.async_block_till_done()
     assert entry.options["salderen_until"] == ""
+
+
+async def test_the_price_sensors_serve_the_energy_prices_consumers(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Intent: hems_import_price carries `price_curve` for the whole local day in UTC with start, end and price, and the four day statistics are filled.
+    Why: the water heater add-on, a chart and a template read exactly this shape from the energy-prices sensor; moving them needs no change in them."""
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    curve = hass.states.get("sensor.hems_import_price").attributes["price_curve"]
+    assert {"start", "end", "price"} == set(curve[0]) and datetime.fromisoformat(curve[0]["start"]).tzinfo is not None
+    assert datetime.fromisoformat(curve[0]["start"]) < NOW, "quarters that already passed are part of the curve"
+    assert datetime.fromisoformat(curve[0]["start"]) < datetime.fromisoformat(curve[1]["start"])
+    low, high = float(hass.states.get("sensor.hems_price_min_today").state), float(hass.states.get("sensor.hems_price_max_today").state)
+    average, profit = float(hass.states.get("sensor.hems_price_average_today").state), float(hass.states.get("sensor.hems_max_profit_today").state)
+    assert low <= average <= high and profit > 0

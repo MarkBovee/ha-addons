@@ -5,7 +5,7 @@ a charge or discharge window, the price curve and the first window of the plan.
 The planner works on these same series; this module only reads them out for sensors and dashboards, so what a user
 sees is exactly what the plan was computed from.
 """
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from typing import Mapping, Sequence
 
 from .prices import PriceSeries
@@ -58,6 +58,34 @@ def price_curve(prices: PriceSeries, field: str, start: datetime, tz: tzinfo) ->
     """Every known price from `start` on as [{"start": local ISO time, "price": EUR/kWh}]; field is 'import' or 'export'."""
     values = prices.import_eur_kwh if field == "import" else prices.export_eur_kwh
     return [{"start": t.astimezone(tz).isoformat(), "price": round(v, 4)} for t, v in zip(prices.starts, values) if t >= start]
+
+
+def _local_day(prices: PriceSeries, now: datetime, tz: tzinfo) -> list[int]:
+    """The indexes of the quarters that start on the local day of `now`."""
+    day = now.astimezone(tz).date()
+    return [i for i, t in enumerate(prices.starts) if t.astimezone(tz).date() == day]
+
+
+def price_curve_for_day(prices: PriceSeries, field: str, now: datetime, tz: tzinfo) -> list[dict]:
+    """The quarters of the local day of `now` and everything known after it, as [{"start", "end", "price"}] with UTC ISO times.
+
+    This is the shape of the `price_curve` attribute of the energy-prices sensor (whole current day, past quarters included), so a
+    consumer written for that sensor, such as the water heater add-on, a dashboard chart or a template, can read this one instead."""
+    values = prices.import_eur_kwh if field == "import" else prices.export_eur_kwh
+    first = datetime.combine(now.astimezone(tz).date(), time.min, tz).astimezone(timezone.utc)
+    return [{"start": t.astimezone(timezone.utc).isoformat(), "end": (t + QUARTER).astimezone(timezone.utc).isoformat(), "price": round(v, 4)}
+            for t, v in zip(prices.starts, values) if t >= first]
+
+
+def day_price_stats(prices: PriceSeries, now: datetime, tz: tzinfo) -> dict[str, float] | None:
+    """Average, minimum and maximum import price of the local day of `now`, the maximum export price, and the maximum profit
+    (highest export price minus lowest import price), all EUR/kWh; None when the series holds no quarter of that day."""
+    days = _local_day(prices, now, tz)
+    if not days:
+        return None
+    imports, exports = [prices.import_eur_kwh[i] for i in days], [prices.export_eur_kwh[i] for i in days]
+    return {"average": sum(imports) / len(imports), "minimum": min(imports), "maximum": max(imports), "max_export": max(exports),
+            "max_profit": max(exports) - min(imports)}
 
 
 def _merge(runs: Sequence[Mapping]) -> dict:
