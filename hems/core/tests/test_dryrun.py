@@ -99,3 +99,32 @@ def test_a_market_alone_is_enough_and_no_prices_anywhere_is_reported():
     """The market alone suffices; with neither source the status is no_prices."""
     assert step(inputs(import_curve=[], market=market_for()), SETTINGS).trace["price_source"] == "market"
     assert step(inputs(import_curve=[], market=None), SETTINGS).status == STATUS_NO_PRICES
+
+
+def test_the_ev_module_adds_its_plan_to_the_load_the_battery_plans_around():
+    """Intent: with the EV module on and a car plugged in, the planned charge appears in the load forecast and in the trace; with it off, neither does.
+    Why: the battery must see the car as a load, and a module that is off must not change today's plans."""
+    from dataclasses import replace
+    from hems.ev import EvConfig, EvState
+    cfg = EvConfig(enabled=True, max_price_eur_kwh=0.60, target_required_pct=40.0)
+    settings = replace(SETTINGS, ev=cfg)
+    car = EvState(True, Reading(40.0, NOW - timedelta(minutes=1)))
+    off = step(inputs(), SETTINGS)
+    on = step(inputs(ev=car), settings)
+    assert "ev" not in off.trace and off.ev_plan is None
+    assert on.ev_plan.quarters and on.trace["ev"]["planned_kwh"] > 0
+    extra = sum(on.load_kwh.values()) - sum(off.load_kwh.values())
+    assert abs(extra - on.ev_plan.planned_kwh()) < 1e-6
+
+
+def test_the_connection_limit_caps_grid_charging_when_the_ev_module_is_on():
+    """Intent: with a low grid limit the battery plan never imports more than the connection allows in a quarter.
+    Why: a battery charging at 8 kW next to a car at 11 kW is more than 3x25 A; the limit is physical, not a price."""
+    from dataclasses import replace
+    from hems.ev import EvConfig, EvState
+    settings = replace(SETTINGS, ev=EvConfig(enabled=True), grid_limit_a=9.0, grid_margin_a=1.0)
+    out = step(inputs(ev=EvState(False, None)), settings)
+    cap = 3 * 230 * 8 / 1000 * 0.25
+    assert max(slot.grid_kwh for slot in out.decision.plan.slots) <= cap + 1e-6
+    uncapped = step(inputs(), SETTINGS)
+    assert max(slot.grid_kwh for slot in uncapped.decision.plan.slots) > cap

@@ -38,6 +38,7 @@ class HorizonInputs:
     max_slots: int = 192                     # 48 h; the known prices usually end earlier
     terminal_value: float | None = None
     history_peak: float | None = None        # typical recent peak (hems.terminal.reference_peak): values energy kept past the horizon; None = the default
+    import_cap_kwh: float | None = None      # most grid energy per quarter the connection may deliver; None = no cap
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ def _build_slots(inputs: HorizonInputs, start: datetime) -> tuple[list[Slot], in
             break
         load, pv = inputs.load_kwh.get(at), inputs.pv_kwh.get(at)
         missing += load is None or pv is None
-        slots.append(Slot(*by_start[at], load_kwh=load or 0.0, pv_kwh=pv or 0.0))
+        slots.append(Slot(*by_start[at], load_kwh=load or 0.0, pv_kwh=pv or 0.0, import_cap_kwh=inputs.import_cap_kwh))
     return slots, missing
 
 

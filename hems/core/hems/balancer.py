@@ -33,3 +33,52 @@ def allocate(house_w: float, loads: list[Load], grid_limit_w: float = 15000.0,
         granted[ld.name] = give
         headroom -= give
     return granted
+
+
+PHASES = 3
+
+
+@dataclass
+class PhaseLoad:
+    """A load measured in amperes per phase: `share` is the current it draws on each phase per ampere granted (a three-phase EV or
+    battery is (1, 1, 1); a boiler on the second phase is (0, 1, 0))."""
+    name: str
+    wanted_a: float
+    priority: int            # lower = more important
+    min_a: float = 0.0       # below this the load is switched off (an EV charges from 6 A)
+    share: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    controllable: bool = True
+
+
+def phase_room_a(used_a: list[float], share: tuple[float, float, float], limit_a: float) -> float:
+    """The most current a load with this `share` can still get: the tightest phase it draws on decides; a load on no phase is not limited."""
+    rooms = [(limit_a - used_a[p]) / share[p] for p in range(PHASES) if share[p] > 0]
+    return max(min(rooms), 0.0) if rooms else float("inf")
+
+
+def allocate_phases(house_a: tuple[float, float, float], loads: list[PhaseLoad], limit_a: float = 25.0, margin_a: float = 1.0,
+                    hysteresis_a: float = 1.0, previous: dict[str, float] | None = None) -> dict[str, float]:
+    """Granted current per load so that no phase goes over `limit_a` minus `margin_a`.
+
+    house_a is the current the uncontrollable rest of the house draws per phase (signed: export counts negative). Uncontrollable
+    loads are deducted first; controllable loads then take what the tightest phase leaves, by priority, and a load that cannot get
+    its minimum gets 0. A load that was running keeps its minimum alive with `hysteresis_a` of slack, which is the one case where a
+    phase can exceed the limit minus the margin, by at most that slack (the margin is there to absorb it)."""
+    previous = previous or {}
+    ceiling = limit_a - margin_a
+    used = list(house_a)
+    granted: dict[str, float] = {}
+    for load in (ld for ld in loads if not ld.controllable):
+        granted[load.name] = load.wanted_a
+        used = [used[p] + load.share[p] * load.wanted_a for p in range(PHASES)]
+    for load in sorted((ld for ld in loads if ld.controllable), key=lambda ld: ld.priority):
+        running = previous.get(load.name, 0) > 0
+        give = min(load.wanted_a, phase_room_a(used, load.share, ceiling))
+        floor = load.min_a - (hysteresis_a if running else 0.0)
+        if give < floor:
+            give = 0.0
+        elif give < load.min_a:
+            give = load.min_a
+        granted[load.name] = give
+        used = [used[p] + load.share[p] * give for p in range(PHASES)]
+    return granted

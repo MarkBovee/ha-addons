@@ -256,3 +256,30 @@ def test_export_price_drops_when_netting_ends_on_the_date():
     assert after == pytest.approx(PriceModel(salderen=False, bonus_only_daylight=False).export_price(0.10, True))
     assert before - after > 0.10
     assert PriceModel().export_price(0.10, True) == PriceModel(netting_ends=date(2027, 1, 1)).export_price(0.10, True)
+
+
+def test_phase_balancer_limits_the_ev_by_the_busiest_phase():
+    """Intent: a three-phase EV gets what the busiest house phase leaves under 25 A minus the margin, and nothing when that is under 6 A.
+    Why: the 3x25 A limit is per phase; a total-watts balancer lets the EV overload one phase while the others are idle."""
+    from hems.balancer import PhaseLoad, allocate_phases
+    ev = PhaseLoad("ev", 16.0, priority=2, min_a=6.0)
+    assert allocate_phases((10.0, 12.0, 8.0), [ev])["ev"] == pytest.approx(12.0)
+    assert allocate_phases((20.0, 5.0, 5.0), [ev])["ev"] == 0.0
+    assert allocate_phases((-10.0, -10.0, -10.0), [ev])["ev"] == 16.0
+
+
+def test_phase_balancer_serves_the_single_phase_boiler_first_and_keeps_a_running_load_alive():
+    """Intent: a more important single-phase load takes its phase first; a running EV keeps its minimum within the hysteresis.
+    Why: the priority order decides who is cut, and a load that flaps around its minimum current wears the charger."""
+    from hems.balancer import PhaseLoad, allocate_phases
+    boiler = PhaseLoad("boiler", 8.7, priority=1, min_a=8.7, share=(0.0, 1.0, 0.0))
+    ev = PhaseLoad("ev", 16.0, priority=2, min_a=6.0)
+    house = (5.0, 12.0, 5.0)
+    assert allocate_phases(house, [boiler, ev])["boiler"] == pytest.approx(8.7)
+    assert allocate_phases(house, [boiler, ev])["ev"] == 0.0                       # L2 holds 20.7 A, 3.3 A are left
+    assert allocate_phases((5.0, 12.0, 5.0), [ev])["ev"] == pytest.approx(12.0)
+    tight = (5.0, 18.5, 5.0)                                                       # 5.5 A left on L2: under the minimum
+    assert allocate_phases(tight, [ev])["ev"] == 0.0
+    assert allocate_phases(tight, [ev], previous={"ev": 6.0})["ev"] == 6.0           # running: kept alive by the hysteresis
+    fixed = PhaseLoad("oven", 10.0, priority=0, controllable=False)
+    assert allocate_phases((5.0, 5.0, 5.0), [fixed, ev])["ev"] == pytest.approx(9.0)

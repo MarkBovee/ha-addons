@@ -295,3 +295,11 @@ def setpoint(plan: EvPlan, now: datetime, state: EvState, config: EvConfig, allo
         current = 0.0
         code = code if code != "as_planned" else "below_minimum"
     return EvSetpoint(current, planned, code, reason)
+
+
+def ev_record(plan: EvPlan, limit: int = 16) -> dict:
+    """The plan as a compact record for the decision trace: the status and numbers, and the first quarters as [start, A, EUR/kWh, tier]."""
+    return {"status": plan.status, "reason": plan.reason, "deadline": plan.deadline.isoformat() if plan.deadline else None,
+            "required_kwh": round(plan.required_kwh, 2), "optional_kwh": round(plan.optional_kwh, 2), "shortfall_kwh": round(plan.shortfall_kwh, 2),
+            "planned_kwh": round(plan.planned_kwh(), 2), "quarters": len(plan.quarters),
+            "first": [[q.start.isoformat(), q.current_a, round(q.price, 4), q.tier] for q in plan.quarters[:limit]]}

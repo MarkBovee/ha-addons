@@ -41,6 +41,7 @@ class Slot:
     load_kwh: float = 0.0            # house consumption in the slot
     pv_kwh: float = 0.0              # PV production in the slot
     reserve_soc: float | None = None  # reserve floor for this slot (fraction); None = BatteryConfig.reserve_soc
+    import_cap_kwh: float | None = None  # most grid energy the connection may deliver in the slot; charging never takes the import above it (None = no cap)
 
 
 @dataclass
@@ -196,6 +197,8 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
                     # only allow charging from surplus PV
                     if ac > max(0.0, -net) + 1e-9:
                         continue
+                if d > 0 and s.import_cap_kwh is not None and net + ac > s.import_cap_kwh + 1e-9:
+                    continue                                  # a physical limit of the connection (3x25 A), not a price: holding or discharging stays possible
                 c = _grid_cost(net + ac, s) + (cfg.min_profit_margin * -ac if ac < 0 else 0.0) + hold * k2
                 c += value[t + 1][k2]
                 if c < best:

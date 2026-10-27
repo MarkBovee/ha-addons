@@ -14,10 +14,11 @@ from hems.contracts import MarketPrices, Reading
 from hems.decision_log import plan_detail
 from hems.forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
 from hems.prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
+from hems.ev import EvConfig, EvPlan, EvState, ev_kwh_per_quarter, ev_record, plan_ev
 from hems.heater import HeatingRun, WaterHeaterConfig, plan_runs, run_kwh_per_quarter, without_daily_peak
 from hems.pvforecast import pv_kwh_per_quarter
 from hems.rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
-from hems.slots import slot_starts
+from hems.slots import SLOT_H, slot_starts
 
 STATUS_OK = "ok"
 STATUS_NO_SOC = "no_soc"
@@ -40,6 +41,10 @@ class EngineSettings:
     max_slots: int = 192
     tz: ZoneInfo = LOCAL_TZ
     water_heater: WaterHeaterConfig = field(default_factory=WaterHeaterConfig)   # the switchable water heater module (off = the heater stays in the history)
+    ev: EvConfig = field(default_factory=EvConfig)                              # the switchable EV module (off = no EV plan and no grid cap)
+    grid_limit_a: float = 25.0                                                  # the connection's limit per phase (3x25 A)
+    grid_margin_a: float = 1.0                                                  # kept free below the limit: the meter and the charger answer with a delay
+    grid_voltage_v: float = 230.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,7 @@ class EngineInputs:
     load_history_w: Sequence[tuple[datetime, float]]  # hourly mean base load, timezone-aware hour starts
     ghi_w_m2: Mapping[datetime, float] | None         # irradiance by quarter start; None = no weather data
     market: MarketPrices | None = None                # preferred price source: market prices, priced by the model
+    ev: EvState | None = None                         # the car and its socket; None = unknown (the EV module then says so)
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,7 @@ class EngineOutput:
     trace: dict
     detail: dict | None = None               # the full plan as compact arrays (hems.decision_log.plan_detail)
     heating_runs: tuple[HeatingRun, ...] = ()   # the water heater module's planned runs (empty when it is off)
+    ev_plan: EvPlan | None = None               # the EV module's plan (None when it is off)
 
 
 def _failure(status: str, inputs: EngineInputs, **extra) -> EngineOutput:
@@ -110,6 +117,30 @@ def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: dateti
     return load, source
 
 
+def _import_cap_kwh(settings: EngineSettings) -> float | None:
+    """The grid energy per quarter the connection can deliver on a balanced three-phase load, or None while the EV module is off.
+
+    The cap only exists with the EV module on: it is the car that makes the connection tight, and a plan that did not change should not."""
+    if not settings.ev.enabled:
+        return None
+    return settings.ev.phases * settings.grid_voltage_v * (settings.grid_limit_a - settings.grid_margin_a) / 1000 * SLOT_H
+
+
+def surplus_kwh_per_quarter(pv: Mapping[datetime, float], load: Mapping[datetime, float]) -> dict[datetime, float]:
+    """The PV surplus per quarter: what PV produces above the house load (and the loads HEMS plans itself), never negative.
+
+    The part of the planned load that is the EV itself must not be in `load`: the surplus is what the car could take."""
+    return {quarter: max(kwh - load.get(quarter, 0.0), 0.0) for quarter, kwh in pv.items()}
+
+
+def _ev_plan(inputs: EngineInputs, settings: EngineSettings, prices: PriceSeries, load: Mapping[datetime, float], pv: Mapping[datetime, float]) -> EvPlan | None:
+    """The EV module's plan for this cycle, or None when the module is off."""
+    if not settings.ev.enabled:
+        return None
+    state = inputs.ev or EvState(plugged=None, soc_pct=None)
+    return plan_ev(prices, surplus_kwh_per_quarter(pv, load), inputs.now, settings.ev, state, settings.tz)
+
+
 def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | None = None) -> EngineOutput:
     """Plan the battery for the current quarter, or say why that is not possible."""
     cfg = settings.battery
@@ -124,8 +155,13 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
     runs = tuple(plan_runs(prices, inputs.now, settings.water_heater, settings.tz))
     load, load_source = _load_forecast(inputs, settings, start, settings.max_slots, runs)
     pv = pv_kwh_per_quarter(inputs.ghi_w_m2 or {}, settings.pv_gain_w_per_wm2, settings.pv_max_ac_w)
+    ev_plan = _ev_plan(inputs, settings, prices, load, pv)
+    if ev_plan is not None:
+        for quarter, kwh in ev_kwh_per_quarter(ev_plan).items():       # the battery plans around the car, like around the heater
+            if quarter in load:
+                load[quarter] += kwh
     soc_kwh = inputs.soc_pct.value / 100 * cfg.capacity_kwh
-    decision = plan_next(HorizonInputs(inputs.now, soc_kwh, prices, load, pv, settings.max_slots), cfg)
+    decision = plan_next(HorizonInputs(inputs.now, soc_kwh, prices, load, pv, settings.max_slots, import_cap_kwh=_import_cap_kwh(settings)), cfg)
     if decision is None:
         return EngineOutput(STATUS_NO_PRICE_NOW, None, prices, load, pv,
                             {"status": STATUS_NO_PRICE_NOW, "price_source": source, "now": inputs.now.isoformat(),
@@ -139,4 +175,6 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
     shift = plan_shift(previous, decision)
     if shift:
         trace["plan_shift"] = shift
-    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace, plan_detail(decision), runs)
+    if ev_plan is not None:
+        trace["ev"] = ev_record(ev_plan)
+    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace, plan_detail(decision), runs, ev_plan)
