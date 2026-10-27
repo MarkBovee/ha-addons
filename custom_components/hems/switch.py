@@ -12,7 +12,7 @@ from .entity import HemsEntity
 
 async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     """The override switch of the EV module."""
-    async_add_entities([ForceChargeSwitch(entry.runtime_data, entry)])
+    async_add_entities([ForceChargeSwitch(entry.runtime_data, entry), MasterSwitch(entry.runtime_data, entry)])
 
 
 class ForceChargeSwitch(HemsEntity, SwitchEntity):
@@ -39,3 +39,25 @@ class ForceChargeSwitch(HemsEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """End the override."""
         await self.coordinator.set_force_charge(False)
+
+
+class MasterSwitch(HemsEntity, SwitchEntity):
+    """'HEMS may control': the master switch. Off after every restart on purpose.
+
+    No module writes to a device yet, so arming changes nothing today; it exists so the dashboard, the logbook and later
+    executors share one switch, and so 'everything off' is a single action from the first day."""
+
+    _attr_translation_key = "master_arm"
+
+    def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry) -> None:
+        super().__init__(coordinator, entry, "switch", "master_arm")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.control.armed
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_armed(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_armed(False)

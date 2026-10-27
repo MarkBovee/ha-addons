@@ -26,10 +26,38 @@ type: custom:hems-verdict-card
 chain: true
 ```
 
-## Nog niet (volgt met HEMS-uitbreidingen)
-- gerealiseerd resultaat t.o.v. zelfverbruik
-- P10–P90-banden op de verwachtingen
-- hoofdschakelaar, modi en advies (Toepassen/Negeren)
-- meldingen
-- vergelijking met de oude battery manager
-- geschiedenis/Leren
+## Resultaat en leren
+HEMS meet elke 10 s net, zon en batterij en prijst per kwartier (`sensor.hems_cost_today`). Tegelijk rekent het dezelfde zon en hetzelfde huis door met een batterij op alleen zelfverbruik (`sensor.hems_realised_vs_baseline_today`, `sensor.hems_realised_total`). Per kwartier bewaart het ook de eigen verwachting. Daaruit komen `sensor.hems_pv_forecast_error` en `sensor.hems_load_forecast_error` (MAE en bias in kWh/dag) en de P10–P90-banden in de tijdlijn. Die banden staan op een standaardwaarde tot er 96 bruikbare kwartieren zijn. De metingen staan in `.storage/hems.<entry_id>`; de laatste 8 dagen worden bewaard.
+
+Wijs bij **Reconfigure** optioneel nog drie entiteiten toe:
+- `water_heater_entity`: de boiler of de tanktemperatuur
+- `legionella_last_entity`: tijdstip van de laatste legionella-run
+- `compare_action_entity`: de actiesensor van de oude battery manager, voor de vergelijking per kwartier in **Leren**
+
+## Sturen en advies
+- `switch.hems_master_arm`: de hoofdschakelaar. Na elke herstart staat hij uit. Er schrijft nog geen module, dus wapenen verandert nu niets; het wordt wel gelogd.
+- `select.hems_{battery,ev,water_heater}_mode`: `dry_run` of `advisory`. `auto` komt pas met de eerste module die zelf stuurt.
+- `sensor.hems_recommendations`: open adviezen. Een genegeerd advies komt terug als het plan iets anders vraagt.
+- Services:
+  - `hems.apply_recommendation` met `id`: vuurt `hems_recommendation_applied` af met module, actie, van/tot en vermogen of stroom. Jouw automatisering voert het uit, zodat HEMS niets rechtstreeks aanstuurt.
+  - `hems.dismiss_recommendation` met `id`
+  - `hems.disarm_all`
+
+Voorbeeld voor de laadpaal:
+```yaml
+triggers:
+  - trigger: event
+    event_type: hems_recommendation_applied
+    event_data: {module: ev}
+actions:
+  - action: number.set_value
+    target: {entity_id: number.ocpp_hub_ed13009a_charge_limit}
+    data: {value: "{{ trigger.event.data.current_a }}"}
+```
+
+## Meldingen
+- `binary_sensor.hems_alert_data`, `_deadline`, `_not_executed` en `_legionella`, met de reden als attribuut.
+- Blueprint `blueprints/automation/hems/hems_notify.yaml`: kopieer hem naar `/config/blueprints/automation/hems/` of importeer hem via de GitHub-URL.
+- Stil tussen 22:00 en 08:00. Valt een melding in die uren, dan gaat hij om 08:00 alsnog uit als het alarm nog aan staat.
+- "Plan niet uitgevoerd" gaat bij een gewapende HEMS altijd direct door.
+- Ook "HEMS draait niet" (laatste cyclus ouder dan 30 min) geeft een melding.

@@ -1,0 +1,13 @@
+apply_recommendation:
+  fields:
+    id:
+      required: true
+      selector:
+        text:
+dismiss_recommendation:
+  fields:
+    id:
+      required: true
+      selector:
+        text:
+disarm_all:

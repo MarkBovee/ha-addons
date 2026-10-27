@@ -6,10 +6,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_state_change_event, async_track_utc_time_change
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval, async_track_utc_time_change
+from datetime import timedelta
 from homeassistant.helpers.typing import ConfigType
 
-from .const import BUILD_FILE, CONF_SOC, DOMAIN, PLATFORMS
+from .const import BUILD_FILE, CONF_SOC, DOMAIN, PLATFORMS, SAMPLE_SECONDS
+from .services import async_register_services
 from .coordinator import HemsCoordinator
 from .panel import async_register_panel, async_unregister_panel
 from .websocket import SIGNAL_UPDATE, async_register_commands
@@ -35,6 +37,7 @@ def _show_info_logs() -> None:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the panel's websocket commands once per run."""
     async_register_commands(hass)
+    async_register_services(hass)
     return True
 
 
@@ -51,6 +54,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool
     _show_info_logs()
     coordinator = HemsCoordinator(hass, entry)
     coordinator.build = await hass.async_add_executor_job(read_build)
+    await coordinator.async_load_state()
     _LOGGER.info("HEMS build %s", coordinator.build)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
@@ -65,6 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool
 
     entry.async_on_unload(async_track_utc_time_change(hass, _on_quarter, minute=(0, 15, 30, 45), second=PLAN_SECONDS))
     entry.async_on_unload(async_track_state_change_event(hass, [entry.data[CONF_SOC]], _on_soc_update))
+    entry.async_on_unload(async_track_time_interval(hass, coordinator.async_sample, timedelta(seconds=SAMPLE_SECONDS)))
     entry.async_on_unload(coordinator.async_add_listener(lambda: async_dispatcher_send(hass, SIGNAL_UPDATE)))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await async_register_panel(hass)
@@ -76,5 +81,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> boo
     """Unload the sensors; the quarter listener goes with the entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
+        await entry.runtime_data.async_save_now()
         async_unregister_panel(hass)
     return unloaded

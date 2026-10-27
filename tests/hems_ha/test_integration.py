@@ -749,7 +749,7 @@ def test_entity_names_are_english_in_every_language():
     names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
                     for key, ent in group.items()} for file in ("strings", "translations/en", "translations/nl")}
     assert names["translations/nl"] == names["translations/en"] == names["strings"]
-    assert len(names["strings"]) == 28 and names["strings"][("sensor", "charge_window")] == "Charge window"
+    assert len(names["strings"]) == 42 and names["strings"][("sensor", "charge_window")] == "Charge window"
 
 
 EV_ROLES = {**ROLES, CONF_EV_PLUGGED: "binary_sensor.car_plugged", CONF_EV_CHARGING: "binary_sensor.car_charging", CONF_EV_SOC: "sensor.car_soc",
@@ -912,3 +912,70 @@ async def test_the_panel_payload_follows_the_latest_snapshot_even_without_a_subs
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
     assert coordinator.dashboard_payload()["meta"]["cycle_at"] == coordinator.data.cycle_at.isoformat() != first
+
+
+async def test_the_ledger_measures_the_quarter_and_publishes_the_result(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Live power sampled every 10 s becomes priced energy per quarter; the cost and baseline sensors and the panel payload follow."""
+    set_states(hass, soc="60")
+    entry = await setup_entry(hass, freezer, aioclient_mock, now=EVENING)
+    hass.states.async_set("sensor.grid_power", "2000")
+    for _ in range(150):                                        # 25 minutes: the first full quarter after the start closes
+        freezer.tick(timedelta(seconds=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    cost = hass.states.get("sensor.hems_cost_today")
+    assert float(cost.state) > 0 and cost.attributes["quarters"] >= 1
+    assert hass.states.get("sensor.hems_realised_vs_baseline_today").state not in ("unknown", "unavailable")
+    payload = entry.runtime_data.dashboard_payload()
+    assert payload["realised"]["quarters"] and payload["realised"]["quarters"][-1]["import_price"] > 0
+    assert payload["realised"]["bands"]["pv"]["source"] == "default" and payload["quarters"][0]["pv_hi"] is not None
+
+
+async def test_advisory_mode_recommends_and_the_owner_applies_or_dismisses(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Dry-run recommends nothing; advisory turns the next window into a recommendation; apply fires an event, dismiss hides it."""
+    set_states(hass, soc="60")
+    await setup_entry(hass, freezer, aioclient_mock, now=EVENING)
+    assert hass.states.get("sensor.hems_recommendations").state == "0" and hass.states.get("select.hems_battery_mode").state == "dry_run"
+    await hass.services.async_call("select", "select_option", {"entity_id": "select.hems_battery_mode", "option": "advisory"}, blocking=True)
+    recs = hass.states.get("sensor.hems_recommendations")
+    assert recs.state == "1" and recs.attributes["items"][0]["module"] == "battery" and recs.attributes["items"][0]["payload"]["action"] == "discharge"
+    rec_id = recs.attributes["items"][0]["id"]
+    events = []
+    hass.bus.async_listen("hems_recommendation_applied", events.append)
+    result = await hass.services.async_call("hems", "apply_recommendation", {"id": rec_id}, blocking=True, return_response=True)
+    await hass.async_block_till_done()
+    assert result["recommendation"]["id"] == rec_id and events and events[0].data["action"] == "discharge" and events[0].data["power_w"] > 0
+    assert hass.states.get("sensor.hems_recommendations").attributes["items"][0]["status"] == "applied"
+    with pytest.raises(Exception):                            # applying twice would fire the event twice
+        await hass.services.async_call("hems", "apply_recommendation", {"id": rec_id}, blocking=True, return_response=True)
+    assert len(events) == 1
+    await hass.services.async_call("hems", "dismiss_recommendation", {"id": rec_id}, blocking=True)
+    assert hass.states.get("sensor.hems_recommendations").state == "0"
+    with pytest.raises(Exception):
+        await hass.services.async_call("hems", "apply_recommendation", {"id": "nope"}, blocking=True, return_response=True)
+
+
+async def test_the_master_starts_off_disarm_all_resets_and_modes_survive_a_reload(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Modes are stored; the master switch is never restored; one service puts everything back to dry-run."""
+    set_states(hass, soc="60")
+    entry = await setup_entry(hass, freezer, aioclient_mock, now=EVENING)
+    assert hass.states.get("switch.hems_master_arm").state == "off"
+    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.hems_master_arm"}, blocking=True)
+    await hass.services.async_call("select", "select_option", {"entity_id": "select.hems_ev_mode", "option": "advisory"}, blocking=True)
+    assert hass.states.get("switch.hems_master_arm").state == "on"
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("select.hems_ev_mode").state == "advisory" and hass.states.get("switch.hems_master_arm").state == "off"
+    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.hems_master_arm"}, blocking=True)
+    await hass.services.async_call("hems", "disarm_all", {}, blocking=True)
+    assert hass.states.get("select.hems_ev_mode").state == "dry_run" and hass.states.get("switch.hems_master_arm").state == "off"
+
+
+async def test_alerts_turn_on_for_stale_data_and_an_overdue_legionella_run(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """A missing SoC raises the data alert; a legionella run older than eight days raises that alert, with the reason."""
+    set_states(hass, soc="unavailable")
+    hass.states.async_set("sensor.last_legionella", (EVENING - timedelta(days=10)).isoformat())
+    await setup_entry(hass, freezer, aioclient_mock, roles={**ROLES, "legionella_last_entity": "sensor.last_legionella"})
+    assert hass.states.get("binary_sensor.hems_alert_data").state == "on" and "no_soc" in hass.states.get("binary_sensor.hems_alert_data").attributes["reason"]
+    assert hass.states.get("binary_sensor.hems_alert_legionella").state == "on"
+    assert hass.states.get("binary_sensor.hems_alert_deadline").state == "off"

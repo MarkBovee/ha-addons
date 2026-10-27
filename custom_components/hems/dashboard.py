@@ -52,7 +52,7 @@ def plan_diff(current: Decision | None, previous: Decision | None) -> dict[str, 
 
 
 def build_payload(snap: Any, *, build: str, cycle_at: datetime | None, previous: Decision | None, battery: Any, soc_max_age: timedelta,
-                  force_charge: bool) -> dict[str, Any]:
+                  force_charge: bool, bands: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """The panel's data for one snapshot (see the module docstring); works for a snapshot without a decision too."""
     out = snap.output
     d: Decision | None = out.decision
@@ -76,6 +76,7 @@ def build_payload(snap: Any, *, build: str, cycle_at: datetime | None, previous:
 
     # One row per quarter over the whole known price horizon; plan fields stay empty past the planned slots.
     rows: list[dict[str, Any]] = []
+    band = lambda key, value, end: None if value is None or not bands else round(value * bands[key][end], 3)
     prices = out.prices
     if prices and d is not None:
         planned = {d.slot_start + i * QUARTER: s for i, s in enumerate(d.plan.slots)}
@@ -91,6 +92,8 @@ def build_payload(snap: Any, *, build: str, cycle_at: datetime | None, previous:
                          "why": s.reason if s else None, "code": s.reason_code if s else None,
                          "sell": _r(s.sell_value, 4) if s else None, "buy": _r(s.buy_cost, 4) if s else None, "keep": _r(s.stored_value, 4) if s else None,
                          "pv": _r(out.pv_kwh.get(at), 3), "load": _r(out.load_kwh.get(at), 3),
+                         "pv_lo": band("pv", out.pv_kwh.get(at), "p10"), "pv_hi": band("pv", out.pv_kwh.get(at), "p90"),
+                         "load_lo": band("load", out.load_kwh.get(at), "p10"), "load_hi": band("load", out.load_kwh.get(at), "p90"),
                          "ev_a": q.current_a if q and q.current_a else None, "ev_tier": q.tier if q and q.current_a else None, "heat": kind})
 
     analysis = d.analysis if d else None

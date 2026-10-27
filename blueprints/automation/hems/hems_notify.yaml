@@ -1,0 +1,97 @@
+blueprint:
+  name: HEMS meldingen
+  description: >-
+    Stuurt een melding naar de companion app als een HEMS-alarm aangaat: data verouderd, EV-deadline in gevaar,
+    plan niet uitgevoerd, legionella te laat, of HEMS draait niet meer. In de stille uren wacht de melding tot het einde
+    ervan en gaat alleen door als het alarm dan nog aan staat. "Plan niet uitgevoerd" gaat altijd direct door zolang
+    HEMS gewapend is.
+  domain: automation
+  source_url: https://github.com/MarkBovee/ha-addons/blob/master/blueprints/automation/hems/hems_notify.yaml
+  input:
+    notify_device:
+      name: Telefoon
+      selector:
+        device:
+          integration: mobile_app
+    quiet_start:
+      name: Stil vanaf
+      default: "22:00:00"
+      selector:
+        time: {}
+    quiet_end:
+      name: Stil tot
+      default: "08:00:00"
+      selector:
+        time: {}
+    stale_minutes:
+      name: HEMS draait niet als de laatste cyclus ouder is dan (minuten)
+      default: 30
+      selector:
+        number:
+          min: 20
+          max: 240
+          unit_of_measurement: min
+
+mode: queued
+max: 10
+
+trigger_variables:
+  stale_minutes: !input stale_minutes
+
+variables:
+  quiet_start: !input quiet_start
+  quiet_end: !input quiet_end
+  titles:
+    binary_sensor.hems_alert_data: "HEMS: gegevens ontbreken"
+    binary_sensor.hems_alert_deadline: "HEMS: auto-deadline in gevaar"
+    binary_sensor.hems_alert_not_executed: "HEMS: plan niet uitgevoerd"
+    binary_sensor.hems_alert_legionella: "HEMS: legionella-run te laat"
+    hems_stale: "HEMS draait niet"
+
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.hems_alert_data
+      - binary_sensor.hems_alert_deadline
+      - binary_sensor.hems_alert_not_executed
+      - binary_sensor.hems_alert_legionella
+    to: "on"
+    for: "00:02:00"
+  - trigger: template
+    id: hems_stale
+    value_template: >-
+      {% set last = states('sensor.hems_last_cycle') %}
+      {{ last in ['unknown', 'unavailable'] or (now() - as_datetime(last)).total_seconds() > (stale_minutes | int) * 60 }}
+    for: "00:01:00"
+
+actions:
+  - variables:
+      key: "{{ trigger.id if trigger.id == 'hems_stale' else trigger.entity_id }}"
+      reason: >-
+        {% if trigger.id == 'hems_stale' %}Laatste cyclus: {{ states('sensor.hems_last_cycle') }}
+        {% else %}{{ state_attr(trigger.entity_id, 'reason') or '' }}{% endif %}
+      urgent: >-
+        {{ key == 'binary_sensor.hems_alert_not_executed' and is_state('switch.hems_master_arm', 'on') }}
+      in_quiet: >-
+        {% set n = now().strftime('%H:%M:%S') %}
+        {% if quiet_start > quiet_end %}{{ n >= quiet_start or n < quiet_end }}{% else %}{{ quiet_start <= n < quiet_end }}{% endif %}
+  - if:
+      - condition: template
+        value_template: "{{ in_quiet and not urgent }}"
+    then:
+      - wait_template: >-
+          {% set n = now().strftime('%H:%M:%S') %}
+          {{ not ((quiet_start > quiet_end and (n >= quiet_start or n < quiet_end)) or (quiet_start <= quiet_end and quiet_start <= n < quiet_end)) }}
+        timeout: "12:00:00"
+      - condition: template
+        value_template: >-
+          {{ key == 'hems_stale' or is_state(key, 'on') }}
+  - domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: "{{ titles[key] }}"
+    message: "{{ reason if reason | trim else 'Open HEMS voor de details.' }}"
+    data:
+      url: /hems#nu
+      clickAction: /hems#nu
+      tag: "{{ key }}"

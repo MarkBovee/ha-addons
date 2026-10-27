@@ -36,7 +36,10 @@
           "meter_current_l3_entity": "Grid meter: current L3 (A)",
           "meter_export_l1_entity": "Grid meter: feed-in power L1 (above 0 = exporting)",
           "meter_export_l2_entity": "Grid meter: feed-in power L2",
-          "meter_export_l3_entity": "Grid meter: feed-in power L3"
+          "meter_export_l3_entity": "Grid meter: feed-in power L3",
+          "water_heater_entity": "Dashboard: water heater or tank temperature",
+          "legionella_last_entity": "Dashboard: time of the last legionella run (sensor)",
+          "compare_action_entity": "Dashboard: action sensor of the old battery manager (transition comparison)"
         }
       }
     },
@@ -263,16 +266,72 @@
       },
       "last_cycle": {
         "name": "Last cycle"
+      },
+      "cost_today": {
+        "name": "Cost today"
+      },
+      "realised_vs_baseline_today": {
+        "name": "Result vs self-consumption today"
+      },
+      "realised_total": {
+        "name": "Result vs self-consumption total"
+      },
+      "pv_forecast_error": {
+        "name": "PV forecast error 7d"
+      },
+      "load_forecast_error": {
+        "name": "Load forecast error 7d"
+      },
+      "recommendations": {
+        "name": "Recommendations"
       }
     },
     "binary_sensor": {
       "tomorrow_prices_available": {
         "name": "Tomorrow prices available"
+      },
+      "alert_data": {
+        "name": "Alert data"
+      },
+      "alert_deadline": {
+        "name": "Alert EV deadline"
+      },
+      "alert_not_executed": {
+        "name": "Alert plan not executed"
+      },
+      "alert_legionella": {
+        "name": "Alert legionella overdue"
       }
     },
     "switch": {
       "ev_force_charge": {
         "name": "EV force charge"
+      },
+      "master_arm": {
+        "name": "Master control"
+      }
+    },
+    "select": {
+      "battery_mode": {
+        "name": "Battery mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advisory"
+        }
+      },
+      "ev_mode": {
+        "name": "EV mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advisory"
+        }
+      },
+      "water_heater_mode": {
+        "name": "Water heater mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advisory"
+        }
       }
     }
   },
@@ -287,6 +346,40 @@
         "saturday": "Saturday",
         "sunday": "Sunday"
       }
+    }
+  },
+  "services": {
+    "apply_recommendation": {
+      "name": "Apply recommendation",
+      "description": "Mark an open HEMS recommendation as applied and fire the hems_recommendation_applied event with what to do.",
+      "fields": {
+        "id": {
+          "name": "Recommendation id",
+          "description": "The id from sensor.hems_recommendations."
+        }
+      }
+    },
+    "dismiss_recommendation": {
+      "name": "Dismiss recommendation",
+      "description": "Hide a recommendation until the plan asks something else.",
+      "fields": {
+        "id": {
+          "name": "Recommendation id",
+          "description": "The id from sensor.hems_recommendations."
+        }
+      }
+    },
+    "disarm_all": {
+      "name": "Everything to dry-run",
+      "description": "Switch the master off and put every module back in dry-run."
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "HEMS is not loaded"
+    },
+    "unknown_recommendation": {
+      "message": "No open recommendation with this id (the plan may have changed)"
     }
   }
 }

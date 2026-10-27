@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 DOMAIN = "hems"
-PLATFORMS = ["sensor", "binary_sensor", "switch"]
+PLATFORMS = ["sensor", "binary_sensor", "switch", "select"]
 
 # Entity roles chosen in the config flow (HEMS only ever sees these Home Assistant entities).
 CONF_SOC = "soc_entity"
@@ -25,6 +25,13 @@ CONF_EV_CURRENTS = ("ev_current_l1_entity", "ev_current_l2_entity", "ev_current_
 CONF_METER_CURRENTS = ("meter_current_l1_entity", "meter_current_l2_entity", "meter_current_l3_entity")  # the grid meter's current per phase (A, no sign)
 CONF_METER_EXPORTS = ("meter_export_l1_entity", "meter_export_l2_entity", "meter_export_l3_entity")      # the meter's feed-in power per phase: above 0 = exporting on that phase
 CONF_PV_EXTRA = "pv_extra_entities"            # more PV power sensors, added to `pv_entity` (several arrays or inverters)
+
+# Optional roles for the dashboard only (read, never planned on): the water heater or its tank temperature, when the last legionella
+# run happened, and the action sensor of the battery manager HEMS replaces (for the transition comparison).
+CONF_WATER_HEATER = "water_heater_entity"
+CONF_LEGIONELLA_LAST = "legionella_last_entity"
+CONF_COMPARE_ACTION = "compare_action_entity"
+LEGIONELLA_OVERDUE = timedelta(days=8)        # the run is weekly; a day of slack before the alert
 
 # Settings (options flow) and their defaults. Price components mirror the energy-prices add-on.
 DEFAULT_OPTIONS = {
@@ -88,3 +95,5 @@ TRACE_FILE = "decision_trace.jsonl"      # one line per cycle: inputs, the compa
 PLANS_FILE = "plans.jsonl"                 # one line per cycle: every planned quarter with the inputs it came from
 EVENTS_FILE = "events.jsonl"               # fetches, status changes, action changes, settings changes
 BUILD_FILE = "BUILD"                  # written by hems/deploy.py: the commit this code was deployed from
+STORE_VERSION = 1
+SAMPLE_SECONDS = 10                      # live power is integrated into energy per quarter at this interval

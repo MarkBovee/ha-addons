@@ -9,7 +9,8 @@ from homeassistant.helpers import selector
 
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT,
                     CONF_EV_PLUGGED, CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS,
-                    CONF_PRICE_CURVE, CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
+                    CONF_PRICE_CURVE, CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN,
+                    CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER)
 
 _ROLES_REQUIRED = (CONF_SOC, CONF_BATTERY_POWER, CONF_PV, CONF_GRID)
 _ROLES_INITIAL = (CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE)         # the optional roles the first setup form asks for
@@ -21,7 +22,9 @@ _SENSORS = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"
 ROLE_SELECTORS: dict[str, Any] = {
     CONF_INVERTER: _SENSOR, CONF_EV: _SENSOR, CONF_PRICE_CURVE: _SENSOR, CONF_PV_EXTRA: _SENSORS,
     CONF_EV_PLUGGED: _BINARY, CONF_EV_CHARGING: _BINARY, CONF_EV_PROBLEM: _BINARY, CONF_EV_SOC: _SENSOR, CONF_EV_LIMIT: _NUMBER,
-    **{role: _SENSOR for role in (*CONF_EV_CURRENTS, *CONF_METER_CURRENTS, *CONF_METER_EXPORTS)}}
+    **{role: _SENSOR for role in (*CONF_EV_CURRENTS, *CONF_METER_CURRENTS, *CONF_METER_EXPORTS)},
+    CONF_WATER_HEATER: selector.EntitySelector(selector.EntitySelectorConfig(domain=["water_heater", "sensor"])),
+    CONF_LEGIONELLA_LAST: _SENSOR, CONF_COMPARE_ACTION: _SENSOR}
 _ROLES_OPTIONAL = tuple(ROLE_SELECTORS)
 _DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _OPTIONAL_DATE = selector.TextSelector()          # an ISO date (2027-01-01) or empty; a date picker cannot be left empty

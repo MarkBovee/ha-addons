@@ -13,9 +13,10 @@ import aiohttp
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -23,7 +24,7 @@ from .adapters import base_load_history, parse_price_curve, reading_from_state, 
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT, CONF_EV_PLUGGED,
                     CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_PRICE_CURVE,
                     CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
-                    PLANS_FILE, RETRY_DELAY, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
+                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, LEGIONELLA_OVERDUE, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.contracts import MarketPrices
 from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot, window_tree
@@ -39,6 +40,8 @@ from .engine.rolling import Decision
 from .engine.trace import TraceWriter
 from .engine.windows import UNSOLD
 from .dashboard import build_payload
+from .advice import EVENT_APPLIED, MODES, MODULES, Control
+from .realised import Ledger, QuarterPrice, quarter_start
 from .engine.weather import OPEN_METEO_URL, Weather, open_meteo_params, parse_open_meteo
 
 _LOGGER = logging.getLogger(__name__)
@@ -158,6 +161,10 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._retry_cancel = None
         self._payload: dict[str, Any] | None = None
         self._payload_key: tuple | None = None
+        self.control = Control()
+        self.ledger: Ledger | None = None
+        self._quarter_info: dict[datetime, QuarterPrice] = {}
+        self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.force_charge = False                  # the owner's override on the EV module; a restart clears it on purpose
 
     def _on(self, role: str) -> bool | None:
@@ -440,6 +447,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         output = await self.hass.async_add_executor_job(step, inputs, settings, previous)
         if output.decision:
             self._previous = output.decision
+        self._remember_quarters(output)
         weather_age = (now - self._weather.fetched_at).total_seconds() / 60 if self._weather else None
         execution = execute(output.decision, now, inputs.soc_pct, settings.battery, settings.soc_max_age)
         allowed = self.ev_allowed_a(settings) if output.ev_plan is not None else None
@@ -458,6 +466,141 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table,
                             self._weather, car, allowed, cycle_at=now, previous_decision=previous)
 
+    # ------------------------------------------------------------------ realised result, control, alerts (dashboard side)
+
+    async def async_load_state(self) -> None:
+        """Read the ledger and the owner's modes back from .storage; the master switch always starts off."""
+        settings = settings_from_entry(self.config_entry, self.hass.config.latitude, self.hass.config.longitude)
+        b = settings.battery
+        self.ledger = Ledger(capacity_kwh=b.capacity_kwh, floor_kwh=b.capacity_kwh * b.hard_min_soc, max_kw=b.max_power_kw, round_trip_eff=b.round_trip_eff)
+        data = await self._store.async_load() or {}
+        self.ledger.restore(data.get("ledger"))
+        self.control.restore(data.get("control"))
+
+    def _stored(self) -> dict[str, Any]:
+        return {"ledger": self.ledger.state() if self.ledger else None, "control": self.control.state()}
+
+    def _save(self) -> None:
+        self._store.async_delay_save(self._stored, 30)
+
+    async def async_save_now(self) -> None:
+        """Write the state at once (unload): a delayed save would be lost with the entry."""
+        await self._store.async_save(self._stored())
+
+    def _power(self, role: str, sign: float = 1.0) -> float | None:
+        reading = reading_from_state(self.hass.states.get(self._entity(role) or ""), sign)
+        return None if reading is None else reading.value
+
+    @callback
+    def async_sample(self, now: datetime) -> None:
+        """Integrate the live grid, PV and battery power into the open quarter; close and price quarters that ended."""
+        if self.ledger is None:
+            return
+        battery_sign = -1.0 if self.config_entry.data.get(CONF_BATTERY_POSITIVE_DISCHARGING, True) else 1.0
+        pv_ids = [self._entity(CONF_PV), *(self.config_entry.data.get(CONF_PV_EXTRA) or [])]
+        pv_values = [reading_from_state(self.hass.states.get(e or "")) for e in pv_ids if e]
+        pv = sum(r.value for r in pv_values if r is not None) if pv_values else None
+        soc = self._power(CONF_SOC)
+        soc_kwh = None if soc is None else soc / 100 * self.ledger.capacity_kwh
+        closed = self.ledger.sample(now, self._power(CONF_GRID), pv, self._power(CONF_BATTERY_POWER, battery_sign), soc_kwh,
+                                    ev_w=self._power(CONF_EV) or 0.0, prices=self._quarter_info, tz=dt_util.get_default_time_zone())
+        if closed:
+            cutoff = quarter_start(now) - timedelta(hours=2)
+            self._quarter_info = {t: q for t, q in self._quarter_info.items() if t >= cutoff}
+            self._payload_key = None
+            self._save()
+            self.async_update_listeners()
+
+    def _remember_quarters(self, output: EngineOutput) -> None:
+        """Keep the prices, forecast and planned action of the coming quarters, so a quarter can be priced and judged when it closes."""
+        prices, decision = output.prices, output.decision
+        if not prices:
+            return
+        planned = {decision.slot_start + i * timedelta(minutes=15): s.action for i, s in enumerate(decision.plan.slots)} if decision else {}
+        other = self.hass.states.get(self._entity(CONF_COMPARE_ACTION) or "")
+        now_q = quarter_start(dt_util.utcnow())
+        for at, imp, exp in zip(prices.starts, prices.import_eur_kwh, prices.export_eur_kwh):
+            if now_q <= at < now_q + timedelta(hours=1):
+                known = self._quarter_info.get(at)
+                self._quarter_info[at] = QuarterPrice(imp, exp, output.pv_kwh.get(at), output.load_kwh.get(at), planned.get(at),
+                                                      (other.state if other and at == now_q else (known.other_action if known else None)))
+
+    async def async_set_mode(self, module: str, mode: str) -> None:
+        """The owner's mode of a module (dry_run or advisory)."""
+        if module not in MODULES or mode not in MODES:
+            raise ValueError(f"unknown module or mode: {module} {mode}")
+        await self._log_event("mode", module=module, **{"from": self.control.modes.get(module), "to": mode})
+        self.control.modes[module] = mode
+        self._payload_key = None
+        self._save()
+        self.async_update_listeners()
+
+    async def async_set_armed(self, armed: bool) -> None:
+        """The master switch. It moves nothing yet: no module writes to a device; it is here so the dashboard and the logbook show it."""
+        await self._log_event("master", armed=armed)
+        self.control.armed = armed
+        self._payload_key = None
+        self.async_update_listeners()
+
+    async def async_disarm_all(self) -> None:
+        """Master off and every module back to dry-run, in one step."""
+        await self._log_event("disarm_all", modes=dict(self.control.modes))
+        self.control.armed = False
+        self.control.modes = {m: "dry_run" for m in MODULES}
+        self._payload_key = None
+        self._save()
+        self.async_update_listeners()
+
+    def recommendations(self) -> list[dict[str, Any]]:
+        return self.control.recommendations(self.data)
+
+    async def async_apply(self, rec_id: str) -> dict[str, Any]:
+        """Mark an open recommendation applied and fire `hems_recommendation_applied`; an automation of the owner does the work."""
+        rec = next((r for r in self.recommendations() if r["id"] == rec_id and r["status"] == "open"), None)
+        if rec is None:
+            raise KeyError(rec_id)
+        self.control.applied[rec_id] = dt_util.utcnow().isoformat()
+        self.hass.bus.async_fire(EVENT_APPLIED, {"id": rec_id, "module": rec["module"], "kind": rec["kind"], **rec["payload"]})
+        await self._log_event("recommendation_applied", id=rec_id, module=rec["module"], payload=rec["payload"])
+        self._payload_key = None
+        self._save()
+        self.async_update_listeners()
+        return rec
+
+    async def async_dismiss(self, rec_id: str) -> None:
+        """Hide a recommendation until the plan asks something else (a new id)."""
+        self.control.dismissed[rec_id] = None
+        await self._log_event("recommendation_dismissed", id=rec_id)
+        self._payload_key = None
+        self._save()
+        self.async_update_listeners()
+
+    def alerts(self) -> dict[str, dict[str, Any]]:
+        """The conditions worth a notification, each with on/off and a reason in words."""
+        snap = self.data
+        out: dict[str, dict[str, Any]] = {}
+        if snap is None:
+            return out
+        status, code = snap.output.status, snap.execution.code
+        bad = status != "ok" or code in ("no_soc", "stale_soc")
+        out["data"] = {"on": bad, "reason": f"status {status}, executor {code}" if bad else ""}
+        ev = snap.output.ev_plan
+        risk = bool(ev and ev.status == "deadline_at_risk")
+        out["deadline"] = {"on": risk, "reason": f"{ev.shortfall_kwh:.1f} kWh short before {ev.deadline.isoformat() if ev.deadline else '?'}" if risk else ""}
+        out["not_executed"] = {"on": bool(snap.execution.overridden), "reason": snap.execution.reason if snap.execution.overridden else ""}
+        last = self.hass.states.get(self._entity(CONF_LEGIONELLA_LAST) or "")
+        when = None
+        if last and last.state not in ("unknown", "unavailable", ""):
+            when = dt_util.parse_datetime(last.state)
+            if when is None and (day := dt_util.parse_date(last.state)) is not None:
+                when = datetime.combine(day, time(0), tzinfo=dt_util.get_default_time_zone())
+        if when is not None and when.tzinfo is None:
+            when = when.replace(tzinfo=dt_util.get_default_time_zone())
+        overdue = bool(when and dt_util.utcnow() - when > LEGIONELLA_OVERDUE)
+        out["legionella"] = {"on": overdue, "reason": f"last run {when.isoformat()}" if overdue else "", "last": when.isoformat() if when else None,
+                             "configured": bool(self._entity(CONF_LEGIONELLA_LAST))}
+        return out
+
     def dashboard_payload(self) -> dict[str, Any] | None:
         """The panel's data for the latest snapshot (hems.dashboard), cached until the snapshot changes; None before the first cycle."""
         snap = self.data
@@ -465,8 +608,18 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             return None
         key = (snap, self.force_charge)          # the snapshot itself, not id(): a freed snapshot's address can be reused
         if self._payload_key is None or self._payload_key[0] is not snap or self._payload_key[1] != self.force_charge:
+            ledger = self.ledger
+            bands = {k: ledger.bands(k) for k in ("pv", "load")} if ledger else None
             self._payload = build_payload(snap, build=self.build, cycle_at=snap.cycle_at, previous=snap.previous_decision,
-                                          battery=self._settings.battery, soc_max_age=self._settings.soc_max_age, force_charge=self.force_charge)
+                                          battery=self._settings.battery, soc_max_age=self._settings.soc_max_age, force_charge=self.force_charge,
+                                          bands=bands)
+            self._payload["control"] = {"modes": dict(self.control.modes), "armed": self.control.armed, "writers": [],
+                                        "recommendations": self.recommendations()}
+            self._payload["alerts"] = self.alerts()
+            if ledger:
+                self._payload["realised"] = {"today": ledger.result_today(), "gain_total": ledger.gain_total(), "since": ledger.total.get("since"),
+                                             "daily": ledger.daily(), "quarters": ledger.quarters[-96:],
+                                             "errors": {k: ledger.forecast_error(k) for k in ("pv", "load")}, "bands": bands}
             self._payload_key = key
         return self._payload
 

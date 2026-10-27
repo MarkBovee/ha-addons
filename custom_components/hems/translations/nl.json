@@ -36,7 +36,10 @@
           "meter_current_l3_entity": "Netmeter: stroom L3 (A)",
           "meter_export_l1_entity": "Netmeter: terugleververmogen L1 (boven 0 = terugleveren)",
           "meter_export_l2_entity": "Netmeter: terugleververmogen L2",
-          "meter_export_l3_entity": "Netmeter: terugleververmogen L3"
+          "meter_export_l3_entity": "Netmeter: terugleververmogen L3",
+          "water_heater_entity": "Dashboard: boiler of tanktemperatuur",
+          "legionella_last_entity": "Dashboard: tijdstip laatste legionella-run (sensor)",
+          "compare_action_entity": "Dashboard: actiesensor van de oude battery manager (vergelijking tijdens de overgang)"
         }
       }
     },
@@ -263,16 +266,72 @@
       },
       "last_cycle": {
         "name": "Last cycle"
+      },
+      "cost_today": {
+        "name": "Cost today"
+      },
+      "realised_vs_baseline_today": {
+        "name": "Result vs self-consumption today"
+      },
+      "realised_total": {
+        "name": "Result vs self-consumption total"
+      },
+      "pv_forecast_error": {
+        "name": "PV forecast error 7d"
+      },
+      "load_forecast_error": {
+        "name": "Load forecast error 7d"
+      },
+      "recommendations": {
+        "name": "Recommendations"
       }
     },
     "binary_sensor": {
       "tomorrow_prices_available": {
         "name": "Tomorrow prices available"
+      },
+      "alert_data": {
+        "name": "Alert data"
+      },
+      "alert_deadline": {
+        "name": "Alert EV deadline"
+      },
+      "alert_not_executed": {
+        "name": "Alert plan not executed"
+      },
+      "alert_legionella": {
+        "name": "Alert legionella overdue"
       }
     },
     "switch": {
       "ev_force_charge": {
         "name": "EV force charge"
+      },
+      "master_arm": {
+        "name": "Master control"
+      }
+    },
+    "select": {
+      "battery_mode": {
+        "name": "Battery mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advies"
+        }
+      },
+      "ev_mode": {
+        "name": "EV mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advies"
+        }
+      },
+      "water_heater_mode": {
+        "name": "Water heater mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advies"
+        }
       }
     }
   },
@@ -287,6 +346,40 @@
         "saturday": "Zaterdag",
         "sunday": "Zondag"
       }
+    }
+  },
+  "services": {
+    "apply_recommendation": {
+      "name": "Advies toepassen",
+      "description": "Markeer een open HEMS-advies als toegepast en vuur het event hems_recommendation_applied af met wat er moet gebeuren.",
+      "fields": {
+        "id": {
+          "name": "Advies-id",
+          "description": "Het id uit sensor.hems_recommendations."
+        }
+      }
+    },
+    "dismiss_recommendation": {
+      "name": "Advies negeren",
+      "description": "Verberg een advies tot het plan iets anders vraagt.",
+      "fields": {
+        "id": {
+          "name": "Advies-id",
+          "description": "Het id uit sensor.hems_recommendations."
+        }
+      }
+    },
+    "disarm_all": {
+      "name": "Alles naar dry-run",
+      "description": "Zet de hoofdschakelaar uit en elke module terug op dry-run."
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "HEMS is niet geladen"
+    },
+    "unknown_recommendation": {
+      "message": "Geen open advies met dit id (het plan is misschien veranderd)"
     }
   }
 }

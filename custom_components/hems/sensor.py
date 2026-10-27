@@ -284,7 +284,8 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
 
 async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     """One entity per description, all under a single HEMS service device."""
-    async_add_entities(HemsSensor(entry.runtime_data, entry, d) for d in SENSORS)
+    async_add_entities([*(HemsSensor(entry.runtime_data, entry, d) for d in SENSORS),
+                        *(HemsLedgerSensor(entry.runtime_data, entry, d) for d in LEDGER_SENSORS)])
 
 
 class HemsSensor(HemsEntity, SensorEntity):
@@ -310,3 +311,60 @@ class HemsSensor(HemsEntity, SensorEntity):
         """Attributes from the latest snapshot, when the sensor defines any."""
         fn = self.entity_description.attributes
         return fn(self.coordinator.data) if fn else None
+
+
+@dataclass(frozen=True, kw_only=True)
+class HemsLedgerDescription(SensorEntityDescription):
+    """A sensor fed by the coordinator's ledger or control state rather than the plan snapshot."""
+    value: Callable[[HemsCoordinator], Any]
+    attributes: Callable[[HemsCoordinator], dict[str, Any]] | None = None
+
+
+def _error(key: str):
+    return lambda c: (c.ledger.forecast_error(key) or {}).get("mae_kwh_day") if c.ledger else None
+
+
+def _error_attrs(key: str):
+    def attrs(c: HemsCoordinator) -> dict[str, Any]:
+        err = c.ledger.forecast_error(key) if c.ledger else None
+        return {**(err or {}), "band": c.ledger.bands(key) if c.ledger else None}
+    return attrs
+
+
+LEDGER_SENSORS: tuple[HemsLedgerDescription, ...] = (
+    HemsLedgerDescription(key="cost_today", translation_key="cost_today", device_class=SensorDeviceClass.MONETARY, native_unit_of_measurement=CURRENCY_EURO,
+                          value=lambda c: c.ledger.result_today()["cost"] if c.ledger else None,
+                          attributes=lambda c: c.ledger.result_today() if c.ledger else {}),
+    HemsLedgerDescription(key="realised_vs_baseline_today", translation_key="realised_vs_baseline_today", device_class=SensorDeviceClass.MONETARY,
+                          native_unit_of_measurement=CURRENCY_EURO, value=lambda c: c.ledger.result_today()["gain"] if c.ledger else None,
+                          attributes=lambda c: {**(c.ledger.result_today() if c.ledger else {}), "baseline": "battery in self-consumption only"}),
+    HemsLedgerDescription(key="realised_total", translation_key="realised_total", device_class=SensorDeviceClass.MONETARY, native_unit_of_measurement=CURRENCY_EURO,
+                          state_class=SensorStateClass.TOTAL, value=lambda c: c.ledger.gain_total() if c.ledger else None,
+                          attributes=lambda c: {"since": c.ledger.total.get("since")} if c.ledger else {}),
+    HemsLedgerDescription(key="pv_forecast_error", translation_key="pv_forecast_error", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                          state_class=SensorStateClass.MEASUREMENT, value=_error("pv"), attributes=_error_attrs("pv")),
+    HemsLedgerDescription(key="load_forecast_error", translation_key="load_forecast_error", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                          state_class=SensorStateClass.MEASUREMENT, value=_error("load"), attributes=_error_attrs("load")),
+    HemsLedgerDescription(key="recommendations", translation_key="recommendations", value=lambda c: len(c.recommendations()),
+                          attributes=lambda c: {"items": c.recommendations()}),
+)
+
+
+class HemsLedgerSensor(HemsEntity, SensorEntity):
+    """A read-only view of the ledger (realised result, forecast error) or of the open recommendations."""
+
+    entity_description: HemsLedgerDescription
+    _unrecorded_attributes = frozenset({"items"})
+
+    def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry, description: HemsLedgerDescription) -> None:
+        super().__init__(coordinator, entry, "sensor", description.key)
+        self.entity_description = description
+
+    @property
+    def native_value(self) -> Any:
+        return self.entity_description.value(self.coordinator)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        fn = self.entity_description.attributes
+        return fn(self.coordinator) if fn else None
