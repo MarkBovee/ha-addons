@@ -404,7 +404,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         if output.status != self._last_status:
             await self._log_event("status", **{"from": self._last_status, "to": output.status})
             if output.status != "ok":
-                _LOGGER.warning("HEMS status %s: no decision this quarter", output.status)
+                # the battery sensors appear shortly after HA starts and the retry plans within a minute, so a missing SoC on the first cycle is not a warning
+                startup = self._last_status is None and output.status == "no_soc"
+                _LOGGER.log(logging.INFO if startup else logging.WARNING, "HEMS status %s: no decision this quarter", output.status)
             self._last_status = output.status
         if action and action != self._last_action:
             await self._log_event("action", **{"from": self._last_action, "to": action}, power_w=output.trace.get("power_w"), reason=output.trace.get("reason"),
@@ -628,5 +630,6 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         segments, slot_start = output.trace.get("segments"), output.trace.get("slot_start")
         if not segments or not slot_start:
             return "", (), ""
-        tz, start, words = dt_util.get_default_time_zone(), datetime.fromisoformat(slot_start), plan_words(self.hass.config.language)
+        # always English, whatever the language of Home Assistant: Mark wants no Dutch in HEMS
+        tz, start, words = dt_util.get_default_time_zone(), datetime.fromisoformat(slot_start), plan_words("en")
         return plan_summary(segments, start, tz, words), tuple(plan_windows(segments, tz)), plan_table(segments, start, tz, words, output.decision.analysis if output.decision else None)

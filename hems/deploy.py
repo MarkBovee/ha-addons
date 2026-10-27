@@ -178,8 +178,10 @@ def run_checks(root: Path = ROOT) -> None:
 
 def stream_tar(files: list[str], root: Path = ROOT) -> subprocess.Popen:
     """Start tar writing the files (paths relative to the integration folder) to its stdout."""
-    # -C must come before -T; entries are root-owned so the server copy matches the other components regardless of local uids
-    tar = subprocess.Popen(["tar", "-C", str(root / INTEGRATION), "--owner=0", "--group=0", "--numeric-owner", "--null", "-T", "-", "-cf", "-"],
+    # -C must come before -T; entries are root-owned so the server copy matches the other components regardless of local uids.
+    # --mode makes every entry world-readable: a local 0600 file would otherwise land unreadable for the checksum check over SSH.
+    tar = subprocess.Popen(["tar", "-C", str(root / INTEGRATION), "--owner=0", "--group=0", "--numeric-owner", "--mode=u+rw,go+r",
+                            "--null", "-T", "-", "-cf", "-"],
                            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     tar.stdin.write(("\0".join(files) + "\0").encode())
     tar.stdin.close()

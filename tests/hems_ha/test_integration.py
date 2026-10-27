@@ -389,17 +389,17 @@ async def test_the_integration_makes_its_info_lines_visible_but_leaves_a_configu
 
 
 async def test_the_plan_sensor_says_in_words_what_happens_when(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
-    """The state is read by a person: windows in local time in the language of Home Assistant, the quarter count is an attribute."""
+    """The state is read by a person: windows in local time, in English even on a Dutch instance; the quarter count is an attribute."""
     await hass.config.async_set_time_zone("Europe/Amsterdam")
     hass.config.language = "nl"
     set_states(hass)
     await setup_entry(hass, freezer, aioclient_mock)
     plan = hass.states.get("sensor.hems_plan")
-    assert plan.state.startswith(("Laden ", "Ontladen ")) and plan.state.count("–") >= 1 and len(plan.state) <= 255
+    assert plan.state.startswith(("Charge ", "Discharge ")) and plan.state.count("–") >= 1 and len(plan.state) <= 255
     window = plan.attributes["windows"][0]
     assert window["from"].endswith(("+01:00", "+02:00")) and window["action"] in ("charge", "discharge") and plan.attributes["quarters"] > 48
     table = plan.attributes["markdown"].splitlines()
-    assert table[0] == "|Tijd|Type|Vermogen|Prijs|SoC|Doel|" and table[2].startswith("|🔴 ") and len(table) >= 4
+    assert table[0] == "|Time|Type|Power|Price|SoC|Purpose|" and table[2].startswith("|🔴 ") and len(table) >= 4
     first_slot = plan.attributes["slots"][0]
     assert set(first_slot) == {"start", "action", "power_w", "soc_kwh", "reason"} and first_slot["start"].endswith(("+01:00", "+02:00"))
 
@@ -682,7 +682,7 @@ async def test_the_settings_form_is_split_into_parts_that_cover_every_option_and
     assert list(collapsed) == list(SECTIONS), "modules first, then the base components they share"
     keys = [key for keys in SECTIONS.values() for key in keys]
     assert sorted(keys) == sorted(set(keys)) and set(keys) == set(DEFAULT_OPTIONS), "every editable option is in exactly one part"
-    for language in ("strings", "translations/en", "translations/nl"):
+    for language in ("strings", "translations/en"):
         texts = json.loads((ROOT / "custom_components" / "hems" / f"{language}.json").read_text())["options"]["step"]["init"]["sections"]
         assert {name: set(part["data"]) for name, part in texts.items()} == {name: set(keys) for name, keys in SECTIONS.items()}
     before = dict(entry.options)
@@ -743,12 +743,13 @@ async def test_the_sell_window_follows_a_sale_of_stock_and_the_saving_sensor_is_
     assert "revenue" in hass.states.get("sensor.hems_expected_saving").attributes["friendly_name"].lower()
 
 
-def test_entity_names_are_english_in_every_language():
-    """Mark wants the entity names in English whatever the language of Home Assistant (names are fixed when the entity is registered); the Dutch file
-    only translates settings text and state labels."""
+def test_the_integration_is_english_only():
+    """Mark wants every HEMS text in English whatever the language of Home Assistant: there is no other translation file, and en matches strings."""
+    folder = ROOT / "custom_components" / "hems" / "translations"
+    assert sorted(p.name for p in folder.iterdir()) == ["en.json"]
     names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
-                    for key, ent in group.items()} for file in ("strings", "translations/en", "translations/nl")}
-    assert names["translations/nl"] == names["translations/en"] == names["strings"]
+                    for key, ent in group.items()} for file in ("strings", "translations/en")}
+    assert names["translations/en"] == names["strings"]
     assert len(names["strings"]) == 42 and names["strings"][("sensor", "charge_window")] == "Charge window"
 
 

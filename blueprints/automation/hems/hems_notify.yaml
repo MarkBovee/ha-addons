@@ -1,30 +1,30 @@
 blueprint:
-  name: HEMS meldingen
+  name: HEMS notifications
   description: >-
-    Stuurt een melding naar de companion app als een HEMS-alarm aangaat: data verouderd, EV-deadline in gevaar,
-    plan niet uitgevoerd, legionella te laat, of HEMS draait niet meer. In de stille uren wacht de melding tot het einde
-    ervan en gaat alleen door als het alarm dan nog aan staat. "Plan niet uitgevoerd" gaat altijd direct door zolang
-    HEMS gewapend is.
+    Sends a companion app notification when a HEMS alert turns on: data missing, EV deadline at risk,
+    plan not executed, legionella run overdue, or HEMS no longer running. During quiet hours the notification waits
+    until they end and is only sent if the alert is still on then. "Plan not executed" always goes out at once while
+    HEMS is armed.
   domain: automation
   source_url: https://github.com/MarkBovee/ha-addons/blob/master/blueprints/automation/hems/hems_notify.yaml
   input:
     notify_device:
-      name: Telefoon
+      name: Phone
       selector:
         device:
           integration: mobile_app
     quiet_start:
-      name: Stil vanaf
+      name: Quiet from
       default: "22:00:00"
       selector:
         time: {}
     quiet_end:
-      name: Stil tot
+      name: Quiet until
       default: "08:00:00"
       selector:
         time: {}
     stale_minutes:
-      name: HEMS draait niet als de laatste cyclus ouder is dan (minuten)
+      name: HEMS is not running when the last cycle is older than (minutes)
       default: 30
       selector:
         number:
@@ -42,11 +42,11 @@ variables:
   quiet_start: !input quiet_start
   quiet_end: !input quiet_end
   titles:
-    binary_sensor.hems_alert_data: "HEMS: gegevens ontbreken"
-    binary_sensor.hems_alert_deadline: "HEMS: auto-deadline in gevaar"
-    binary_sensor.hems_alert_not_executed: "HEMS: plan niet uitgevoerd"
-    binary_sensor.hems_alert_legionella: "HEMS: legionella-run te laat"
-    hems_stale: "HEMS draait niet"
+    binary_sensor.hems_alert_data: "HEMS: data missing"
+    binary_sensor.hems_alert_deadline: "HEMS: EV deadline at risk"
+    binary_sensor.hems_alert_not_executed: "HEMS: plan not executed"
+    binary_sensor.hems_alert_legionella: "HEMS: legionella run overdue"
+    hems_stale: "HEMS is not running"
 
 triggers:
   - trigger: state
@@ -68,7 +68,7 @@ actions:
   - variables:
       key: "{{ trigger.id if trigger.id == 'hems_stale' else trigger.entity_id }}"
       reason: >-
-        {% if trigger.id == 'hems_stale' %}Laatste cyclus: {{ states('sensor.hems_last_cycle') }}
+        {% if trigger.id == 'hems_stale' %}Last cycle: {{ states('sensor.hems_last_cycle') }}
         {% else %}{{ state_attr(trigger.entity_id, 'reason') or '' }}{% endif %}
       urgent: >-
         {{ key == 'binary_sensor.hems_alert_not_executed' and is_state('switch.hems_master_arm', 'on') }}
@@ -90,8 +90,8 @@ actions:
     type: notify
     device_id: !input notify_device
     title: "{{ titles[key] }}"
-    message: "{{ reason if reason | trim else 'Open HEMS voor de details.' }}"
+    message: "{{ reason if reason | trim else 'Open HEMS for the details.' }}"
     data:
-      url: /hems#nu
-      clickAction: /hems#nu
+      url: /hems#now
+      clickAction: /hems#now
       tag: "{{ key }}"

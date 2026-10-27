@@ -9,10 +9,10 @@ HEMS registreert zelf een paneel **HEMS** in de zijbalk (`/hems`). Het paneel zi
 - Nieuwe sensoren: `sensor.hems_plan_diff` (gewijzigde kwartieren sinds het vorige plan) en `sensor.hems_last_cycle`.
 
 ## Views
-`#nu`, `#plan`, `#prijzen`, `#batterij`, `#auto`, `#boiler`, `#net`, `#regie`.
+`#now`, `#plan`, `#prices`, `#battery`, `#ev`, `#water-heater`, `#grid`, `#learn`, `#control` (de oude Nederlandse hashes werken nog).
 
 ## Wandtablet (Galaxy Tab A9)
-Open `/hems?kiosk#nu` in de companion app. `?kiosk` verbergt de kop, toont onderaan grote tabs en zet het thema altijd op donker. Zet in de companion app de zijbalk uit en houd het scherm aan tijdens het laden.
+Open `/hems?kiosk#now` in de companion app. `?kiosk` verbergt de kop, toont onderaan grote tabs en zet het thema altijd op donker. Zet in de companion app de zijbalk uit en houd het scherm aan tijdens het laden.
 
 ## Lovelace-kaarten
 Het paneel laadt ook twee kaarten op elk dashboard:

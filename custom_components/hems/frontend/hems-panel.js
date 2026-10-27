@@ -9,10 +9,10 @@
  * live power comes straight from the entities of the roles in the settings. Nothing here writes to a device: the only
  * action is the EV override switch, behind an inline confirmation.
  *
- * URL options: ?kiosk (no header, for the wall tablet), ?theme=dark|light (force a theme), #nu|plan|prijzen|batterij|auto|boiler|net|regie.
+ * URL options: ?kiosk (no header, for the wall tablet), ?theme=dark|light (force a theme), #now|plan|prices|battery|ev|water-heater|grid|learn|control (old Dutch hashes still work).
  */
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const Q_MS = 15 * 60 * 1000;
 
 /* ------------------------------------------------------------------ store */
@@ -30,9 +30,11 @@ class HemsStore {
 
   attach(hass) {
     if (!hass || !hass.connection) return;
+    this._hass = hass;
     if (this._conn === hass.connection) return;
     this._conn = hass.connection;
-    if (this._unsub) { try { this._unsub(); } catch (e) { /* connection gone */ } }
+    // unsubscribing on a connection that is already gone rejects; that is expected after an HA restart
+    if (this._unsub) { try { Promise.resolve(this._unsub()).catch(() => {}); } catch (e) { /* connection gone */ } }
     this._unsub = null;
     hass.connection.subscribeMessage((msg) => {
       this.loaded = msg.loaded;
@@ -41,15 +43,20 @@ class HemsStore {
       this.error = null;
       this._emit();
     }, { type: "hems/subscribe" }).then((unsub) => { this._unsub = unsub; }).catch((err) => {
-      this.error = (err && err.message) || "Abonnement mislukt";
+      this.error = (err && err.message) || "Subscription failed";
       this._emit();
+      // after an HA restart the frontend reconnects before HEMS has registered its commands (unknown_command):
+      // try again, so a wall tablet recovers without a reload
+      this._conn = null;
+      clearTimeout(this._retry);
+      this._retry = setTimeout(() => this.attach(this._hass), 10000);
     });
     this.refreshSettings(hass);
   }
 
   refreshSettings(hass) {
     hass.connection.sendMessagePromise({ type: "hems/settings" }).then((s) => { this.settings = s; this._emit(); })
-      .catch((err) => { this.settings = null; this.settingsError = (err && err.message) || "geen instellingen"; this._emit(); });
+      .catch((err) => { this.settings = null; this.settingsError = (err && err.message) || "no settings"; this._emit(); });
   }
 
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
@@ -65,7 +72,7 @@ const fmtCache = {};
 function tzOf(hass) { return (hass && hass.config && hass.config.time_zone) || undefined; }
 function fmt(key, opts) {
   const k = key + "|" + (TZ || "");
-  if (!fmtCache[k]) fmtCache[k] = new Intl.DateTimeFormat("nl-NL", { timeZone: TZ, ...opts });
+  if (!fmtCache[k]) fmtCache[k] = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, ...opts });
   return fmtCache[k];
 }
 const hhmm = (d) => d ? fmt("t", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(d)) : "—";
@@ -75,7 +82,7 @@ const localDayKey = (d) => fmt("k", { year: "numeric", month: "2-digit", day: "2
 function num(v, dec = 1) {
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
   const x = Math.abs(Number(v)) < 0.5 * 10 ** -dec ? 0 : Number(v);
-  return x.toLocaleString("nl-NL", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  return x.toLocaleString("en-GB", { minimumFractionDigits: dec, maximumFractionDigits: dec });
 }
 const eur = (v, dec = 4) => v === null || v === undefined ? "—" : num(v, dec);
 const kw = (w, dec = 1) => w === null || w === undefined ? "—" : num(Math.abs(Number(w)) < 50 ? 0 : Number(w) / 1000, dec);
@@ -86,27 +93,27 @@ function age(ms) {
   const m = Math.round(s / 60);
   if (m < 90) return m + " min";
   const h = Math.round(m / 60);
-  return h < 48 ? h + " u" : Math.round(h / 24) + " d";
+  return h < 48 ? h + " h" : Math.round(h / 24) + " d";
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-const ACTION_NL = { charge: "Laden", discharge: "Ontladen", idle: "Rust" };
-const EXEC_NL = {
-  as_planned: "volgens plan", at_floor: "op de vloer", limited_floor: "begrensd door vloer", at_full: "batterij vol",
-  limited_full: "begrensd: bijna vol", no_soc: "geen SoC", stale_soc: "SoC verouderd", expired: "plan verlopen", no_plan: "geen plan",
+const ACTION_LABEL = { charge: "Charge", discharge: "Discharge", idle: "Idle" };
+const EXEC_LABEL = {
+  as_planned: "as planned", at_floor: "at the floor", limited_floor: "limited by the floor", at_full: "battery full",
+  limited_full: "limited: nearly full", no_soc: "no SoC", stale_soc: "SoC stale", expired: "plan expired", no_plan: "no plan",
 };
-const STATUS_NL = {
-  ok: "ok", no_soc: "geen SoC: HEMS plant niets", stale_soc: "SoC verouderd: HEMS plant niets", no_prices: "geen prijzen",
-  no_price_for_now: "geen prijs voor dit kwartier",
+const STATUS_LABEL = {
+  ok: "ok", no_soc: "no SoC: HEMS plans nothing", stale_soc: "SoC stale: HEMS plans nothing", no_prices: "no prices",
+  no_price_for_now: "no price for this quarter",
 };
-const EV_NL = {
-  off: "module uit", not_plugged: "niet ingeplugd", no_soc: "geen SoC van de auto", problem: "laadpaal meldt een probleem", idle: "niets te laden",
-  planned: "gepland", deadline_at_risk: "deadline in gevaar", forced: "geforceerd laden",
+const EV_LABEL = {
+  off: "module off", not_plugged: "not plugged in", no_soc: "no SoC from the car", problem: "charger reports a problem", idle: "nothing to charge",
+  planned: "planned", deadline_at_risk: "deadline at risk", forced: "force charging",
 };
-const WINDOW_NL = { planned: "gepland", partial: "deels", no_stock: "geen voorraad", kept_for_later: "bewaard voor later", unsold: "niet verkocht" };
-const HEAT_NL = { night: "nacht", heating: "verwarmen", legionella: "legionella" };
-const DAY_NL = { monday: "maandag", tuesday: "dinsdag", wednesday: "woensdag", thursday: "donderdag", friday: "vrijdag", saturday: "zaterdag", sunday: "zondag" };
-const TIER_NL = { deadline: "deadline", cheap: "goedkoop", forced: "geforceerd", surplus: "zon" };
+const WINDOW_LABEL = { planned: "planned", partial: "partial", no_stock: "no stock", kept_for_later: "kept for later", unsold: "unsold" };
+const HEAT_LABEL = { night: "night", heating: "heating", legionella: "legionella" };
+const DAY_LABEL = { monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday", thursday: "Thursday", friday: "Friday", saturday: "Saturday", sunday: "Sunday" };
+const TIER_LABEL = { deadline: "deadline", cheap: "cheap", forced: "forced", surplus: "solar" };
 
 /* ------------------------------------------------------------------ styles */
 
@@ -258,7 +265,7 @@ function drawTimeline(host, svg, payload, opts) {
   svg.setAttribute("viewBox", `0 0 ${width} ${H}`);
   svg.setAttribute("height", H);
   if (!n) {
-    txt("Geen plan om te tonen", width / 2, H / 2, { "text-anchor": "middle", fill: C("--fg-2") });
+    txt("No plan to show", width / 2, H / 2, { "text-anchor": "middle", fill: C("--fg-2") });
     return;
   }
   const t0 = new Date(view[0].t).getTime();
@@ -302,8 +309,8 @@ function drawTimeline(host, svg, payload, opts) {
       // the horizon ends where the known prices end: say so instead of drawing nothing
       const endMs = t0 + n * Q_MS, wantMs = t0 + opts.hours * 3600e3;
       if (wantMs - endMs > Q_MS) {
-        const tm = payload.meta && payload.meta.tomorrow_quarters ? "" : " · morgen ±13:15";
-        txt("prijzen nog onbekend" + tm, width - R - 6, top + h / 2, { "text-anchor": "end", fill: C("--fg-3") });
+        const tm = payload.meta && payload.meta.tomorrow_quarters ? "" : " · tomorrow ±13:15";
+        txt("prices not known yet" + tm, width - R - 6, top + h / 2, { "text-anchor": "end", fill: C("--fg-3") });
       }
     }
     if (k === "plan") {
@@ -330,7 +337,7 @@ function drawTimeline(host, svg, payload, opts) {
       const cap = (payload.battery && payload.battery.capacity_kwh) || 25;
       const sy = (v) => bot - v / cap * h;
       const b = payload.battery || {};
-      [[b.reserve_kwh, "reserve", "--warn"], [b.floor_kwh, "vloer", "--fault"]].forEach(([v, label, c]) => {
+      [[b.reserve_kwh, "reserve", "--warn"], [b.floor_kwh, "floor", "--fault"]].forEach(([v, label, c]) => {
         if (v === undefined || v === null) return;
         el("line", { x1: L, x2: width - R, y1: sy(v), y2: sy(v), stroke: C(c), "stroke-dasharray": "3 3", "stroke-width": .9 });
         txt(label, width - R - 4, sy(v) - 3, { "text-anchor": "end", fill: C(c) });
@@ -363,14 +370,14 @@ function drawTimeline(host, svg, payload, opts) {
     }
     if (k === "devices") {
       const rh = (h - 6) / 2;
-      txt("auto", L - 4, top + rh, { "text-anchor": "end" });
-      txt("boiler", L - 4, top + 2 * rh + 4, { "text-anchor": "end" });
+      txt("EV", L - 4, top + rh, { "text-anchor": "end" });
+      txt("heater", L - 4, top + 2 * rh + 4, { "text-anchor": "end" });
       view.forEach((r, i) => {
         if (r.ev_a) el("rect", { x: L + i * qw, y: top + 3, width: qw + .3, height: rh - 2, fill: dry ? "url(#h-charge)" : C("--charge") });
         if (r.heat) el("rect", { x: L + i * qw, y: top + rh + 4, width: qw + .3, height: rh - 2, fill: dry ? "url(#h-discharge)" : C("--discharge") });
       });
     }
-    const labels = { price: "prijs", plan: "plan", soc: "SoC", pvload: "zon/huis", devices: "" };
+    const labels = { price: "price", plan: "plan", soc: "SoC", pvload: "solar/house", devices: "" };
     if (labels[k]) {
       const lb = txt(labels[k], L + 5, top + font + 2, { fill: C("--fg-2"), "font-weight": 600, "paint-order": "stroke", stroke: C("--panel"), "stroke-width": 3 });
       lb.setAttribute("pointer-events", "none");
@@ -412,7 +419,7 @@ function drawTimeline(host, svg, payload, opts) {
   hit.addEventListener("click", pick);
   svg.setAttribute("tabindex", "0");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", `Plan voor ${opts.hours} uur: prijs, acties, SoC en verwachtingen. Pijltjes kiezen een kwartier.`);
+  svg.setAttribute("aria-label", `Plan for ${opts.hours} hours: price, actions, SoC and forecasts. Arrow keys pick a quarter.`);
   svg.onkeydown = (ev) => {
     if (!opts.onSelect) return;
     const cur = opts.selected ?? -1;
@@ -431,29 +438,29 @@ function healthHtml(p, store) {
   const tomorrow = m.tomorrow_quarters > 0;
   return `<span class="row small mono" style="gap:12px;color:var(--fg-2)">
     <span class="row" style="gap:5px"><i class="dot ${statusOk && !stale ? "pulse" : ""}" style="background:var(${stale ? "--stale" : statusOk ? "--ok" : "--fault"})"></i>
-      ${stale ? "plan verouderd · " : ""}cyclus ${hhmm(m.cycle_at)} (${age(planAgeMs(p))})</span>
-    <span class="row" style="gap:5px"><i class="dot" style="background:var(${m.price_source === "market" ? "--ok" : "--warn"})"></i>prijzen: ${m.price_source === "market" ? "Nord Pool" : esc(m.price_source || "—")}</span>
-    <span class="row" style="gap:5px"><i class="dot" style="background:var(${tomorrow ? "--ok" : "--warn"})"></i>morgen: ${tomorrow ? "bekend" : "nog niet"}</span>
-    <span class="row" style="gap:5px"><i class="dot" style="background:var(${m.weather_age_min !== null && m.weather_age_min < 90 ? "--ok" : "--warn"})"></i>weer ${m.weather_age_min === null ? "—" : num(m.weather_age_min, 0) + " min"}</span>
+      ${stale ? "plan stale · " : ""}cycle ${hhmm(m.cycle_at)} (${age(planAgeMs(p))})</span>
+    <span class="row" style="gap:5px"><i class="dot" style="background:var(${m.price_source === "market" ? "--ok" : "--warn"})"></i>prices: ${m.price_source === "market" ? "Nord Pool" : esc(m.price_source || "—")}</span>
+    <span class="row" style="gap:5px"><i class="dot" style="background:var(${tomorrow ? "--ok" : "--warn"})"></i>tomorrow: ${tomorrow ? "known" : "not yet"}</span>
+    <span class="row" style="gap:5px"><i class="dot" style="background:var(${m.weather_age_min !== null && m.weather_age_min < 90 ? "--ok" : "--warn"})"></i>weather ${m.weather_age_min === null ? "—" : num(m.weather_age_min, 0) + " min"}</span>
     <span>build ${esc(String(m.build || "?").slice(0, 7))}</span>
   </span>`;
 }
 
-const MODE_NL = { dry_run: "DRY-RUN", advisory: "ADVIES" };
+const MODE_LABEL = { dry_run: "DRY-RUN", advisory: "ADVISORY" };
 function modeStripHtml(p, settings) {
   const o = (settings && settings.options) || {};
   const c = (p && p.control) || { modes: {}, armed: false };
-  const tag = (label, enabled, mode) => enabled === false ? `<span class="tag off">${label} · UIT</span>`
-    : mode === "advisory" ? `<span class="tag warn">${label} · ADVIES</span>` : `<span class="tag dry">${label} · DRY-RUN</span>`;
+  const tag = (label, enabled, mode) => enabled === false ? `<span class="tag off">${label} · OFF</span>`
+    : mode === "advisory" ? `<span class="tag warn">${label} · ADVISORY</span>` : `<span class="tag dry">${label} · DRY-RUN</span>`;
   const anyAdvice = Object.values(c.modes || {}).some((m) => m === "advisory");
-  return `<span class="tag ${c.armed ? "fault" : "ok"}" title="Geen enkele module schrijft nog naar een apparaat">${c.armed ? "GEWAPEND · nog geen module stuurt" : "VEILIG · HEMS STUURT NIETS"}</span>
-    ${tag("BATTERIJ", true, c.modes.battery)} ${tag("AUTO", o.ev_enabled, c.modes.ev)} ${tag("BOILER", o.water_heater_enabled, c.modes.water_heater)}
-    ${c.armed || anyAdvice ? `<button class="btn danger" data-act="disarm" style="min-height:32px;padding:4px 10px">Alles naar dry-run</button>` : ""}`;
+  return `<span class="tag ${c.armed ? "fault" : "ok"}" title="No module writes to a device yet">${c.armed ? "ARMED · no module controls yet" : "SAFE · HEMS CONTROLS NOTHING"}</span>
+    ${tag("BATTERY", true, c.modes.battery)} ${tag("EV", o.ev_enabled, c.modes.ev)} ${tag("WATER HEATER", o.water_heater_enabled, c.modes.water_heater)}
+    ${c.armed || anyAdvice ? `<button class="btn danger" data-act="disarm" style="min-height:32px;padding:4px 10px">All to dry-run</button>` : ""}`;
 }
 
 function alertsHtml(p) {
   const a = (p && p.alerts) || {};
-  const label = { data: "Gegevens ontbreken", deadline: "Auto-deadline in gevaar", not_executed: "Plan niet uitgevoerd", legionella: "Legionella-run te laat" };
+  const label = { data: "Data missing", deadline: "EV deadline at risk", not_executed: "Plan not executed", legionella: "Legionella run overdue" };
   const on = Object.entries(a).filter(([, v]) => v && v.on);
   if (!on.length) return "";
   return `<div class="alerts">${on.map(([k, v]) => `<div class="alert"><b>${label[k] || k}</b> <span>${esc(v.reason || "")}</span></div>`).join("")}</div>`;
@@ -461,31 +468,31 @@ function alertsHtml(p) {
 
 function recText(r) {
   const x = r.payload || {};
-  if (r.module === "battery") return `${ACTION_NL[x.action] || x.action} ${hhmm(x.from)}–${hhmm(x.to)} op ${kw(x.power_w)} kW (${num(x.kwh, 1)} kWh)`;
-  if (r.module === "ev") return `Auto laden ${hhmm(x.from)}–${hhmm(x.to)} op ${num(x.current_a, 0)} A (${num(x.kwh, 1)} kWh, ${TIER_NL[x.tier] || x.tier})`;
-  return `Boiler ${HEAT_NL[x.kind] || x.kind} ${hhmm(x.from)}–${hhmm(x.to)} (${num(x.kwh, 1)} kWh)`;
+  if (r.module === "battery") return `${ACTION_LABEL[x.action] || x.action} ${hhmm(x.from)}–${hhmm(x.to)} at ${kw(x.power_w)} kW (${num(x.kwh, 1)} kWh)`;
+  if (r.module === "ev") return `Charge EV ${hhmm(x.from)}–${hhmm(x.to)} at ${num(x.current_a, 0)} A (${num(x.kwh, 1)} kWh, ${TIER_LABEL[x.tier] || x.tier})`;
+  return `Water heater ${HEAT_LABEL[x.kind] || x.kind} ${hhmm(x.from)}–${hhmm(x.to)} (${num(x.kwh, 1)} kWh)`;
 }
 
 function recsHtml(p, confirmId) {
   const recs = (p && p.control && p.control.recommendations) || [];
   if (!recs.length) return "";
-  return `<section class="stack"><span class="eyebrow">Advies</span>${recs.map((r) => `<div class="rec">
-    <div class="row" style="justify-content:space-between"><b>${esc(recText(r))}</b>${r.status === "applied" ? `<span class="tag ok">TOEGEPAST ${hhmm(r.applied_at)}</span>` : ""}</div>
+  return `<section class="stack"><span class="eyebrow">Recommendations</span>${recs.map((r) => `<div class="rec">
+    <div class="row" style="justify-content:space-between"><b>${esc(recText(r))}</b>${r.status === "applied" ? `<span class="tag ok">APPLIED ${hhmm(r.applied_at)}</span>` : ""}</div>
     ${r.reason ? `<div class="small muted">${esc(r.reason)}</div>` : ""}
     ${r.status === "applied" ? "" : confirmId === r.id
-      ? `<div class="small">HEMS vuurt <span class="mono">hems_recommendation_applied</span> af; jouw automatisering voert het uit. Doorgaan?</div>
-         <div class="row"><button class="btn pri" data-apply-yes="${esc(r.id)}">Ja, toepassen</button><button class="btn" data-apply-no>Annuleren</button></div>`
-      : `<div class="row"><button class="btn pri" data-apply="${esc(r.id)}">Toepassen</button><button class="btn" data-dismiss="${esc(r.id)}">Negeren</button></div>`}
+      ? `<div class="small">HEMS fires <span class="mono">hems_recommendation_applied</span>; your automation carries it out. Continue?</div>
+         <div class="row"><button class="btn pri" data-apply-yes="${esc(r.id)}">Yes, apply</button><button class="btn" data-apply-no>Cancel</button></div>`
+      : `<div class="row"><button class="btn pri" data-apply="${esc(r.id)}">Apply</button><button class="btn" data-dismiss="${esc(r.id)}">Dismiss</button></div>`}
   </div>`).join("")}</section>`;
 }
 
 function verdictHtml(p, big = 32) {
-  if (!p) return `<div class="empty">Wachten op de eerste HEMS-cyclus…</div>`;
+  if (!p) return `<div class="empty">Waiting for the first HEMS cycle…</div>`;
   const d = p.decision;
   if (!d) {
-    return `<div class="verdict"><span class="eyebrow">HEMS plant nu niets</span>
-      <span class="big" style="font-size:${big}px;color:var(--fault)">${esc(STATUS_NL[p.meta.status] || p.meta.status)}</span>
-      <span class="why">Zodra de ontbrekende gegevens er zijn, plant HEMS binnen een minuut opnieuw. Prijzen en verwachtingen blijven zichtbaar.</span></div>`;
+    return `<div class="verdict"><span class="eyebrow">HEMS plans nothing now</span>
+      <span class="big" style="font-size:${big}px;color:var(--fault)">${esc(STATUS_LABEL[p.meta.status] || p.meta.status)}</span>
+      <span class="why">As soon as the missing data is back, HEMS plans again within a minute. Prices and forecasts stay visible.</span></div>`;
   }
   const e = p.execution;
   const act = d.action || "idle";
@@ -493,91 +500,91 @@ function verdictHtml(p, big = 32) {
   const c = d.compare || {};
   const best = c.code === "sell" ? "sell" : c.code === "buy" ? "buy" : c.code === "hold" ? "keep" : null;
   const tile = (k, label, v, extra = "") => `<div class="${best === k ? "win" : ""}"><small>${label}</small><b>${eur(v)}</b>${extra}</div>`;
-  const later = c.best_sell_later ? `<small>beste later ${hhmm(c.best_sell_later.at)} · ${eur(c.best_sell_later.value)}</small>` : "";
+  const later = c.best_sell_later ? `<small>best later ${hhmm(c.best_sell_later.at)} · ${eur(c.best_sell_later.value)}</small>` : "";
   return `<div class="verdict">
     <div class="row" style="align-items:baseline;gap:10px">
-      <span class="would" title="Dry-run: dit zou HEMS doen, er wordt niets verzonden">ZOU</span>
-      <span class="big c-${act}" style="font-size:${big}px">${ACTION_NL[act] || act}${act !== "idle" ? " " + kw(Math.abs(w)) + " kW" : ""}</span>
+      <span class="would" title="Dry-run: this is what HEMS would do; nothing is sent">WOULD</span>
+      <span class="big c-${act}" style="font-size:${big}px">${ACTION_LABEL[act] || act}${act !== "idle" ? " " + kw(Math.abs(w)) + " kW" : ""}</span>
     </div>
     <div class="why">${esc(d.reason || "")}</div>
-    <div class="cmp">${tile("sell", "verkoop nu", c.sell)}${tile("keep", "bewaar", c.keep, later)}${tile("buy", "koop nu", c.buy)}</div>
-    <div class="small muted mono">€ per opgeslagen kWh · import ${eur(d.import_price)} · export ${eur(d.export_price)} · SoC ${num(d.soc_pct, 0)} %</div>
+    <div class="cmp">${tile("sell", "sell now", c.sell)}${tile("keep", "keep", c.keep, later)}${tile("buy", "buy now", c.buy)}</div>
+    <div class="small muted mono">€ per stored kWh · import ${eur(d.import_price)} · export ${eur(d.export_price)} · SoC ${num(d.soc_pct, 0)} %</div>
   </div>`;
 }
 
 function chainHtml(p) {
   if (!p || !p.decision) return "";
   const e = p.execution;
-  return `<div class="chain" aria-label="Beslisketen">
-    <div><b>Voorstel</b>${kw(p.decision.power_w)} kW</div>
+  return `<div class="chain" aria-label="Decision chain">
+    <div><b>Proposal</b>${kw(p.decision.power_w)} kW</div>
     <div><b>Engine</b>${kw(e.planned_w)} kW</div>
-    <div class="${e.overridden ? "ovr" : ""}" title="${esc(e.reason || "")}"><b>Executor</b>${kw(e.power_w)} kW · ${esc(EXEC_NL[e.code] || e.code)}</div>
-    <div><b>Verzonden</b>— dry-run</div>
-  </div>${e.overridden ? `<div class="small" style="color:var(--discharge);margin-top:4px">Executor wijkt af: ${esc(e.reason)}</div>` : ""}`;
+    <div class="${e.overridden ? "ovr" : ""}" title="${esc(e.reason || "")}"><b>Executor</b>${kw(e.power_w)} kW · ${esc(EXEC_LABEL[e.code] || e.code)}</div>
+    <div><b>Sent</b>— dry-run</div>
+  </div>${e.overridden ? `<div class="small" style="color:var(--discharge);margin-top:4px">Executor deviates: ${esc(e.reason)}</div>` : ""}`;
 }
 
 function liveTilesHtml(hass, p, settings) {
   const r = (settings && settings.roles) || {};
-  const limit = ((p && p.meta.stale_after_s.live) || 120) * 1000;
-  const socLimit = ((p && p.meta.stale_after_s.soc) || 900) * 1000;
-  const tile = (label, entity, valueFn, sub, lim = limit) => {
-    if (!entity) return `<div class="tile"><small>${label}</small><b class="muted">—</b><i>geen entiteit</i></div>`;
+  // only a missing value is stale: a sensor that keeps the same value (PV at night, an idle charger) has an old last_updated,
+  // the frontend gets no last_reported, and a really stale SoC is caught by HEMS itself (status stale_soc)
+  const tile = (label, entity, valueFn, sub) => {
+    if (!entity) return `<div class="tile"><small>${label}</small><b class="muted">—</b><i>no entity</i></div>`;
     const a = stateAge(hass, entity);
     const v = stateNum(hass, entity);
-    const stale = a === null || a > lim || v === null;
-    return `<div class="tile ${stale ? "stale" : ""}" title="${esc(entity)}"><small>${label}</small><b>${v === null ? "—" : valueFn(v)}</b><i>${stale ? (v === null ? "geen waarde" : "verouderd " + age(a)) : sub(v) + " · " + age(a)}</i></div>`;
+    const stale = v === null;
+    return `<div class="tile ${stale ? "stale" : ""}" title="${esc(entity)}"><small>${label}</small><b>${v === null ? "—" : valueFn(v)}</b><i>${stale ? "no value" : sub(v) + " · changed " + age(a) + " ago"}</i></div>`;
   };
   const pvIds = [r.pv_entity, ...(r.pv_extra_entities || [])].filter(Boolean);
   const pv = pvIds.length ? pvIds.map((id) => stateNum(hass, id)).reduce((a, b) => (a === null || b === null) ? null : a + b, 0) : null;
   const pvAge = pvIds.length ? Math.max(...pvIds.map((id) => stateAge(hass, id) ?? Infinity)) : null;
-  const pvStale = pv === null || pvAge > limit;
+  const pvStale = pv === null;
   const battSign = r.battery_power_positive_is_discharging === false ? 1 : -1;     // contract: + charging
   const dec = p && p.decision;
   const imp = dec ? dec.import_price : null, exp = dec ? dec.export_price : null;
   return `<div class="tiles">
-    <div class="tile ${pvStale ? "stale" : ""}"><small>Zon</small><b>${pv === null ? "—" : kw(pv)} kW</b><i>${pvStale ? "verouderd " + age(pvAge) : "nu · " + age(pvAge)}</i></div>
-    ${tile("Net", r.grid_entity, (v) => `<span class="${v < 0 ? "c-charge" : ""}">${kw(v)}</span> kW`, (v) => v < 0 ? `export ${eur(exp)}` : `import ${eur(imp)}`)}
-    ${tile("Batterij", r.battery_power_entity, (v) => { const x = v * battSign; return `<span class="${x > 0 ? "c-charge" : x < 0 ? "c-discharge" : ""}">${kw(x)}</span> kW`; }, (v) => { const x = v * battSign; return x > 0 ? "laden" : x < 0 ? "ontladen" : "rust"; })}
-    ${tile("SoC", r.soc_entity, (v) => `${num(v, 0)} %`, (v) => `${num(v / 100 * ((p && p.battery.capacity_kwh) || 25), 1)} kWh`, socLimit)}
-    ${tile("Auto", r.ev_power_entity, (v) => `${kw(v)} kW`, () => (p && p.ev ? EV_NL[p.ev.status] || p.ev.status : "laadpaal"))}
-    ${tile("Auto SoC", r.ev_soc_entity, (v) => `${num(v, 0)} %`, () => "auto", 6 * 3600e3)}
+    <div class="tile ${pvStale ? "stale" : ""}"><small>Solar</small><b>${pv === null ? "—" : kw(pv)} kW</b><i>${pvStale ? "no value" : "changed " + age(pvAge) + " ago"}</i></div>
+    ${tile("Grid", r.grid_entity, (v) => `<span class="${v < 0 ? "c-charge" : ""}">${kw(v)}</span> kW`, (v) => v < 0 ? `export ${eur(exp)}` : `import ${eur(imp)}`)}
+    ${tile("Battery", r.battery_power_entity, (v) => { const x = v * battSign; return `<span class="${x > 0 ? "c-charge" : x < 0 ? "c-discharge" : ""}">${kw(x)}</span> kW`; }, (v) => { const x = v * battSign; return x > 0 ? "charging" : x < 0 ? "discharging" : "idle"; })}
+    ${tile("SoC", r.soc_entity, (v) => `${num(v, 0)} %`, (v) => `${num(v / 100 * ((p && p.battery.capacity_kwh) || 25), 1)} kWh`)}
+    ${tile("EV", r.ev_power_entity, (v) => `${kw(v)} kW`, () => (p && p.ev ? EV_LABEL[p.ev.status] || p.ev.status : "charger"))}
+    ${tile("EV SoC", r.ev_soc_entity, (v) => `${num(v, 0)} %`, () => "car")}
   </div>`;
 }
 
 function whyHtml(p, i) {
   const rows = (p && p.quarters) || [];
   const r = rows[i];
-  if (!r) return `<div class="empty">Tik op een kwartier in de tijdlijn voor het waarom.</div>`;
+  if (!r) return `<div class="empty">Tap a quarter in the timeline to see why.</div>`;
   const prev = p.diff && p.diff.previous_soc ? p.diff.previous_soc[r.t] : undefined;
   const changed = (p.diff && p.diff.runs || []).find((x) => x.from <= r.t && r.t < x.to);
   const cap = p.battery.capacity_kwh;
   const end = new Date(new Date(r.t).getTime() + Q_MS);
   return `<div class="stack">
     <span class="eyebrow">${dayShort(r.t)} · ${hhmm(r.t)}–${hhmm(end)}</span>
-    <div class="row" style="align-items:baseline"><b class="c-${r.act || "idle"}" style="font:700 22px var(--font-display)">${r.act ? (ACTION_NL[r.act] || r.act) : "Niet gepland"}${r.w ? " " + kw(Math.abs(r.w)) + " kW" : ""}</b>
-      ${r.act ? `<span class="would">ZOU</span>` : ""}</div>
+    <div class="row" style="align-items:baseline"><b class="c-${r.act || "idle"}" style="font:700 22px var(--font-display)">${r.act ? (ACTION_LABEL[r.act] || r.act) : "Not planned"}${r.w ? " " + kw(Math.abs(r.w)) + " kW" : ""}</b>
+      ${r.act ? `<span class="would">WOULD</span>` : ""}</div>
     ${r.why ? `<div class="small" style="color:var(--fg-2)">${esc(r.why)}</div>` : ""}
     <div class="kv">
       <span>Import / export</span><span>${eur(r.imp)} / ${eur(r.exp)} €/kWh</span>
-      <span>Verkoop · bewaar · koop</span><span>${eur(r.sell)} · ${eur(r.keep)} · ${eur(r.buy)}</span>
-      <span>SoC na kwartier</span><span>${r.soc === null ? "—" : num(r.soc, 1) + " kWh (" + num(r.soc / cap * 100, 0) + " %)"}</span>
-      ${prev !== undefined ? `<span>Vorig plan</span><span>${num(prev, 1)} kWh</span>` : ""}
-      <span>Zon / huis (verwacht)</span><span>${num((r.pv ?? 0) * 4, 2)} / ${num((r.load ?? 0) * 4, 2)} kW</span>
-      ${r.ev_a ? `<span>Auto</span><span>${num(r.ev_a, 0)} A · ${esc(TIER_NL[r.ev_tier] || r.ev_tier || "")}</span>` : ""}
-      ${r.heat ? `<span>Boiler</span><span>${esc(HEAT_NL[r.heat] || r.heat)}</span>` : ""}
+      <span>Sell · keep · buy</span><span>${eur(r.sell)} · ${eur(r.keep)} · ${eur(r.buy)}</span>
+      <span>SoC after quarter</span><span>${r.soc === null ? "—" : num(r.soc, 1) + " kWh (" + num(r.soc / cap * 100, 0) + " %)"}</span>
+      ${prev !== undefined ? `<span>Previous plan</span><span>${num(prev, 1)} kWh</span>` : ""}
+      <span>Solar / house (forecast)</span><span>${num((r.pv ?? 0) * 4, 2)} / ${num((r.load ?? 0) * 4, 2)} kW</span>
+      ${r.ev_a ? `<span>EV</span><span>${num(r.ev_a, 0)} A · ${esc(TIER_LABEL[r.ev_tier] || r.ev_tier || "")}</span>` : ""}
+      ${r.heat ? `<span>Water heater</span><span>${esc(HEAT_LABEL[r.heat] || r.heat)}</span>` : ""}
     </div>
-    ${changed ? `<div class="small" style="color:var(--warn)">Gewijzigd t.o.v. vorig plan: was ${esc(ACTION_NL[changed.was] || changed.was)}, nu ${esc(ACTION_NL[changed.now] || changed.now)}.</div>` : ""}
-    <div class="small muted">Verwachtingen zijn schattingen; de zon- en huisverwachting kan per kwartier flink afwijken.</div>
+    ${changed ? `<div class="small" style="color:var(--warn)">Changed from the previous plan: was ${esc(ACTION_LABEL[changed.was] || changed.was)}, now ${esc(ACTION_LABEL[changed.now] || changed.now)}.</div>` : ""}
+    <div class="small muted">Forecasts are estimates; the solar and house forecast can be well off per quarter.</div>
   </div>`;
 }
 
 function diffHtml(p) {
   const d = p && p.diff;
-  if (!d || !d.available) return `<div class="small muted">Nog geen vorig plan om mee te vergelijken (eerste cyclus na een herstart).</div>`;
-  if (!d.runs.length) return `<div class="small muted">Geen acties gewijzigd sinds het plan van ${hhmm(d.previous_at)}.</div>`;
-  return `<div class="stack small">${d.runs.slice(0, 6).map((x) => `<div><b class="mono">${hhmm(x.from)}–${hhmm(x.to)}</b> ${esc(ACTION_NL[x.was] || x.was)} → <b class="c-${x.now}">${esc(ACTION_NL[x.now] || x.now)}</b>
+  if (!d || !d.available) return `<div class="small muted">No previous plan to compare with yet (first cycle after a restart).</div>`;
+  if (!d.runs.length) return `<div class="small muted">No actions changed since the plan of ${hhmm(d.previous_at)}.</div>`;
+  return `<div class="stack small">${d.runs.slice(0, 6).map((x) => `<div><b class="mono">${hhmm(x.from)}–${hhmm(x.to)}</b> ${esc(ACTION_LABEL[x.was] || x.was)} → <b class="c-${x.now}">${esc(ACTION_LABEL[x.now] || x.now)}</b>
     ${x.reason ? `<div class="muted">${esc(x.reason)}</div>` : ""}</div>`).join("")}
-    ${d.runs.length > 6 ? `<div class="muted">… en ${d.runs.length - 6} meer</div>` : ""}</div>`;
+    ${d.runs.length > 6 ? `<div class="muted">… and ${d.runs.length - 6} more</div>` : ""}</div>`;
 }
 
 function moneyHtml(p) {
@@ -586,12 +593,12 @@ function moneyHtml(p) {
   const t = r && r.today;
   const signed = (v) => v === null || v === undefined ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + "€ " + num(Math.abs(v), 2);
   return `<div class="kv">
-    <span>Verwacht (horizon)</span><span>${d ? "€ " + num(d.expected_saving, 2) : "—"}</span>
-    <span>Netto kosten vandaag</span><span>${t ? "€ " + num(t.cost, 2) : "—"}</span>
-    <span>Zelfverbruik zou kosten</span><span>${t ? "€ " + num(t.baseline_cost, 2) : "—"}</span>
-    <span>Verschil vandaag</span><span style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t ? signed(t.gain) : "—"}</span>
-    <span>Totaal${r && r.since ? " sinds " + dayShort(r.since) : ""}</span><span>${r ? signed(r.gain_total) : "—"}</span>
-  </div><div class="small muted" style="margin-top:6px">Gemeten aan de meter, per kwartier geprijsd; de baseline is de batterij op alleen zelfverbruik met dezelfde zon en hetzelfde huis.${t ? ` ${t.quarters} kwartieren vandaag.` : ""}</div>`;
+    <span>Expected (horizon)</span><span>${d ? "€ " + num(d.expected_saving, 2) : "—"}</span>
+    <span>Net cost today</span><span>${t ? "€ " + num(t.cost, 2) : "—"}</span>
+    <span>Self-consumption would cost</span><span>${t ? "€ " + num(t.baseline_cost, 2) : "—"}</span>
+    <span>Difference today</span><span style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t ? signed(t.gain) : "—"}</span>
+    <span>Total${r && r.since ? " since " + dayShort(r.since) : ""}</span><span>${r ? signed(r.gain_total) : "—"}</span>
+  </div><div class="small muted" style="margin-top:6px">Measured at the meter, priced per quarter; the baseline is the battery on self-consumption only, with the same sun and the same house.${t ? ` ${t.quarters} quarters today.` : ""}</div>`;
 }
 
 function phasesHtml(hass, settings) {
@@ -599,16 +606,16 @@ function phasesHtml(hass, settings) {
   const o = (settings && settings.options) || {};
   const lim = Number(o.grid_limit_a || 25), margin = Number(o.grid_margin_a || 1);
   const ids = ["meter_current_l1_entity", "meter_current_l2_entity", "meter_current_l3_entity"].map((k) => r[k]);
-  if (!ids.some(Boolean)) return `<div class="small muted">Geen fasestroom-entiteiten toegewezen (Instellingen → rollen).</div>`;
+  if (!ids.some(Boolean)) return `<div class="small muted">No phase current entities assigned (Settings → roles).</div>`;
   return `<div class="stack">${ids.map((id, i) => {
-    const v = stateNum(hass, id), a = stateAge(hass, id);
-    const stale = v === null || a > 30000;
+    const v = stateNum(hass, id);
+    const stale = v === null;
     const pct = v === null ? 0 : Math.min(100, Math.abs(v) / lim * 100);
     const color = v !== null && Math.abs(v) > lim - margin ? "--fault" : v !== null && Math.abs(v) > (lim - margin) * .8 ? "--warn" : "--load";
     return `<div class="row mono small" style="display:grid;grid-template-columns:24px 1fr 76px;gap:8px" title="${esc(id || "")}">
       <b>L${i + 1}</b><div class="bar ${stale ? "stale-frame" : ""}"><i style="width:${pct}%;background:var(${color})"></i><em style="left:${(lim - margin) / lim * 100}%;background:var(--fault)"></em></div>
-      <span style="text-align:right">${v === null ? "—" : num(v, 1) + " A"}${stale && v !== null ? " ⧗" : ""}</span></div>`;
-  }).join("")}<div class="small muted mono">grens ${num(lim, 0)} A − marge ${num(margin, 0)} A per fase</div></div>`;
+      <span style="text-align:right">${v === null ? "—" : num(v, 1) + " A"}</span></div>`;
+  }).join("")}<div class="small muted mono">limit ${num(lim, 0)} A − margin ${num(margin, 0)} A per phase</div></div>`;
 }
 
 /** A property set before the element was defined hides the class setter; move it through the setter. */
@@ -619,22 +626,25 @@ function upgradeProperty(el, prop) {
 /* ------------------------------------------------------------------ the panel */
 
 const VIEWS = [
-  ["nu", "Nu"], ["plan", "Plan"], ["prijzen", "Prijzen"], ["batterij", "Batterij"], ["auto", "Auto"], ["boiler", "Boiler"], ["net", "Net"], ["leren", "Leren"], ["regie", "Regie"],
+  ["now", "Now"], ["plan", "Plan"], ["prices", "Prices"], ["battery", "Battery"], ["ev", "EV"], ["water-heater", "Water heater"], ["grid", "Grid"], ["learn", "Learn"], ["control", "Control"],
 ];
+// the first release used Dutch hashes; keep old bookmarks and the wall tablet URL working
+const VIEW_ALIAS = { nu: "now", prijzen: "prices", batterij: "battery", auto: "ev", boiler: "water-heater", net: "grid", leren: "learn", regie: "control" };
+/** The view key for a location hash: English key, old Dutch alias, or null. */
+function viewOf(hash) { const k = (hash || "").slice(1); const v = VIEW_ALIAS[k] || k; return VIEWS.some((x) => x[0] === v) ? v : null; }
 
 class HemsPanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._view = (location.hash || "#nu").slice(1);
-    if (!VIEWS.some((v) => v[0] === this._view)) this._view = "nu";
+    this._view = viewOf(location.hash) || "now";
     this._hours = 24;
     this._sel = null;
     this._confirm = false;
     const q = new URLSearchParams(location.search);
     this._kiosk = q.has("kiosk");
     this._forceTheme = q.get("theme") || (this._kiosk ? "dark" : null);
-    this._onHash = () => { const v = (location.hash || "#nu").slice(1); if (VIEWS.some((x) => x[0] === v)) { this._view = v; this._render(); } };
+    this._onHash = () => { const v = viewOf(location.hash); if (v) { this._view = v; this._render(); } };
     this._onResize = () => this._drawCharts();
   }
 
@@ -654,6 +664,7 @@ class HemsPanel extends HTMLElement {
 
   connectedCallback() {
     for (const prop of ["narrow", "panel", "route", "hass"]) upgradeProperty(this, prop);
+    this.toggleAttribute("kiosk", this._kiosk);
     this._off = store.on(() => this._render());
     window.addEventListener("hashchange", this._onHash);
     window.addEventListener("resize", this._onResize);
@@ -698,9 +709,9 @@ class HemsPanel extends HTMLElement {
         <nav class="tabs" role="tablist">${VIEWS.map(([k, label]) => `<button role="tab" data-view="${k}" aria-selected="${this._view === k}">${label}</button>`).join("")}</nav>
       </header>`;
     let body;
-    if (store.error) body = `<div class="panel pad" style="border-color:var(--fault)"><b style="color:var(--fault)">Geen verbinding met HEMS</b><div class="small">${esc(store.error)}</div></div>`;
-    else if (store.loaded === false) body = `<div class="panel pad"><b>HEMS is niet geladen</b><div class="small muted">De integratie staat uit of start nog. Kijk bij Instellingen → Apparaten &amp; diensten → HEMS.</div></div>`;
-    else body = this[`_view_${this._view}`](p, s, wide);
+    if (store.error) body = `<div class="panel pad" style="border-color:var(--fault)"><b style="color:var(--fault)">No connection to HEMS</b><div class="small">${esc(store.error)}</div></div>`;
+    else if (store.loaded === false) body = `<div class="panel pad"><b>HEMS is not loaded</b><div class="small muted">The integration is off or still starting. Check Settings → Devices &amp; services → HEMS.</div></div>`;
+    else body = this[`_view_${this._view.replace("-", "_")}`](p, s, wide);
     this.shadowRoot.innerHTML = `<style>${BASE_CSS}${PANEL_CSS}</style>
       ${header}
       <div class="strip">${modeStripHtml(p, s)}<span class="sp"></span><span id="health">${healthHtml(p, store)}</span></div>
@@ -723,7 +734,7 @@ class HemsPanel extends HTMLElement {
     if (dz) drawDays(this, dz, store.payload);
     const svg = this.shadowRoot.getElementById("tl");
     if (!svg) return;
-    const lanes = this._view === "nu" && this.clientWidth < 600 ? ["price", "plan", "soc"] : ["price", "plan", "soc", "pvload", "devices"];
+    const lanes = this._view === "now" && this.clientWidth < 600 ? ["price", "plan", "soc"] : ["price", "plan", "soc", "pvload", "devices"];
     drawTimeline(this, svg, store.payload, {
       hours: this._hours, lanes, compact: this.clientWidth < 600, selected: this._sel,
       onSelect: (i) => {
@@ -740,138 +751,138 @@ class HemsPanel extends HTMLElement {
     const stale = p && planStale(p);
     return `<section class="panel ${stale ? "stale-frame" : ""}">
       <div class="row pad" style="justify-content:space-between;padding-bottom:4px">
-        <span class="eyebrow">${stale ? `Plan van ${hhmm(p.meta.cycle_at)} · verouderd` : "Tijdlijn · nu → " + this._hours + " uur"}</span>
-        <span class="seg">${[8, 24, 48].map((h) => `<button data-hours="${h}" aria-pressed="${this._hours === h}">${h} u</button>`).join("")}</span>
+        <span class="eyebrow">${stale ? `Plan of ${hhmm(p.meta.cycle_at)} · stale` : "Timeline · now → " + this._hours + " h"}</span>
+        <span class="seg">${[8, 24, 48].map((h) => `<button data-hours="${h}" aria-pressed="${this._hours === h}">${h} h</button>`).join("")}</span>
       </div>
       <div style="padding:0 6px 6px"><svg id="tl" style="display:block;width:100%"></svg></div>
       <div class="legend small mono">
-        <span><i style="background:var(--charge-soft);outline:1px dashed var(--charge)"></i>laden (dry-run)</span>
-        <span><i style="background:var(--discharge-soft);outline:1px dashed var(--discharge)"></i>ontladen (dry-run)</span>
+        <span><i style="background:var(--charge-soft);outline:1px dashed var(--charge)"></i>charge (dry-run)</span>
+        <span><i style="background:var(--discharge-soft);outline:1px dashed var(--discharge)"></i>discharge (dry-run)</span>
         <span><i style="background:var(--fg);height:2px"></i>SoC</span>
-        <span><i style="border-top:2px dashed var(--fg-3);height:0;background:none"></i>vorig plan</span>
-        <span><i style="background:var(--pv-soft);outline:1px solid var(--pv)"></i>zon</span>
-        <span><i style="background:var(--load-soft);outline:1px solid var(--load)"></i>huis</span>
+        <span><i style="border-top:2px dashed var(--fg-3);height:0;background:none"></i>previous plan</span>
+        <span><i style="background:var(--pv-soft);outline:1px solid var(--pv)"></i>solar</span>
+        <span><i style="background:var(--load-soft);outline:1px solid var(--load)"></i>house</span>
       </div>
       ${opts.why === false ? "" : `<div class="pad" id="why" style="border-top:1px solid var(--line)">${whyHtml(p, this._sel)}</div>`}
     </section>`;
   }
 
-  _view_nu(p, s, wide) {
+  _view_now(p, s, wide) {
     const left = `<section class="panel pad">${verdictHtml(p, this._kiosk ? 44 : 32)}</section>
       ${recsHtml(p, this._applyId)}
       <section class="stack"><span class="eyebrow">Live</span><div id="live">${liveTilesHtml(this._hass, p, s)}</div></section>
-      <section class="stack"><span class="eyebrow">Beslisketen batterij</span>${chainHtml(p)}</section>`;
+      <section class="stack"><span class="eyebrow">Battery decision chain</span>${chainHtml(p)}</section>`;
     if (!wide) return `<div class="stack" style="gap:14px">${left}${this._timelineBlock(p)}</div>`;
     return `<div class="grid-nu">
       <div class="stack" style="gap:14px">${left}</div>
       <div class="stack" style="gap:14px">${this._timelineBlock(p)}
         <div class="grid2">
-          <section class="panel pad stack"><span class="eyebrow">Plan gewijzigd</span>${diffHtml(p)}</section>
-          <section class="panel pad stack"><span class="eyebrow">Geld</span>${moneyHtml(p)}</section>
+          <section class="panel pad stack"><span class="eyebrow">Plan changed</span>${diffHtml(p)}</section>
+          <section class="panel pad stack"><span class="eyebrow">Money</span>${moneyHtml(p)}</section>
         </div></div></div>`;
   }
 
   _view_plan(p) {
     return `<div class="stack" style="gap:14px">
-      ${p && p.decision ? `<section class="panel pad"><span class="eyebrow">Plan in woorden</span><div style="font:600 16px var(--font-body);margin-top:4px">${esc(p.decision.plan_text || "—")}</div></section>` : ""}
+      ${p && p.decision ? `<section class="panel pad"><span class="eyebrow">Plan in words</span><div style="font:600 16px var(--font-body);margin-top:4px">${esc(p.decision.plan_text || "—")}</div></section>` : ""}
       ${this._timelineBlock(p)}
       <div class="grid2">
-        <section class="panel pad stack"><span class="eyebrow">Plan gewijzigd</span>${diffHtml(p)}</section>
-        <section class="panel pad stack"><span class="eyebrow">Geld</span>${moneyHtml(p)}</section>
+        <section class="panel pad stack"><span class="eyebrow">Plan changed</span>${diffHtml(p)}</section>
+        <section class="panel pad stack"><span class="eyebrow">Money</span>${moneyHtml(p)}</section>
       </div>
-      <section class="panel"><div class="pad"><span class="eyebrow">Vensters</span></div><div class="scroll-x">${windowsTable(p)}</div></section>
+      <section class="panel"><div class="pad"><span class="eyebrow">Windows</span></div><div class="scroll-x">${windowsTable(p)}</div></section>
     </div>`;
   }
 
-  _view_prijzen(p) {
-    if (!p || !p.quarters.length) return `<div class="empty">Geen prijzen bekend.</div>`;
+  _view_prices(p) {
+    if (!p || !p.quarters.length) return `<div class="empty">No prices known.</div>`;
     const st = priceStats(p.quarters);
     const cheap = cheapestBlock(p.quarters, 12);
     const sells = (p.sell_windows || []).slice(0, 6);
     const netting = p.quarters.length ? p.quarters.reduce((a, r) => a + (r.imp - r.exp), 0) / p.quarters.length : null;
     return `<div class="stack" style="gap:14px">
       <div class="grid4">
-        <div class="tile"><small>Gemiddeld vandaag</small><b>${eur(st.avg)}</b><i>€/kWh import</i></div>
-        <div class="tile"><small>Laagste (horizon)</small><b class="c-charge">${eur(st.min)}</b><i>€/kWh</i></div>
-        <div class="tile"><small>Hoogste (horizon)</small><b class="c-discharge">${eur(st.max)}</b><i>€/kWh</i></div>
-        <div class="tile"><small>Import − export</small><b>${eur(netting)}</b><i>gem. verschil €/kWh</i></div>
+        <div class="tile"><small>Average today</small><b>${eur(st.avg)}</b><i>€/kWh import</i></div>
+        <div class="tile"><small>Lowest (horizon)</small><b class="c-charge">${eur(st.min)}</b><i>€/kWh</i></div>
+        <div class="tile"><small>Highest (horizon)</small><b class="c-discharge">${eur(st.max)}</b><i>€/kWh</i></div>
+        <div class="tile"><small>Import − export</small><b>${eur(netting)}</b><i>avg. difference €/kWh</i></div>
       </div>
-      <section class="panel"><div class="pad row" style="justify-content:space-between"><span class="eyebrow">Prijzen per kwartier (import)</span>
-        <span class="small muted mono">${p.meta.tomorrow_quarters ? "morgen gepubliceerd" : "morgen verschijnt ±13:15"}</span></div>
+      <section class="panel"><div class="pad row" style="justify-content:space-between"><span class="eyebrow">Prices per quarter (import)</span>
+        <span class="small muted mono">${p.meta.tomorrow_quarters ? "tomorrow published" : "tomorrow appears ±13:15"}</span></div>
         <div class="scroll-x" style="padding:0 6px 10px"><svg id="heat" style="display:block;min-width:620px;width:100%"></svg></div></section>
       <div class="grid2">
-        <section class="panel pad stack"><span class="eyebrow">Goedkoopste blok van 3 uur</span>
-          ${cheap ? `<div style="font:700 22px var(--font-display)" class="c-charge">${hhmm(cheap.from)}–${hhmm(cheap.to)}</div><div class="small mono">gemiddeld ${eur(cheap.avg)} €/kWh · ${dayShort(cheap.from)}</div>` : `<div class="small muted">Te weinig prijzen bekend.</div>`}</section>
-        <section class="panel pad stack"><span class="eyebrow">Verkoopvensters</span>
-          ${sells.length ? sells.map((w) => `<div class="row small mono" style="justify-content:space-between"><span>${hhmm(w.from)}–${hhmm(w.to)} · piek ${eur(w.peak)}</span><span class="tag ${w.status === "unsold" ? "fault" : w.status === "planned" ? "ok" : "off"}">${esc(WINDOW_NL[w.status] || w.status)}</span></div>`).join("") : `<div class="small muted">Geen verkoopvensters in de horizon.</div>`}</section>
+        <section class="panel pad stack"><span class="eyebrow">Cheapest 3-hour block</span>
+          ${cheap ? `<div style="font:700 22px var(--font-display)" class="c-charge">${hhmm(cheap.from)}–${hhmm(cheap.to)}</div><div class="small mono">average ${eur(cheap.avg)} €/kWh · ${dayShort(cheap.from)}</div>` : `<div class="small muted">Too few prices known.</div>`}</section>
+        <section class="panel pad stack"><span class="eyebrow">Sell windows</span>
+          ${sells.length ? sells.map((w) => `<div class="row small mono" style="justify-content:space-between"><span>${hhmm(w.from)}–${hhmm(w.to)} · peak ${eur(w.peak)}</span><span class="tag ${w.status === "unsold" ? "fault" : w.status === "planned" ? "ok" : "off"}">${esc(WINDOW_LABEL[w.status] || w.status)}</span></div>`).join("") : `<div class="small muted">No sell windows in the horizon.</div>`}</section>
       </div>
-      <div class="small muted">Saldering eindigt op ${esc((store.settings && store.settings.options && store.settings.options.salderen_until) || "2027-01-01")}; HEMS rekent de exportprijs per datum al zonder energiebelasting-teruggave vanaf die dag.</div>
+      <div class="small muted">Net metering ends on ${esc((store.settings && store.settings.options && store.settings.options.salderen_until) || "2027-01-01")}; from that day HEMS already prices exports per date without the energy tax refund.</div>
     </div>`;
   }
 
-  _view_batterij(p, s) {
-    if (!p) return `<div class="empty">Wachten op data…</div>`;
+  _view_battery(p, s) {
+    if (!p) return `<div class="empty">Waiting for data…</div>`;
     const b = p.battery;
     const soc = stateNum(this._hass, s && s.roles && s.roles.soc_entity);
     const kwh = soc === null ? null : soc / 100 * b.capacity_kwh;
-    const idleWhy = p.decision && p.decision.action === "idle" ? `<section class="panel pad stack"><span class="eyebrow">Waarom gebeurt er niets?</span><div>${esc(p.decision.reason || "")}</div></section>` : "";
+    const idleWhy = p.decision && p.decision.action === "idle" ? `<section class="panel pad stack"><span class="eyebrow">Why is nothing happening?</span><div>${esc(p.decision.reason || "")}</div></section>` : "";
     return `<div class="stack" style="gap:14px">
-      <section class="panel pad stack"><span class="eyebrow">Voorraad</span>
-        <div class="row" style="align-items:baseline;gap:14px"><b style="font:700 40px var(--font-display)">${soc === null ? "—" : num(soc, 0) + " %"}</b><span class="mono">${kwh === null ? "" : num(kwh, 1) + " kWh van " + num(b.capacity_kwh, 0)}</span></div>
+      <section class="panel pad stack"><span class="eyebrow">Stock</span>
+        <div class="row" style="align-items:baseline;gap:14px"><b style="font:700 40px var(--font-display)">${soc === null ? "—" : num(soc, 0) + " %"}</b><span class="mono">${kwh === null ? "" : num(kwh, 1) + " kWh of " + num(b.capacity_kwh, 0)}</span></div>
         <div class="bar" style="height:16px"><i style="width:${soc ?? 0}%;background:var(--fg-2)"></i><em style="left:${b.reserve_kwh / b.capacity_kwh * 100}%;background:var(--warn)"></em><em style="left:${b.floor_kwh / b.capacity_kwh * 100}%;background:var(--fault)"></em></div>
-        <div class="small mono muted">reserve ${num(b.reserve_kwh, 1)} kWh · vloer ${num(b.floor_kwh, 1)} kWh · max ${num(b.max_power_kw, 1)} kW · rendement ${num(b.round_trip_eff, 2)} · marge € ${num(b.min_profit_margin, 2)}/kWh</div>
+        <div class="small mono muted">reserve ${num(b.reserve_kwh, 1)} kWh · floor ${num(b.floor_kwh, 1)} kWh · max ${num(b.max_power_kw, 1)} kW · efficiency ${num(b.round_trip_eff, 2)} · margin € ${num(b.min_profit_margin, 2)}/kWh</div>
       </section>
       ${idleWhy}
       <section class="panel pad">${verdictHtml(p)}<div style="margin-top:10px">${chainHtml(p)}</div></section>
       ${this._timelineBlock(p)}
-      <section class="panel"><div class="pad"><span class="eyebrow">Verkoopvensters</span></div><div class="scroll-x">${sellTable(p)}</div></section>
+      <section class="panel"><div class="pad"><span class="eyebrow">Sell windows</span></div><div class="scroll-x">${sellTable(p)}</div></section>
     </div>`;
   }
 
-  _view_auto(p, s) {
+  _view_ev(p, s) {
     const ev = p && p.ev;
     const on = s && s.options && s.options.ev_enabled;
-    if (!on) return `<section class="panel pad stack"><span class="eyebrow">Auto</span><div>De EV-module staat uit.</div>${configureLink(s)}</section>`;
-    if (!ev) return `<div class="empty">Nog geen EV-plan.</div>`;
+    if (!on) return `<section class="panel pad stack"><span class="eyebrow">EV</span><div>The EV module is off.</div>${configureLink(s)}</section>`;
+    if (!ev) return `<div class="empty">No EV plan yet.</div>`;
     const quarters = (p.quarters || []).filter((r) => r.ev_a);
     const risk = ev.status === "deadline_at_risk";
     const sp = ev.setpoint;
     const forceOn = this._hass.states["switch.hems_ev_force_charge"] && this._hass.states["switch.hems_ev_force_charge"].state === "on";
     const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-    const dnl = ["ma", "di", "wo", "do", "vr", "za", "zo"];
+    const dnl = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     return `<div class="stack" style="gap:14px">
       <section class="panel pad stack" style="${risk ? "border-color:var(--fault);box-shadow:inset 3px 0 0 var(--fault)" : ""}">
         <span class="eyebrow">Status</span>
-        <div style="font:700 26px var(--font-display)" class="${risk ? "" : ""}">${esc(EV_NL[ev.status] || ev.status)}</div>
+        <div style="font:700 26px var(--font-display)" class="${risk ? "" : ""}">${esc(EV_LABEL[ev.status] || ev.status)}</div>
         <div class="small" style="color:var(--fg-2)">${esc(ev.reason || "")}</div>
         <div class="kv">
-          <span>Deadline</span><span>${ev.deadline ? dayShort(ev.deadline) + " " + hhmm(ev.deadline) : "geen"}</span>
-          <span>Nodig / extra / gepland</span><span>${num(ev.required_kwh, 1)} / ${num(ev.optional_kwh, 1)} / ${num(ev.planned_kwh, 1)} kWh</span>
-          ${ev.shortfall_kwh > 0 ? `<span style="color:var(--fault)">Tekort</span><span style="color:var(--fault)">${num(ev.shortfall_kwh, 1)} kWh</span>` : ""}
-          <span>Setpoint (zou sturen)</span><span>${sp ? num(sp.current_a, 0) + " A · " + esc(sp.code) : "—"}</span>
-          <span>Ruimte op het net</span><span>${ev.allowed_a === null || ev.allowed_a === undefined ? "onbekend" : num(ev.allowed_a, 1) + " A per fase"}</span>
+          <span>Deadline</span><span>${ev.deadline ? dayShort(ev.deadline) + " " + hhmm(ev.deadline) : "none"}</span>
+          <span>Required / extra / planned</span><span>${num(ev.required_kwh, 1)} / ${num(ev.optional_kwh, 1)} / ${num(ev.planned_kwh, 1)} kWh</span>
+          ${ev.shortfall_kwh > 0 ? `<span style="color:var(--fault)">Shortfall</span><span style="color:var(--fault)">${num(ev.shortfall_kwh, 1)} kWh</span>` : ""}
+          <span>Setpoint (would send)</span><span>${sp ? num(sp.current_a, 0) + " A · " + esc(sp.code) : "—"}</span>
+          <span>Grid headroom</span><span>${ev.allowed_a === null || ev.allowed_a === undefined ? "unknown" : num(ev.allowed_a, 1) + " A per phase"}</span>
         </div>
         ${sp && sp.reason && sp.reason !== ev.reason ? `<div class="small muted">${esc(sp.reason)}</div>` : ""}
       </section>
-      <section class="panel pad stack"><span class="eyebrow">Geforceerd laden</span>
-        <div class="small">Plant de benodigde energie zo vroeg en hard mogelijk, ongeacht de prijs. Stopt vanzelf als de auto vertrekt of het doel bereikt is, en staat na een herstart altijd uit.</div>
-        ${this._confirm ? `<div class="row"><span class="small">${forceOn ? "Geforceerd laden stoppen?" : "Geforceerd laden starten? (dry-run: alleen het plan verandert)"}</span>
-            <button class="btn pri" data-act="force-yes">${forceOn ? "Stoppen" : "Starten"}</button><button class="btn" data-act="force-no">Annuleren</button></div>`
-          : `<div class="row"><span class="tag ${forceOn ? "warn" : "off"}">${forceOn ? "AAN" : "UIT"}</span><button class="btn" data-act="force">${forceOn ? "Stoppen…" : "Starten…"}</button></div>`}
+      <section class="panel pad stack"><span class="eyebrow">Force charge</span>
+        <div class="small">Plans the required energy as early and as fast as possible, whatever the price. Stops by itself when the car leaves or the target is reached, and is always off after a restart.</div>
+        ${this._confirm ? `<div class="row"><span class="small">${forceOn ? "Stop force charging?" : "Start force charging? (dry-run: only the plan changes)"}</span>
+            <button class="btn pri" data-act="force-yes">${forceOn ? "Stop" : "Start"}</button><button class="btn" data-act="force-no">Cancel</button></div>`
+          : `<div class="row"><span class="tag ${forceOn ? "warn" : "off"}">${forceOn ? "ON" : "OFF"}</span><button class="btn" data-act="force">${forceOn ? "Stop…" : "Start…"}</button></div>`}
       </section>
       ${this._timelineBlock(p, { why: false })}
-      <section class="panel"><div class="pad"><span class="eyebrow">Geplande laadkwartieren</span></div><div class="scroll-x">
-        ${quarters.length ? `<table><tr><th>Blok</th><th>Stroom</th><th>Laag</th><th>Gem. prijs</th><th>Zon</th></tr>${evBlocks(quarters).map((b) => `<tr><td class="mono">${dayShort(b.from)} ${hhmm(b.from)}–${hhmm(b.to)}</td><td class="n">${num(b.a, 0)} A</td><td>${esc(TIER_NL[b.tier] || b.tier)}</td><td class="n">${eur(b.price)}</td><td class="n">${num(b.pv, 1)} kWh</td></tr>`).join("")}</table>` : `<div class="empty">Geen laadkwartieren gepland.</div>`}
+      <section class="panel"><div class="pad"><span class="eyebrow">Planned charging quarters</span></div><div class="scroll-x">
+        ${quarters.length ? `<table><tr><th>Block</th><th>Current</th><th>Tier</th><th>Avg. price</th><th>Solar</th></tr>${evBlocks(quarters).map((b) => `<tr><td class="mono">${dayShort(b.from)} ${hhmm(b.from)}–${hhmm(b.to)}</td><td class="n">${num(b.a, 0)} A</td><td>${esc(TIER_LABEL[b.tier] || b.tier)}</td><td class="n">${eur(b.price)}</td><td class="n">${num(b.pv, 1)} kWh</td></tr>`).join("")}</table>` : `<div class="empty">No charging quarters planned.</div>`}
       </div></section>
-      <section class="panel pad stack"><span class="eyebrow">Weekschema deadlines</span>
+      <section class="panel pad stack"><span class="eyebrow">Weekly deadline schedule</span>
         <div class="row">${days.map((d, i) => { const t = s.options["ev_deadline_" + d]; return `<span class="tag ${t ? "ok" : "off"}">${dnl[i]} ${t || "—"}</span>`; }).join("")}</div>
-        <div class="small muted">Doel ${num(s.options.ev_target_required_pct, 0)} % bij elke deadline, tot ${num(s.options.ev_target_max_pct, 0)} % onder € ${num(s.options.ev_max_price, 2)}/kWh.</div>${configureLink(s)}</section>
+        <div class="small muted">Target ${num(s.options.ev_target_required_pct, 0)} % at every deadline, up to ${num(s.options.ev_target_max_pct, 0)} % below € ${num(s.options.ev_max_price, 2)}/kWh.</div>${configureLink(s)}</section>
     </div>`;
   }
 
-  _view_boiler(p, s) {
+  _view_water_heater(p, s) {
     const on = s && s.options && s.options.water_heater_enabled;
-    if (!on) return `<section class="panel pad stack"><span class="eyebrow">Boiler</span><div>De boilermodule staat uit.</div>${configureLink(s)}</section>`;
+    if (!on) return `<section class="panel pad stack"><span class="eyebrow">Water heater</span><div>The water heater module is off.</div>${configureLink(s)}</section>`;
     const runs = (p && p.heating) || [];
     const o = s.options;
     const wh = s.roles && s.roles.water_heater_entity && this._hass.states[s.roles.water_heater_entity];
@@ -880,66 +891,66 @@ class HemsPanel extends HTMLElement {
     const legDays = leg && leg.last ? (Date.now() - new Date(leg.last).getTime()) / 864e5 : null;
     return `<div class="stack" style="gap:14px">
       <div class="grid4">
-        <div class="tile ${wh ? "" : "stale"}"><small>Tank</small><b>${temp === null ? "—" : num(temp, 0) + " °C"}</b><i>${wh ? esc(wh.state) + " · " + age(Date.now() - new Date(wh.last_updated).getTime()) : "geen entiteit toegewezen"}</i></div>
-        <div class="tile ${leg && leg.on ? "stale" : ""}"><small>Legionella</small><b>${legDays === null ? "—" : num(legDays, 0) + " d geleden"}</b><i>${leg && leg.configured ? (leg.on ? "te laat" : "op tijd") : "geen entiteit toegewezen"}</i></div>
-        <div class="tile"><small>Volgende run</small><b>${runs.length ? hhmm(runs[0].from) : "—"}</b><i>${runs.length ? esc(HEAT_NL[runs[0].kind] || runs[0].kind) + " · " + eur(runs[0].avg_price) : ""}</i></div>
+        <div class="tile ${wh ? "" : "stale"}"><small>Tank</small><b>${temp === null ? "—" : num(temp, 0) + " °C"}</b><i>${wh ? esc(wh.state) + " · " + age(Date.now() - new Date(wh.last_updated).getTime()) : "no entity assigned"}</i></div>
+        <div class="tile ${leg && leg.on ? "stale" : ""}"><small>Legionella</small><b>${legDays === null ? "—" : num(legDays, 0) + " d ago"}</b><i>${leg && leg.configured ? (leg.on ? "overdue" : "on time") : "no entity assigned"}</i></div>
+        <div class="tile"><small>Next run</small><b>${runs.length ? hhmm(runs[0].from) : "—"}</b><i>${runs.length ? esc(HEAT_LABEL[runs[0].kind] || runs[0].kind) + " · " + eur(runs[0].avg_price) : ""}</i></div>
       </div>
-      <section class="panel"><div class="pad"><span class="eyebrow">Geplande runs</span></div><div class="scroll-x">
-        ${runs.length ? `<table><tr><th>Soort</th><th>Van</th><th>Tot</th><th>kWh</th><th>Gem. prijs</th></tr>${runs.map((r) => `<tr><td>${esc(HEAT_NL[r.kind] || r.kind)}</td><td class="mono">${dayShort(r.from)} ${hhmm(r.from)}</td><td class="mono">${hhmm(r.to)}</td><td class="n">${num(r.kwh, 1)}</td><td class="n">${eur(r.avg_price)}</td></tr>`).join("")}</table>` : `<div class="empty">Geen run gepland: er is nog geen volledige prijsdag.</div>`}
+      <section class="panel"><div class="pad"><span class="eyebrow">Planned runs</span></div><div class="scroll-x">
+        ${runs.length ? `<table><tr><th>Kind</th><th>From</th><th>To</th><th>kWh</th><th>Avg. price</th></tr>${runs.map((r) => `<tr><td>${esc(HEAT_LABEL[r.kind] || r.kind)}</td><td class="mono">${dayShort(r.from)} ${hhmm(r.from)}</td><td class="mono">${hhmm(r.to)}</td><td class="n">${num(r.kwh, 1)}</td><td class="n">${eur(r.avg_price)}</td></tr>`).join("")}</table>` : `<div class="empty">No run planned: there is no full price day yet.</div>`}
       </div></section>
-      <section class="panel pad stack"><span class="eyebrow">Instellingen</span>
-        <div class="small">Normale run ${num(o.water_heater_energy_kwh, 1)} kWh in ${o.water_heater_hours} uur; nachtrun ${o.water_heater_night_energy_kwh ? num(o.water_heater_night_energy_kwh, 1) + " kWh" : "geen"};
-        legionella ${num(o.water_heater_legionella_energy_kwh, 1)} kWh in ${o.water_heater_legionella_hours} uur op ${DAY_NL[o.water_heater_legionella_weekday] || esc(o.water_heater_legionella_weekday)}.</div>
-        <div class="small muted">HEMS plant de boiler nu alleen; de boiler-add-on verwarmt nog zelf. Tanktemperatuur en laatste legionella-run volgen zodra die entiteiten een rol krijgen.</div>${configureLink(s)}</section>
+      <section class="panel pad stack"><span class="eyebrow">Settings</span>
+        <div class="small">Normal run ${num(o.water_heater_energy_kwh, 1)} kWh in ${o.water_heater_hours} h; night run ${o.water_heater_night_energy_kwh ? num(o.water_heater_night_energy_kwh, 1) + " kWh" : "none"};
+        legionella ${num(o.water_heater_legionella_energy_kwh, 1)} kWh in ${o.water_heater_legionella_hours} h on ${DAY_LABEL[o.water_heater_legionella_weekday] || esc(o.water_heater_legionella_weekday)}.</div>
+        <div class="small muted">HEMS only plans the water heater for now; the water heater add-on still heats on its own. Tank temperature and the last legionella run appear once those entities get a role.</div>${configureLink(s)}</section>
     </div>`;
   }
 
-  _view_net(p, s) {
+  _view_grid(p, s) {
     return `<div class="stack" style="gap:14px">
-      <section class="panel pad stack"><span class="eyebrow">Stroom per fase</span><div id="phases">${phasesHtml(this._hass, s)}</div></section>
-      <section class="panel pad stack"><span class="eyebrow">Ruimte voor de auto</span>
-        <div class="small">${p && p.ev && p.ev.allowed_a !== null && p.ev.allowed_a !== undefined ? `De krapste fase laat nu <b class="mono">${num(p.ev.allowed_a, 1)} A</b> over voor de auto.` : "Onbekend: geen EV-module of geen fasestromen."}</div>
-        <div class="small muted">De load balancer legt nog geen geschiedenis van begrenzingen vast; dat volgt met de live-overgang.</div></section>
+      <section class="panel pad stack"><span class="eyebrow">Current per phase</span><div id="phases">${phasesHtml(this._hass, s)}</div></section>
+      <section class="panel pad stack"><span class="eyebrow">Headroom for the EV</span>
+        <div class="small">${p && p.ev && p.ev.allowed_a !== null && p.ev.allowed_a !== undefined ? `The tightest phase now leaves <b class="mono">${num(p.ev.allowed_a, 1)} A</b> for the EV.` : "Unknown: no EV module or no phase currents."}</div>
+        <div class="small muted">The load balancer does not record a history of limits yet; that comes with the move to live control.</div></section>
     </div>`;
   }
 
-  _view_regie(p, s) {
-    if (!s) return `<div class="empty">Instellingen laden…</div>`;
+  _view_control(p, s) {
+    if (!s) return `<div class="empty">Loading settings…</div>`;
     const o = s.options, r = s.roles;
     const words = settingsInWords(o);
     return `<div class="stack" style="gap:14px">
       ${this._controlBlock(p)}
-      <section class="panel pad stack"><div class="row" style="justify-content:space-between"><span class="eyebrow">Instellingen in woorden</span>${configureLink(s)}</div>
+      <section class="panel pad stack"><div class="row" style="justify-content:space-between"><span class="eyebrow">Settings in words</span>${configureLink(s)}</div>
         ${words.map(([h, t]) => `<div><b>${h}</b><div class="small" style="color:var(--fg-2)">${t}</div></div>`).join("")}</section>
-      <section class="panel"><div class="pad"><span class="eyebrow">Entiteit per rol</span></div><div class="scroll-x"><table>
-        ${Object.entries(r).sort().map(([k, v]) => `<tr><td class="mono">${esc(k.replace(/_entity$|_entities$/, ""))}</td><td class="mono">${esc(Array.isArray(v) ? v.join(", ") : String(v))}</td><td class="mono small">${typeof v === "string" && v.includes(".") ? (this._hass.states[v] ? esc(this._hass.states[v].state) : `<span style="color:var(--fault)">ontbreekt</span>`) : ""}</td></tr>`).join("")}
+      <section class="panel"><div class="pad"><span class="eyebrow">Entity per role</span></div><div class="scroll-x"><table>
+        ${Object.entries(r).sort().map(([k, v]) => `<tr><td class="mono">${esc(k.replace(/_entity$|_entities$/, ""))}</td><td class="mono">${esc(Array.isArray(v) ? v.join(", ") : String(v))}</td><td class="mono small">${typeof v === "string" && v.includes(".") ? (this._hass.states[v] ? esc(this._hass.states[v].state) : `<span style="color:var(--fault)">missing</span>`) : ""}</td></tr>`).join("")}
       </table></div></section>
-      <div class="small muted mono">paneel ${VERSION} · HEMS build ${esc((p && p.meta.build) || "?")}</div>
+      <div class="small muted mono">panel ${VERSION} · HEMS build ${esc((p && p.meta.build) || "?")}</div>
     </div>`;
   }
 
   _controlBlock(p) {
     const c = (p && p.control) || { modes: {}, armed: false };
-    const mods = [["battery", "Batterij"], ["ev", "Auto"], ["water_heater", "Boiler"]];
-    return `<section class="panel pad stack"><span class="eyebrow">Sturen</span>
-      <div class="row"><span class="tag ${c.armed ? "fault" : "ok"}">${c.armed ? "GEWAPEND" : "VEILIG"}</span>
-        <button class="btn ${c.armed ? "" : "pri"} hold" data-act="arm">${c.armed ? "Ontwapenen" : "Houd 1,5 s vast om te wapenen"}</button>
-        <button class="btn danger" data-act="disarm">Alles naar dry-run</button></div>
-      <div class="small muted">Geen enkele module schrijft nog naar een apparaat; wapenen verandert nu niets, maar wordt gelogd. Na een herstart staat de hoofdschakelaar altijd uit.</div>
+    const mods = [["battery", "Battery"], ["ev", "EV"], ["water_heater", "Water heater"]];
+    return `<section class="panel pad stack"><span class="eyebrow">Control</span>
+      <div class="row"><span class="tag ${c.armed ? "fault" : "ok"}">${c.armed ? "ARMED" : "SAFE"}</span>
+        <button class="btn ${c.armed ? "" : "pri"} hold" data-act="arm">${c.armed ? "Disarm" : "Hold 1.5 s to arm"}</button>
+        <button class="btn danger" data-act="disarm">All to dry-run</button></div>
+      <div class="small muted">No module writes to a device yet; arming changes nothing now, but it is logged. After a restart the master switch is always off.</div>
       ${mods.map(([k, label]) => `<div class="row" style="justify-content:space-between;max-width:560px"><b>${label}</b><span class="seg">
-        ${["dry_run", "advisory"].map((m) => `<button data-mode="${k}:${m}" aria-pressed="${(c.modes[k] || "dry_run") === m}">${MODE_NL[m]}</button>`).join("")}
-        <button disabled title="Komt met de eerste module die zelf stuurt">AUTO</button></span></div>`).join("")}
-      <div class="small muted">Advies: HEMS stelt de volgende actie voor; Toepassen vuurt <span class="mono">hems_recommendation_applied</span> af voor je eigen automatisering.</div>
+        ${["dry_run", "advisory"].map((m) => `<button data-mode="${k}:${m}" aria-pressed="${(c.modes[k] || "dry_run") === m}">${MODE_LABEL[m]}</button>`).join("")}
+        <button disabled title="Comes with the first module that controls a device">AUTO</button></span></div>`).join("")}
+      <div class="small muted">Advisory: HEMS proposes the next action; Apply fires <span class="mono">hems_recommendation_applied</span> for your own automation.</div>
     </section>`;
   }
 
-  _view_leren(p, s) {
+  _view_learn(p, s) {
     const r = p && p.realised;
-    if (!r) return `<div class="empty">Nog geen metingen.</div>`;
+    if (!r) return `<div class="empty">No measurements yet.</div>`;
     const days = r.daily || [];
     const err = r.errors || {};
     const errTxt = (e, label) => e ? `<div class="tile"><small>${label} · 7 d</small><b>${num(e.mae_kwh_day, 2)} kWh/d</b><i>bias ${e.bias_kwh_day > 0 ? "+" : ""}${num(e.bias_kwh_day, 2)} · ${e.relative === null ? "" : num(e.relative * 100, 0) + " %"}</i></div>`
-      : `<div class="tile"><small>${label}</small><b class="muted">—</b><i>te weinig metingen</i></div>`;
+      : `<div class="tile"><small>${label}</small><b class="muted">—</b><i>too few measurements</i></div>`;
     const qs = (r.quarters || []).slice(-96);
     const actual = (q) => q.battery_kwh > 0.05 ? "charge" : q.battery_kwh < -0.05 ? "discharge" : "idle";
     const norm = (v) => { const x = String(v || "").toLowerCase(); return /charg|laad|laden/.test(x) && !/dis|ont/.test(x) ? "charge" : /dis|ont/.test(x) ? "discharge" : x ? "idle" : null; };
@@ -948,22 +959,22 @@ class HemsPanel extends HTMLElement {
     const b = r.bands || {};
     return `<div class="stack" style="gap:14px">
       <div class="grid4">
-        ${errTxt(err.pv, "Zonverwachting")}${errTxt(err.load, "Huisverwachting")}
-        <div class="tile"><small>Band zon P10–P90</small><b>${b.pv ? num(b.pv.p10, 2) + "–" + num(b.pv.p90, 2) : "—"}</b><i>${b.pv ? (b.pv.source === "measured" ? "gemeten, " + b.pv.samples + " kw." : "standaard, nog te weinig metingen") : ""}</i></div>
-        <div class="tile"><small>Band huis P10–P90</small><b>${b.load ? num(b.load.p10, 2) + "–" + num(b.load.p90, 2) : "—"}</b><i>${b.load ? (b.load.source === "measured" ? "gemeten, " + b.load.samples + " kw." : "standaard, nog te weinig metingen") : ""}</i></div>
+        ${errTxt(err.pv, "Solar forecast")}${errTxt(err.load, "House forecast")}
+        <div class="tile"><small>Solar band P10–P90</small><b>${b.pv ? num(b.pv.p10, 2) + "–" + num(b.pv.p90, 2) : "—"}</b><i>${b.pv ? (b.pv.source === "measured" ? "measured, " + b.pv.samples + " q." : "default, too few measurements yet") : ""}</i></div>
+        <div class="tile"><small>House band P10–P90</small><b>${b.load ? num(b.load.p10, 2) + "–" + num(b.load.p90, 2) : "—"}</b><i>${b.load ? (b.load.source === "measured" ? "measured, " + b.load.samples + " q." : "default, too few measurements yet") : ""}</i></div>
       </div>
-      <section class="panel"><div class="pad"><span class="eyebrow">Resultaat per dag t.o.v. zelfverbruik</span></div>
+      <section class="panel"><div class="pad"><span class="eyebrow">Result per day vs self-consumption</span></div>
         <div style="padding:0 6px 10px"><svg id="days" style="display:block;width:100%"></svg></div></section>
-      <section class="panel"><div class="pad row" style="justify-content:space-between"><span class="eyebrow">Laatste 24 uur per kwartier</span>
-        ${hasOther ? `<span class="tag ${disagree ? "warn" : "ok"}">${disagree} kwartieren oneens met de oude manager</span>` : `<span class="small muted">Wijs bij Instellingen de actiesensor van de oude battery manager toe voor de vergelijking.</span>`}</div>
-        <div class="scroll-x"><table><tr><th>Kwartier</th><th>HEMS zou</th>${hasOther ? "<th>Oude manager</th>" : ""}<th>Batterij deed</th><th>Net</th><th>Zon</th><th>Huis</th><th>Kosten</th><th>Zelfverbr.</th></tr>
+      <section class="panel"><div class="pad row" style="justify-content:space-between"><span class="eyebrow">Last 24 hours per quarter</span>
+        ${hasOther ? `<span class="tag ${disagree ? "warn" : "ok"}">${disagree} quarters disagree with the old manager</span>` : `<span class="small muted">Assign the old battery manager's action sensor in Settings for the comparison.</span>`}</div>
+        <div class="scroll-x"><table><tr><th>Quarter</th><th>HEMS would</th>${hasOther ? "<th>Old manager</th>" : ""}<th>Battery did</th><th>Grid</th><th>Solar</th><th>House</th><th>Cost</th><th>Self-cons.</th></tr>
         ${qs.slice().reverse().map((q) => { const off = hasOther && q.other && q.planned && norm(q.other) !== q.planned;
-          return `<tr style="${off ? "background:var(--discharge-soft)" : ""}"><td class="mono">${dayShort(q.t)} ${hhmm(q.t)}</td><td class="c-${q.planned || "idle"}">${esc(ACTION_NL[q.planned] || q.planned || "—")}</td>
-          ${hasOther ? `<td>${esc(q.other || "—")}</td>` : ""}<td class="c-${actual(q)}">${ACTION_NL[actual(q)]} ${num(q.battery_kwh * 4, 1)} kW</td>
+          return `<tr style="${off ? "background:var(--discharge-soft)" : ""}"><td class="mono">${dayShort(q.t)} ${hhmm(q.t)}</td><td class="c-${q.planned || "idle"}">${esc(ACTION_LABEL[q.planned] || q.planned || "—")}</td>
+          ${hasOther ? `<td>${esc(q.other || "—")}</td>` : ""}<td class="c-${actual(q)}">${ACTION_LABEL[actual(q)]} ${num(q.battery_kwh * 4, 1)} kW</td>
           <td class="n">${num((q.import_kwh - q.export_kwh) * 4, 1)} kW</td><td class="n">${num(q.pv_kwh * 4, 1)}${q.fc_pv_kwh !== null && q.fc_pv_kwh !== undefined ? ` <span class="muted">(${num(q.fc_pv_kwh * 4, 1)})</span>` : ""}</td>
           <td class="n">${num(q.load_kwh * 4, 1)}${q.fc_load_kwh !== null && q.fc_load_kwh !== undefined ? ` <span class="muted">(${num(q.fc_load_kwh * 4, 1)})</span>` : ""}</td>
           <td class="n">${q.cost === undefined ? "—" : "€ " + num(q.cost, 3)}</td><td class="n">${q.baseline_cost === undefined ? "—" : "€ " + num(q.baseline_cost, 3)}</td></tr>`; }).join("")}
-        </table></div><div class="small muted pad">Tussen haakjes: wat HEMS verwachtte. Kwartieren met minder dan 60 % meettijd tellen niet mee in de totalen.</div></section>
+        </table></div><div class="small muted pad">In brackets: what HEMS expected. Quarters with less than 60 % measured time do not count in the totals.</div></section>
     </div>`;
   }
 
@@ -1016,8 +1027,13 @@ nav.tabs button { border:none; background:none; padding:10px 10px 12px; font:600
 nav.tabs button[aria-selected="true"] { color:var(--fg); box-shadow:inset 0 -2px 0 var(--fg); }
 .strip { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--line); }
 .strip .sp { flex:1; }
+:host([kiosk]) .strip { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; padding:6px 10px; }
+/* in one scrolling line nothing may shrink, or the health details wrap word by word into a tall column */
+:host([kiosk]) .strip > *, :host([kiosk]) .strip #health > span { flex:none; flex-wrap:nowrap; }
+:host([kiosk]) .strip .sp { display:none; }
+:host([kiosk]) .strip .tag { padding:4px 6px; }
 main { padding:14px; max-width:1600px; margin:0 auto; }
-main.kiosk { padding:10px; padding-bottom:64px; }
+main.kiosk { padding:10px; }
 .grid-nu { display:grid; grid-template-columns:minmax(300px,380px) minmax(0,1fr); gap:14px; align-items:start; }
 main.kiosk .grid-nu { grid-template-columns:300px minmax(0,1fr); gap:10px; }
 main.kiosk .tiles { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -1027,7 +1043,7 @@ svg#tl:focus { outline:none; }
 .legend { display:flex; gap:12px; flex-wrap:wrap; padding:2px 14px 10px; color:var(--fg-2); }
 .legend span { display:inline-flex; gap:6px; align-items:center; }
 .legend i { width:14px; height:10px; display:inline-block; border-radius:2px; }
-nav.ktabs { position:fixed; left:0; right:0; bottom:0; display:flex; background:var(--panel); border-top:1px solid var(--line); }
+nav.ktabs { position:sticky; bottom:0; z-index:2; display:flex; background:var(--panel); border-top:1px solid var(--line); }
 nav.ktabs button { flex:1; border:none; background:none; padding:14px 0; font:600 13px var(--font-data); color:var(--fg-3); }
 nav.ktabs button[aria-pressed="true"] { color:var(--fg); box-shadow:inset 0 2px 0 var(--fg); }
 a { color:var(--charge); }
@@ -1040,36 +1056,36 @@ a { color:var(--charge); }
 `;
 
 function configureLink(s) {
-  return s ? `<a data-nav href="/config/integrations/integration/hems" class="small">Wijzig in HEMS-instellingen →</a>` : "";
+  return s ? `<a data-nav href="/config/integrations/integration/hems" class="small">Change in HEMS settings →</a>` : "";
 }
 
 function settingsInWords(o) {
-  const yes = (v) => v ? "aan" : "uit";
+  const yes = (v) => v ? "on" : "off";
   return [
-    ["Batterij", `${num(o.capacity_kwh, 0)} kWh bruikbaar, max ${num(o.max_power_kw, 1)} kW. Nooit onder ${num(o.hard_min_soc_pct, 0)} %, reserve ${num(o.reserve_soc_pct, 0)} %. Rendement ${num(o.round_trip_eff, 2)}; een cyclus moet € ${num(o.min_profit_margin, 2)} per kWh opleveren na verlies. Wachtkosten € ${num(o.hold_cost_kwh_h, 3)} per kWh per uur.`],
-    ["Boiler", o.water_heater_enabled ? `Aan. Dagrun ${num(o.water_heater_energy_kwh, 1)} kWh in ${o.water_heater_hours} u, legionella ${num(o.water_heater_legionella_energy_kwh, 1)} kWh op ${DAY_NL[o.water_heater_legionella_weekday] || esc(o.water_heater_legionella_weekday)}.` : "Uit."],
-    ["Auto", o.ev_enabled ? `Aan (dry-run). ${num(o.ev_capacity_kwh, 1)} kWh accu, doel ${num(o.ev_target_required_pct, 0)} % bij deadline, tot ${num(o.ev_target_max_pct, 0)} % onder € ${num(o.ev_max_price, 2)}. ${num(o.ev_min_current_a, 0)}–${num(o.ev_max_current_a, 0)} A per fase; alleen zon voor extra: ${yes(o.ev_solar_only)}.` : "Uit."],
-    ["Prijzen", `Nord Pool ${yes(o.nordpool_enabled)} (${esc(o.delivery_area)}). Import ×${num(o.import_vat_multiplier, 2)} + € ${num(o.import_markup, 4)} + energiebelasting € ${num(o.import_energy_tax, 5)}. Saldering ${yes(o.salderen)} tot ${esc(o.salderen_until || "—")}.`],
-    ["Zon en weer", `Weer ${yes(o.weather_enabled)}; PV-piek ${num(o.pv_max_ac_w, 0)} W; versterking ${o.pv_gain_w_per_wm2 ? num(o.pv_gain_w_per_wm2, 2) : "automatisch gekalibreerd"}.`],
-    ["Netaansluiting", `${num(o.grid_limit_a, 0)} A per fase, ${num(o.grid_margin_a, 0)} A marge.`],
-    ["Logboek", `Volledig plan per cyclus loggen: ${yes(o.trace_full_plan)}.`],
+    ["Battery", `${num(o.capacity_kwh, 0)} kWh usable, max ${num(o.max_power_kw, 1)} kW. Never below ${num(o.hard_min_soc_pct, 0)} %, reserve ${num(o.reserve_soc_pct, 0)} %. Efficiency ${num(o.round_trip_eff, 2)}; a cycle must earn € ${num(o.min_profit_margin, 2)} per kWh after losses. Holding cost € ${num(o.hold_cost_kwh_h, 3)} per kWh per hour.`],
+    ["Water heater", o.water_heater_enabled ? `On. Day run ${num(o.water_heater_energy_kwh, 1)} kWh in ${o.water_heater_hours} h, legionella ${num(o.water_heater_legionella_energy_kwh, 1)} kWh on ${DAY_LABEL[o.water_heater_legionella_weekday] || esc(o.water_heater_legionella_weekday)}.` : "Off."],
+    ["EV", o.ev_enabled ? `On (dry-run). ${num(o.ev_capacity_kwh, 1)} kWh battery, target ${num(o.ev_target_required_pct, 0)} % at the deadline, up to ${num(o.ev_target_max_pct, 0)} % below € ${num(o.ev_max_price, 2)}. ${num(o.ev_min_current_a, 0)}–${num(o.ev_max_current_a, 0)} A per phase; solar only for extra: ${yes(o.ev_solar_only)}.` : "Off."],
+    ["Prices", `Nord Pool ${yes(o.nordpool_enabled)} (${esc(o.delivery_area)}). Import ×${num(o.import_vat_multiplier, 2)} + € ${num(o.import_markup, 4)} + energy tax € ${num(o.import_energy_tax, 5)}. Net metering ${yes(o.salderen)} until ${esc(o.salderen_until || "—")}.`],
+    ["Solar and weather", `Weather ${yes(o.weather_enabled)}; PV peak ${num(o.pv_max_ac_w, 0)} W; gain ${o.pv_gain_w_per_wm2 ? num(o.pv_gain_w_per_wm2, 2) : "calibrated automatically"}.`],
+    ["Grid connection", `${num(o.grid_limit_a, 0)} A per phase, ${num(o.grid_margin_a, 0)} A margin.`],
+    ["Decision log", `Log the full plan every cycle: ${yes(o.trace_full_plan)}.`],
   ];
 }
 
 function windowsTable(p) {
   const ws = (p && p.windows) || [];
-  if (!ws.length) return `<div class="empty">Geen laad- of ontlaadvensters gepland.</div>`;
-  return `<table><tr><th>Actie</th><th>Van</th><th>Tot</th><th>kWh</th><th>kW</th><th>Gem. prijs</th><th>SoC</th></tr>
-    ${ws.map((w) => `<tr><td class="c-${w.action}">${esc(ACTION_NL[w.action] || w.action)}</td><td class="mono">${dayShort(w.from)} ${hhmm(w.from)}</td><td class="mono">${hhmm(w.to)}</td>
+  if (!ws.length) return `<div class="empty">No charge or discharge windows planned.</div>`;
+  return `<table><tr><th>Action</th><th>From</th><th>To</th><th>kWh</th><th>kW</th><th>Avg. price</th><th>SoC</th></tr>
+    ${ws.map((w) => `<tr><td class="c-${w.action}">${esc(ACTION_LABEL[w.action] || w.action)}</td><td class="mono">${dayShort(w.from)} ${hhmm(w.from)}</td><td class="mono">${hhmm(w.to)}</td>
       <td class="n">${num(w.kwh, 1)}</td><td class="n">${kw(Math.abs(w.power_w))}</td><td class="n">${eur(w.avg_price_eur_kwh)}</td><td class="n">${num(w.soc_from_pct, 0)} → ${num(w.soc_to_pct, 0)} %</td></tr>`).join("")}</table>`;
 }
 
 function sellTable(p) {
   const ws = (p && p.sell_windows) || [];
-  if (!ws.length) return `<div class="empty">Geen verkoopvensters in de horizon.</div>`;
-  return `<table><tr><th>Venster</th><th>Piek</th><th>Status</th><th>Verkocht</th><th>Uit voorraad</th></tr>
+  if (!ws.length) return `<div class="empty">No sell windows in the horizon.</div>`;
+  return `<table><tr><th>Window</th><th>Peak</th><th>Status</th><th>Sold</th><th>From stock</th></tr>
     ${ws.map((w) => `<tr><td class="mono">${dayShort(w.from)} ${hhmm(w.from)}–${hhmm(w.to)}</td><td class="n">${eur(w.peak)}</td>
-      <td><span class="tag ${w.status === "unsold" ? "fault" : w.status === "planned" ? "ok" : "off"}">${esc(WINDOW_NL[w.status] || w.status)}</span></td>
+      <td><span class="tag ${w.status === "unsold" ? "fault" : w.status === "planned" ? "ok" : "off"}">${esc(WINDOW_LABEL[w.status] || w.status)}</span></td>
       <td class="n">${num(w.sold_kwh, 1)} kWh</td><td class="n">${num(w.from_stock_kwh, 1)} kWh</td></tr>`).join("")}</table>`;
 }
 
@@ -1128,7 +1144,7 @@ function drawDays(host, svg, payload) {
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H);
   const el = (tag, a) => { const e = document.createElementNS(SVGNS, tag); for (const k in a) e.setAttribute(k, a[k]); svg.appendChild(e); return e; };
   const t = (txt, a) => { const e = el("text", { fill: C("--fg-3"), "font-size": 10, ...a }); e.textContent = txt; };
-  if (!days.length) { t("Nog geen hele dag gemeten", { x: W / 2, y: H / 2, "text-anchor": "middle" }); return; }
+  if (!days.length) { t("No full day measured yet", { x: W / 2, y: H / 2, "text-anchor": "middle" }); return; }
   const mx = Math.max(0.1, ...days.map((d) => Math.abs(d.gain)));
   const zero = top + (bot - top) / 2, sy = (v) => zero - v / mx * (bot - top) / 2;
   el("line", { x1: L, x2: W - 4, y1: zero, y2: zero, stroke: C("--line") });
@@ -1137,7 +1153,7 @@ function drawDays(host, svg, payload) {
   days.forEach((d, i) => {
     const y = sy(d.gain);
     const r = el("rect", { x: L + i * bw + 1, y: Math.min(y, zero), width: Math.max(1, bw - 2), height: Math.abs(zero - y), fill: C(d.gain >= 0 ? "--ok" : "--fault"), "fill-opacity": d.today ? .5 : .85 });
-    const tt = document.createElementNS(SVGNS, "title"); tt.textContent = `${d.date}: ${num(d.gain, 2)} € (kosten ${num(d.cost, 2)}, zelfverbruik ${num(d.baseline_cost, 2)})`; r.appendChild(tt);
+    const tt = document.createElementNS(SVGNS, "title"); tt.textContent = `${d.date}: ${num(d.gain, 2)} € (cost ${num(d.cost, 2)}, self-consumption ${num(d.baseline_cost, 2)})`; r.appendChild(tt);
     if (days.length <= 14 || i % 3 === 0) t(d.date.slice(5), { x: L + i * bw + bw / 2, y: H - 6, "text-anchor": "middle" });
   });
 }
@@ -1164,7 +1180,7 @@ class HemsTimelineCard extends HemsCardBase {
     const hours = Number((this._config && this._config.hours) || 24);
     if (!this.shadowRoot.getElementById("tl")) {
       this.shadowRoot.innerHTML = `<style>${BASE_CSS} :host{background:var(--panel);border-radius:var(--ha-card-border-radius,12px);overflow:hidden}</style>
-        <div class="pad" style="padding-bottom:0"><span class="eyebrow">${esc((this._config && this._config.title) || "HEMS · tijdlijn")}</span></div>
+        <div class="pad" style="padding-bottom:0"><span class="eyebrow">${esc((this._config && this._config.title) || "HEMS · timeline")}</span></div>
         <div style="padding:4px 6px 8px"><svg id="tl" style="display:block;width:100%"></svg></div><div class="pad" id="why" style="border-top:1px solid var(--line)"></div>`;
     }
     const p = store.payload;
@@ -1191,6 +1207,6 @@ if (!customElements.get("hems-timeline-card")) customElements.define("hems-timel
 if (!customElements.get("hems-verdict-card")) customElements.define("hems-verdict-card", HemsVerdictCard);
 window.customCards = window.customCards || [];
 for (const [type, name, description] of [
-  ["hems-timeline-card", "HEMS tijdlijn", "Prijs, plan, SoC en verwachtingen op één tijdas, met het waarom per kwartier."],
-  ["hems-verdict-card", "HEMS nu", "Wat HEMS nu zou doen, waarom, en de beslisketen."],
+  ["hems-timeline-card", "HEMS timeline", "Price, plan, SoC and forecasts on one time axis, with the reason per quarter."],
+  ["hems-verdict-card", "HEMS now", "What HEMS would do now, why, and the decision chain."],
 ]) if (!window.customCards.some((c) => c.type === type)) window.customCards.push({ type, name, description, preview: false });
