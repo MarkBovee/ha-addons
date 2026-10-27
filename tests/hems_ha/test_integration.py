@@ -16,6 +16,7 @@ from custom_components.hems.const import (CONF_EV_CHARGING, CONF_EV_CURRENTS, CO
                                           CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
 from custom_components.hems.engine.nordpool import NORD_POOL_URL, nordpool_params
 from custom_components.hems.engine.weather import OPEN_METEO_URL
+from custom_components.hems.websocket import ws_settings, ws_subscribe
 
 ROOT = Path(__file__).resolve().parents[2]
 PRICES = ROOT / "hems" / "core" / "tests" / "fixtures" / "quarter_import_prices.csv"
@@ -748,7 +749,7 @@ def test_entity_names_are_english_in_every_language():
     names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
                     for key, ent in group.items()} for file in ("strings", "translations/en", "translations/nl")}
     assert names["translations/nl"] == names["translations/en"] == names["strings"]
-    assert len(names["strings"]) == 26 and names["strings"][("sensor", "charge_window")] == "Charge window"
+    assert len(names["strings"]) == 28 and names["strings"][("sensor", "charge_window")] == "Charge window"
 
 
 EV_ROLES = {**ROLES, CONF_EV_PLUGGED: "binary_sensor.car_plugged", CONF_EV_CHARGING: "binary_sensor.car_charging", CONF_EV_SOC: "sensor.car_soc",
@@ -823,3 +824,91 @@ async def test_the_price_sensors_serve_the_energy_prices_consumers(recorder_mock
     low, high = float(hass.states.get("sensor.hems_price_min_today").state), float(hass.states.get("sensor.hems_price_max_today").state)
     average, profit = float(hass.states.get("sensor.hems_price_average_today").state), float(hass.states.get("sensor.hems_max_profit_today").state)
     assert low <= average <= high and profit > 0
+
+
+class FakeConnection:
+    """Stands in for a websocket connection: the frozen test clock would expire a real client's access token."""
+
+    def __init__(self) -> None:
+        self.messages, self.subscriptions = [], {}
+
+    def send_message(self, message) -> None:
+        self.messages.append(message)
+
+    def send_result(self, msg_id, result=None) -> None:
+        self.messages.append({"id": msg_id, "type": "result", "success": True, "result": result})
+
+    def send_error(self, msg_id, code, message) -> None:
+        self.messages.append({"id": msg_id, "type": "result", "success": False, "error": {"code": code}})
+
+    def events(self) -> list[dict]:
+        return [m["event"] for m in self.messages if m.get("type") == "event"]
+
+
+async def test_the_panel_subscription_sends_the_whole_horizon_now_and_after_every_cycle(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """hems/subscribe answers with one payload per quarter of the known prices, the decision with its comparison, and pushes again on the next cycle."""
+    set_states(hass, soc="60")
+    await setup_entry(hass, freezer, aioclient_mock, now=EVENING)
+    conn = FakeConnection()
+    ws_subscribe(hass, conn, {"id": 1, "type": "hems/subscribe"})
+    assert conn.messages[0]["success"] and 1 in conn.subscriptions
+    first = conn.events()[0]
+    payload = first["payload"]
+    assert first["loaded"] is True and payload["meta"]["status"] == "ok" and payload["meta"]["dry_run"] is True
+    assert payload["meta"]["stale_after_s"]["plan"] == 1200 and payload["meta"]["cycle_at"]
+    assert payload["decision"]["action"] == "discharge" and payload["decision"]["reason"] and payload["decision"]["compare"]
+    rows = payload["quarters"]
+    assert rows[0]["t"] == payload["decision"]["slot_start"] and rows[0]["act"] == "discharge" and rows[0]["w"] < 0
+    assert all({"imp", "exp", "pv", "load", "soc"} <= row.keys() for row in rows)
+    assert payload["battery"]["reserve_kwh"] == pytest.approx(7.5) and payload["diff"]["available"] is False   # the first cycle has nothing to compare with
+    freezer.tick(timedelta(minutes=15))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    second = conn.events()[-1]["payload"]
+    assert second["meta"]["cycle_at"] > payload["meta"]["cycle_at"] and second["diff"]["available"] is True
+    assert second["diff"]["previous_soc"]
+    conn.subscriptions[1]()                               # unsubscribing stops the pushes
+    count = len(conn.events())
+    freezer.tick(timedelta(minutes=15))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert len(conn.events()) == count
+
+
+async def test_the_settings_command_gives_the_options_and_roles_in_force(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The panel shows the settings in words and links to the options dialog by entry id."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock, options={"reserve_soc_pct": 35.0})
+    conn = FakeConnection()
+    ws_settings(hass, conn, {"id": 1, "type": "hems/settings"})
+    result = conn.messages[0]["result"]
+    assert result["entry_id"] == entry.entry_id and result["loaded"] is True
+    assert result["options"]["reserve_soc_pct"] == 35.0 and result["roles"][CONF_SOC] == "sensor.soc"
+
+
+async def test_the_plan_diff_and_last_cycle_sensors_follow_the_cycles(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The first cycle has no previous plan (unknown); the next one counts changed quarters and names the stretches."""
+    set_states(hass, soc="60")
+    await setup_entry(hass, freezer, aioclient_mock, now=EVENING)
+    assert hass.states.get("sensor.hems_plan_diff").state == "unknown"
+    first = hass.states.get("sensor.hems_last_cycle").state
+    hass.states.async_set("sensor.soc", "95")                 # a different starting point: the plan must shift
+    freezer.tick(timedelta(minutes=15))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    diff = hass.states.get("sensor.hems_plan_diff")
+    assert int(diff.state) >= 0 and isinstance(diff.attributes["changes"], list) and diff.attributes["previous_plan_from"]
+    assert hass.states.get("sensor.hems_last_cycle").state > first
+
+
+async def test_the_panel_payload_follows_the_latest_snapshot_even_without_a_subscriber(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Cycles without an open panel must not leave an old payload behind: a later request gets the latest cycle."""
+    set_states(hass, soc="60")
+    entry = await setup_entry(hass, freezer, aioclient_mock, now=EVENING)
+    coordinator = entry.runtime_data
+    first = coordinator.dashboard_payload()["meta"]["cycle_at"]
+    for _ in range(2):
+        freezer.tick(timedelta(minutes=15))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert coordinator.dashboard_payload()["meta"]["cycle_at"] == coordinator.data.cycle_at.isoformat() != first

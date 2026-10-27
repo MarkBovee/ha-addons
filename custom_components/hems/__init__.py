@@ -4,10 +4,17 @@ from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event, async_track_utc_time_change
+from homeassistant.helpers.typing import ConfigType
 
-from .const import BUILD_FILE, CONF_SOC, PLATFORMS
+from .const import BUILD_FILE, CONF_SOC, DOMAIN, PLATFORMS
 from .coordinator import HemsCoordinator
+from .panel import async_register_panel, async_unregister_panel
+from .websocket import SIGNAL_UPDATE, async_register_commands
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 type HemsConfigEntry = ConfigEntry[HemsCoordinator]
 
@@ -23,6 +30,12 @@ def _show_info_logs() -> None:
     package = logging.getLogger(__package__)
     if package.level == logging.NOTSET:
         package.setLevel(logging.INFO)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the panel's websocket commands once per run."""
+    async_register_commands(hass)
+    return True
 
 
 def read_build() -> str:
@@ -52,10 +65,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool
 
     entry.async_on_unload(async_track_utc_time_change(hass, _on_quarter, minute=(0, 15, 30, 45), second=PLAN_SECONDS))
     entry.async_on_unload(async_track_state_change_event(hass, [entry.data[CONF_SOC]], _on_soc_update))
+    entry.async_on_unload(coordinator.async_add_listener(lambda: async_dispatcher_send(hass, SIGNAL_UPDATE)))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await async_register_panel(hass)
+    async_dispatcher_send(hass, SIGNAL_UPDATE)      # a panel that was open during a reload gets the new entry's data
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool:
     """Unload the sensors; the quarter listener goes with the entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        async_unregister_panel(hass)
+    return unloaded

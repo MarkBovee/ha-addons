@@ -257,6 +257,12 @@
       },
       "max_profit_today": {
         "name": "Max profit today"
+      },
+      "plan_diff": {
+        "name": "Plan changes"
+      },
+      "last_cycle": {
+        "name": "Last cycle"
       }
     },
     "binary_sensor": {

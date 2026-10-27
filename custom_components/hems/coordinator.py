@@ -38,6 +38,7 @@ from .engine.prices import PriceModel
 from .engine.rolling import Decision
 from .engine.trace import TraceWriter
 from .engine.windows import UNSOLD
+from .dashboard import build_payload
 from .engine.weather import OPEN_METEO_URL, Weather, open_meteo_params, parse_open_meteo
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ class HemsSnapshot:
     weather: Weather | None = None         # the irradiance and temperature forecast the PV forecast was computed from
     ev_setpoint: EvSetpoint | None = None  # what the EV module would ask of the charger now (None when the module is off)
     ev_allowed_a: float | None = None      # what the live per-phase meter leaves for the car (None = no per-phase data)
+    cycle_at: datetime | None = None       # when this cycle ran (UTC)
+    previous_decision: Decision | None = None   # the plan of the cycle before, for the dashboard's plan diff
 
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -153,6 +156,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._weather_retry_wanted = False
         self._gain = 0.0
         self._retry_cancel = None
+        self._payload: dict[str, Any] | None = None
+        self._payload_key: tuple | None = None
         self.force_charge = False                  # the owner's override on the EV module; a restart clears it on purpose
 
     def _on(self, role: str) -> bool | None:
@@ -431,7 +436,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             import_curve=parse_price_curve(price_state.attributes.get("price_curve") if price_state else None),
             load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market,
             ev=self.ev_state(settings) if settings.ev.enabled else None)
-        output = await self.hass.async_add_executor_job(step, inputs, settings, self._previous)
+        previous = self._previous
+        output = await self.hass.async_add_executor_job(step, inputs, settings, previous)
         if output.decision:
             self._previous = output.decision
         weather_age = (now - self._weather.fetched_at).total_seconds() / 60 if self._weather else None
@@ -450,7 +456,19 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         prices_until = max(known) + timedelta(minutes=15) if known else None
         text, windows, table = self._plan_for_users(output)
         return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table,
-                            self._weather, car, allowed)
+                            self._weather, car, allowed, cycle_at=now, previous_decision=previous)
+
+    def dashboard_payload(self) -> dict[str, Any] | None:
+        """The panel's data for the latest snapshot (hems.dashboard), cached until the snapshot changes; None before the first cycle."""
+        snap = self.data
+        if snap is None or self._settings is None:
+            return None
+        key = (snap, self.force_charge)          # the snapshot itself, not id(): a freed snapshot's address can be reused
+        if self._payload_key is None or self._payload_key[0] is not snap or self._payload_key[1] != self.force_charge:
+            self._payload = build_payload(snap, build=self.build, cycle_at=snap.cycle_at, previous=snap.previous_decision,
+                                          battery=self._settings.battery, soc_max_age=self._settings.soc_max_age, force_charge=self.force_charge)
+            self._payload_key = key
+        return self._payload
 
     def _plan_for_users(self, output: EngineOutput) -> tuple[str, tuple[dict, ...], str]:
         """The plan's windows as a sentence, as local-time records and as a Markdown table; empty when this cycle has no plan."""

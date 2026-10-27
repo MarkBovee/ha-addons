@@ -6,12 +6,14 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
 from homeassistant.const import CURRENCY_EURO, UnitOfElectricCurrent, UnitOfEnergy, UnitOfIrradiance, UnitOfPower, UnitOfTemperature
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import HemsConfigEntry
 from .coordinator import HemsCoordinator, HemsSnapshot
+from .dashboard import plan_diff
 from .engine import ev as ev_module, executor
 from .engine.outlook import cheapest_block, day_price_stats, first_window, forecast_series, hour_mean, hour_total, price_curve, price_curve_for_day, window_total
 from .engine.windows import record
@@ -93,6 +95,21 @@ def _plan_preview(snap: HemsSnapshot) -> dict[str, Any]:
             "pv_gain_w_per_wm2": round(snap.pv_gain_w_per_wm2, 2), "history_hours": snap.history_hours,
             "slots": [{"start": (d.slot_start + i * QUARTER).astimezone(tz).isoformat(), "action": s.action, "power_w": round(s.battery_kwh * 4000),
                        "soc_kwh": round(s.soc_kwh, 2), "reason": s.reason} for i, s in enumerate(slots)]}
+
+
+def _plan_diff_value(snap: HemsSnapshot) -> int | None:
+    """Quarters whose action changed since the previous cycle's plan; None on the first cycle or without a decision."""
+    diff = plan_diff(snap.output.decision, snap.previous_decision)
+    return diff["changed"] if diff["available"] else None
+
+
+def _plan_diff_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """The changed stretches in local time: from, to, the old and the new action and the new reason."""
+    diff = plan_diff(snap.output.decision, snap.previous_decision)
+    tz = dt_util.get_default_time_zone()
+    local = lambda iso: dt_util.parse_datetime(iso).astimezone(tz).isoformat(timespec="minutes")
+    return {"previous_plan_from": diff["previous_at"] and local(diff["previous_at"]),
+            "changes": [{**r, "from": local(r["from"]), "to": local(r["to"])} for r in diff["runs"]]}
 
 
 def _sell_window_start(snap: HemsSnapshot):
@@ -258,6 +275,10 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           value=lambda s: round(sum(v for t, v in s.output.pv_kwh.items() if s.output.decision and
                                                     s.output.decision.slot_start <= t < s.output.decision.slot_start + 96 * QUARTER), 1) if s.output.pv_kwh else None),
     HemsSensorDescription(key="plan", translation_key="plan", value=lambda s: s.plan_text or None, attributes=_plan_preview),
+    HemsSensorDescription(key="plan_diff", translation_key="plan_diff", state_class=SensorStateClass.MEASUREMENT, native_unit_of_measurement="quarters",
+                          value=_plan_diff_value, attributes=_plan_diff_attrs),
+    HemsSensorDescription(key="last_cycle", translation_key="last_cycle", device_class=SensorDeviceClass.TIMESTAMP, entity_category=EntityCategory.DIAGNOSTIC,
+                          value=lambda s: s.cycle_at),
 )
 
 
@@ -272,7 +293,7 @@ class HemsSensor(HemsEntity, SensorEntity):
     entity_description: HemsSensorDescription
 
     # Series of up to a few thousand characters change every quarter and say nothing in history: keep them out of the recorder.
-    _unrecorded_attributes = frozenset({"slots", "curve", "price_curve", "forecast", "windows", "markdown", "quarters"})
+    _unrecorded_attributes = frozenset({"changes", "slots", "curve", "price_curve", "forecast", "windows", "markdown", "quarters"})
 
     def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry, description: HemsSensorDescription) -> None:
         """Bind to the coordinator under the shared device."""
