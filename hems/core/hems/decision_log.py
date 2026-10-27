@@ -95,8 +95,9 @@ def plan_detail(decision: "Decision") -> dict:
 
 def settings_snapshot(parts: Mapping[str, object]) -> dict:
     """The settings in force and a short hash of them, so a change between two cycles is visible as a new hash."""
-    values = {name: asdict(part) if is_dataclass(part) else str(part) for name, part in parts.items()}
-    digest = hashlib.sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()[:8]
+    raw = {name: asdict(part) if is_dataclass(part) else str(part) for name, part in parts.items()}
+    values = json.loads(json.dumps(raw, default=str))          # dates and other non-JSON values become text once, so the log and the hash agree
+    digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()[:8]
     return {"hash": digest, "values": values}
 
 
