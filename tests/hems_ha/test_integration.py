@@ -797,3 +797,15 @@ async def test_the_ev_module_off_leaves_the_sensors_empty(recorder_mock, hass: H
     await setup_entry(hass, freezer, aioclient_mock)
     assert hass.states.get("sensor.hems_ev_status").state in ("unknown", "unavailable")
     assert hass.states.get("sensor.hems_status").state == "ok"
+
+
+async def test_the_netting_date_can_be_cleared_in_the_settings_form(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Intent: submitting an empty netting date stores an empty date, so only the switch decides again.
+    Why: the form fills a field that is left out with its old value; an owner who clears the date must really get it cleared."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    assert entry.options["salderen_until"] == "2027-01-01"
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(form["flow_id"], {"base_prices": {"salderen_until": ""}})
+    await hass.async_block_till_done()
+    assert entry.options["salderen_until"] == ""

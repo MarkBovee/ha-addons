@@ -175,3 +175,14 @@ def test_the_setpoint_holds_minimum_times_unless_urgent_and_obeys_the_grid_limit
     capped = setpoint(active, now, long_running, cfg, allowed_a=8.0)
     assert (capped.code, capped.current_a) == ("limited_by_grid", 8.0)
     assert setpoint(active, now, long_running, cfg, allowed_a=4.0).current_a == 0.0
+
+
+def test_the_setpoint_is_zero_when_there_is_no_plan_even_while_a_charge_just_started():
+    """Intent: with a socket problem, no car or no SoC the setpoint is 0 A and says why, also inside the minimum on-time of a charge that just started.
+    Why: the hold-on rule must never ask for 6 A from a socket that reports a problem."""
+    cfg, now = config(), WED_2200
+    charging = EvState(True, Reading(50.0, now), charging=True, problem=True, last_change=now - timedelta(minutes=2))
+    for state in (charging, EvState(False, None, charging=True, last_change=now - timedelta(minutes=2))):
+        plan = plan_ev(series([0.3] * 8), {}, now, cfg, state, AMS)
+        point = setpoint(plan, now, state, cfg)
+        assert point.current_a == 0.0 and point.code == plan.status

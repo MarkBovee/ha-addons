@@ -282,6 +282,8 @@ def setpoint(plan: EvPlan, now: datetime, state: EvState, config: EvConfig, allo
 
     The minimum times never delay a plan that is urgent (at risk or forced). Under the minimum current the answer is zero, because a
     car does not charge below it and a pause is the honest request."""
+    if plan.status in (STATUS_OFF, STATUS_NOT_PLUGGED, STATUS_NO_SOC, STATUS_PROBLEM):
+        return EvSetpoint(0.0, 0.0, plan.status, plan.reason)       # no plan means no current, whatever the hysteresis would hold
     current = next((q.current_a for q in plan.quarters if q.start <= now < q.start + QUARTER), 0.0)
     planned, code, reason = current, "as_planned", plan.reason
     urgent = plan.status in (STATUS_AT_RISK, STATUS_FORCED)
