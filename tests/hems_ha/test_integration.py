@@ -11,7 +11,8 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.hems.config_flow import SECTIONS
-from custom_components.hems.const import (CONF_EV, CONF_INVERTER, CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_GRID, CONF_PRICE_CURVE, CONF_PV,
+from custom_components.hems.config_flow import ROLE_SELECTORS
+from custom_components.hems.const import (CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_PLUGGED, CONF_EV_SOC, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_EV, CONF_INVERTER, CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_GRID, CONF_PRICE_CURVE, CONF_PV,
                                           CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
 from custom_components.hems.engine.nordpool import NORD_POOL_URL, nordpool_params
 from custom_components.hems.engine.weather import OPEN_METEO_URL
@@ -69,13 +70,13 @@ def nordpool_calls(aioclient_mock) -> list[str]:
     return [str(call[1]) for call in aioclient_mock.mock_calls if "nordpoolgroup" in str(call[1])]
 
 
-async def setup_entry(hass: HomeAssistant, freezer, aioclient_mock, roles=None, now=NOW, nordpool=True) -> MockConfigEntry:
+async def setup_entry(hass: HomeAssistant, freezer, aioclient_mock, roles=None, now=NOW, nordpool=True, options=None) -> MockConfigEntry:
     """Set up the integration at a frozen time with weather and (optionally) Nord Pool mocked."""
     freezer.move_to(now)
     aioclient_mock.get(OPEN_METEO_URL, json=weather_payload())
     if nordpool:
         mock_nordpool(aioclient_mock)
-    entry = MockConfigEntry(domain=DOMAIN, data=roles or ROLES, options=dict(DEFAULT_OPTIONS), unique_id=DOMAIN)
+    entry = MockConfigEntry(domain=DOMAIN, data=roles or ROLES, options={**DEFAULT_OPTIONS, **(options or {})}, unique_id=DOMAIN)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -101,7 +102,7 @@ async def test_reconfigure_changes_only_the_optional_roles_and_can_clear_one(rec
     entry = await setup_entry(hass, freezer, aioclient_mock, roles={**ROLES, CONF_EV: "sensor.ev_old"})
     form = await entry.start_reconfigure_flow(hass)
     assert form["type"] == FlowResultType.FORM and form["step_id"] == "reconfigure"
-    assert set(form["data_schema"].schema) == {CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE}
+    assert set(form["data_schema"].schema) == set(ROLE_SELECTORS) and {CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE} <= set(ROLE_SELECTORS)
     bad = await hass.config_entries.flow.async_configure(form["flow_id"], {CONF_EV: "sensor.nope", CONF_PRICE_CURVE: "sensor.import_price"})
     assert bad["type"] == FlowResultType.FORM and bad["errors"] == {"base": "entity_not_found"}
     done = await hass.config_entries.flow.async_configure(form["flow_id"], {CONF_EV: "sensor.ev_new", CONF_PRICE_CURVE: "sensor.import_price"})
@@ -417,7 +418,7 @@ async def test_saving_the_settings_form_reloads_hems_and_the_planner_uses_the_ne
     entry = await setup_entry(hass, freezer, aioclient_mock)
     first = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
     form = await hass.config_entries.options.async_init(entry.entry_id)
-    assert form["type"] == FlowResultType.FORM and list(map(str, form["data_schema"].schema)) == ["module_battery", "module_water_heater", "base_prices", "base_forecast", "logging"]
+    assert form["type"] == FlowResultType.FORM and list(map(str, form["data_schema"].schema)) == ["module_battery", "module_water_heater", "module_ev", "base_prices", "base_forecast", "base_grid", "logging"]
     saved = await hass.config_entries.options.async_configure(form["flow_id"], {"module_battery": {"reserve_soc_pct": 40.0, "hold_cost_kwh_h": 0.01}})
     await hass.async_block_till_done()
     assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["reserve_soc_pct"] == 40.0 and entry.options["hold_cost_kwh_h"] == 0.01
@@ -676,7 +677,7 @@ async def test_the_settings_form_is_split_into_parts_that_cover_every_option_and
     entry = await setup_entry(hass, freezer, aioclient_mock)
     form = await hass.config_entries.options.async_init(entry.entry_id)
     collapsed = {str(name): part.options["collapsed"] for name, part in form["data_schema"].schema.items()}
-    assert collapsed == {"module_battery": False, "module_water_heater": True, "base_prices": True, "base_forecast": True, "logging": True}
+    assert collapsed == {"module_battery": False, "module_water_heater": True, "module_ev": True, "base_prices": True, "base_forecast": True, "base_grid": True, "logging": True}
     assert list(collapsed) == list(SECTIONS), "modules first, then the base components they share"
     keys = [key for keys in SECTIONS.values() for key in keys]
     assert sorted(keys) == sorted(set(keys)) and set(keys) == set(DEFAULT_OPTIONS), "every editable option is in exactly one part"
@@ -747,4 +748,52 @@ def test_entity_names_are_english_in_every_language():
     names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
                     for key, ent in group.items()} for file in ("strings", "translations/en", "translations/nl")}
     assert names["translations/nl"] == names["translations/en"] == names["strings"]
-    assert len(names["strings"]) == 18 and names["strings"][("sensor", "charge_window")] == "Charge window"
+    assert len(names["strings"]) == 22 and names["strings"][("sensor", "charge_window")] == "Charge window"
+
+
+EV_ROLES = {**ROLES, CONF_EV_PLUGGED: "binary_sensor.car_plugged", CONF_EV_CHARGING: "binary_sensor.car_charging", CONF_EV_SOC: "sensor.car_soc",
+            **dict(zip(CONF_METER_CURRENTS, ("sensor.meter_l1", "sensor.meter_l2", "sensor.meter_l3"))),
+            **dict(zip(CONF_METER_EXPORTS, ("sensor.export_l1", "sensor.export_l2", "sensor.export_l3"))),
+            **dict(zip(CONF_EV_CURRENTS, ("sensor.charger_l1", "sensor.charger_l2", "sensor.charger_l3")))}
+
+
+def set_car(hass: HomeAssistant, plugged: str = "on", soc: str = "40", meter=("10", "12", "8")) -> None:
+    """The car, its socket and the three meter phases of EV_ROLES; the house is idle on the export and charger sensors."""
+    hass.states.async_set("binary_sensor.car_plugged", plugged)
+    hass.states.async_set("binary_sensor.car_charging", "off")
+    hass.states.async_set("sensor.car_soc", soc)
+    for phase, amps in enumerate(meter, start=1):
+        hass.states.async_set(f"sensor.meter_l{phase}", amps)
+        hass.states.async_set(f"sensor.export_l{phase}", "0")
+        hass.states.async_set(f"sensor.charger_l{phase}", "0")
+
+
+async def test_the_ev_module_plans_in_dry_run_and_the_override_forces_the_charge(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Intent: with the module on and a car plugged in the EV sensors show a plan, a setpoint limited by the busiest phase and a status; the force
+    switch turns the plan into a forced one and nothing is ever written to a device.
+    Why: this is the whole dry-run surface of the module, seen the way a dashboard sees it."""
+    set_states(hass)
+    set_car(hass)
+    await setup_entry(hass, freezer, aioclient_mock, roles=EV_ROLES, options={"ev_enabled": True, "ev_max_price": 0.60})
+    assert hass.states.get("sensor.hems_ev_status").state == "planned"
+    plan = hass.states.get("sensor.hems_ev_plan")
+    assert plan.state not in ("unknown", "unavailable") and plan.attributes["quarters"] and plan.attributes["quarters"][0]["current_a"] >= 6
+    setpoint = hass.states.get("sensor.hems_ev_setpoint")
+    assert setpoint.attributes["allowed_a"] == 12.0 and float(setpoint.state) <= 12.0
+    assert hass.states.get("switch.hems_ev_force_charge").state == "off"
+    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.hems_ev_force_charge"}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get("switch.hems_ev_force_charge").state == "on" and hass.states.get("sensor.hems_ev_status").state == "forced"
+    set_car(hass, plugged="off")
+    await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.hems_ev_force_charge"}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.hems_ev_status").state == "not_plugged"
+
+
+async def test_the_ev_module_off_leaves_the_sensors_empty(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Intent: with the module off the EV sensors have no state and the plan of the battery is the one it was.
+    Why: a module that is switched off must cost nothing and change nothing."""
+    set_states(hass)
+    await setup_entry(hass, freezer, aioclient_mock)
+    assert hass.states.get("sensor.hems_ev_status").state in ("unknown", "unavailable")
+    assert hass.states.get("sensor.hems_status").state == "ok"

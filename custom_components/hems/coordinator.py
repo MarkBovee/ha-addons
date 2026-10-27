@@ -5,7 +5,7 @@ recorder statistics for the consumption history, and one HTTP weather source own
 """
 import logging
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,16 +19,19 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .adapters import base_load_history, parse_price_curve, reading_from_state, statistic_rows
-from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_GRID, CONF_INVERTER, CONF_PRICE_CURVE,
-                    CONF_PV, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
+from .adapters import base_load_history, parse_price_curve, reading_from_state, statistic_rows, sum_series
+from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT, CONF_EV_PLUGGED,
+                    CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_PRICE_CURVE,
+                    CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
                     PLANS_FILE, RETRY_DELAY, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.contracts import MarketPrices
 from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot, window_tree
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
 from .engine.dryrun import EngineInputs, EngineOutput, EngineSettings, step
+from .engine.balancer import phase_room_a
 from .engine.executor import AS_PLANNED, Execution, execute
+from .engine.ev import EvConfig, EvSetpoint, EvState, STATUS_FORCED, setpoint as ev_setpoint
 from .engine.heater import WaterHeaterConfig
 from .engine.pvforecast import fit_gain_from_history
 from .engine.prices import PriceModel
@@ -54,6 +57,8 @@ class HemsSnapshot:
     plan_windows: tuple[dict, ...] = ()    # the same windows with local times, for the plan sensor's attributes
     plan_table: str = ""                   # the plan as a Markdown table for a dashboard card
     weather: Weather | None = None         # the irradiance and temperature forecast the PV forecast was computed from
+    ev_setpoint: EvSetpoint | None = None  # what the EV module would ask of the charger now (None when the module is off)
+    ev_allowed_a: float | None = None      # what the live per-phase meter leaves for the car (None = no per-phase data)
 
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -79,6 +84,27 @@ def netting_end_from_options(o: dict[str, Any]) -> date | None:
         return date.fromisoformat(DEFAULT_OPTIONS["salderen_until"])
 
 
+def deadlines_from_options(o: dict[str, Any]) -> tuple[time | None, ...]:
+    """The weekly deadline schedule (Monday first) from the HH:MM texts of the options; an empty or unreadable text means no deadline that day."""
+    out: list[time | None] = []
+    for day in WEEKDAYS:
+        text = str(o[f"ev_deadline_{day}"]).strip()
+        try:
+            out.append(time.fromisoformat(text) if text else None)
+        except ValueError:
+            _LOGGER.warning("ev_deadline_%s %r is not a time of day (HH:MM); no deadline that day", day, text)
+            out.append(None)
+    return tuple(out)
+
+
+def ev_config_from_options(o: dict[str, Any]) -> EvConfig:
+    """The EV module's settings from the (default-filled) options."""
+    return EvConfig(enabled=bool(o["ev_enabled"]), capacity_kwh=float(o["ev_capacity_kwh"]), charge_efficiency=float(o["ev_charge_efficiency"]),
+                    target_required_pct=float(o["ev_target_required_pct"]), target_max_pct=float(o["ev_target_max_pct"]), max_price_eur_kwh=float(o["ev_max_price"]),
+                    solar_only=bool(o["ev_solar_only"]), min_current_a=float(o["ev_min_current_a"]), max_current_a=float(o["ev_max_current_a"]),
+                    deadlines=deadlines_from_options(o), min_on_minutes=float(o["ev_min_on_minutes"]), min_off_minutes=float(o["ev_min_off_minutes"]))
+
+
 def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -> EngineSettings:
     """Engine settings from the options (defaults fill gaps) and the Home Assistant location."""
     o = {**DEFAULT_OPTIONS, **entry.options}
@@ -92,7 +118,8 @@ def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -
                         bonus_only_daylight=o["bonus_only_daylight"], bonus_only_positive_price=o["bonus_only_positive_price"])
     return EngineSettings(battery=battery, prices=prices, latitude=latitude, longitude=longitude,
                           pv_gain_w_per_wm2=o["pv_gain_w_per_wm2"] or 7.0, pv_max_ac_w=o["pv_max_ac_w"],
-                          tz=dt_util.get_default_time_zone(), water_heater=water_heater_from_options(o))
+                          tz=dt_util.get_default_time_zone(), water_heater=water_heater_from_options(o), ev=ev_config_from_options(o),
+                          grid_limit_a=float(o["grid_limit_a"]), grid_margin_a=float(o["grid_margin_a"]))
 
 
 class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
@@ -126,6 +153,54 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._weather_retry_wanted = False
         self._gain = 0.0
         self._retry_cancel = None
+        self.force_charge = False                  # the owner's override on the EV module; a restart clears it on purpose
+
+    def _on(self, role: str) -> bool | None:
+        """A binary role as a flag: True, False, or None when the role is not set or its entity has no usable state."""
+        state = self.hass.states.get(self._entity(role) or "")
+        return None if state is None or state.state in ("unavailable", "unknown") else state.state == "on"
+
+    def ev_state(self, settings: EngineSettings) -> EvState:
+        """The car and its socket from the configured entities (read only); a role that is not set reads as unknown."""
+        charging_state = self.hass.states.get(self._entity(CONF_EV_CHARGING) or "")
+        plugged, problem = self._on(CONF_EV_PLUGGED), self._on(CONF_EV_PROBLEM)
+        soc = reading_from_state(self.hass.states.get(self._entity(CONF_EV_SOC) or ""))
+        if self.force_charge and (plugged is False or (soc is not None and soc.value >= settings.ev.target_required_pct)):
+            self.force_charge = False                       # the override ends with the car leaving or the required target
+        return EvState(plugged, soc, bool(self._on(CONF_EV_CHARGING)), bool(problem), self.force_charge,
+                       charging_state.last_changed if charging_state else None)
+
+    def ev_ceiling_a(self, settings: EngineSettings) -> EvConfig:
+        """The EV settings with the ceiling held under what the charger says it accepts (the `max` of its limit number), when it says."""
+        state = self.hass.states.get(self._entity(CONF_EV_LIMIT) or "")
+        try:
+            accepted = float(state.attributes["max"]) if state else None
+        except (KeyError, TypeError, ValueError):
+            accepted = None
+        return settings.ev if accepted is None else replace(settings.ev, max_current_a=min(settings.ev.max_current_a, accepted))
+
+    def ev_allowed_a(self, settings: EngineSettings) -> float | None:
+        """The current per phase the car may draw now: what the tightest phase leaves under the limit minus the margin, from the live meter.
+
+        The meter's own current per phase has no sign, so a phase that feeds in (its feed-in power above zero) counts negative. The car's
+        own current is taken off first, because the question is what everything else leaves. None when a phase has no reading."""
+        meter, ev = [], []
+        for phase, (current_role, export_role, ev_role) in enumerate(zip(CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_EV_CURRENTS)):
+            current = reading_from_state(self.hass.states.get(self._entity(current_role) or ""))
+            if current is None:
+                return None
+            exporting = reading_from_state(self.hass.states.get(self._entity(export_role) or ""))
+            car = reading_from_state(self.hass.states.get(self._entity(ev_role) or ""))
+            meter.append(current.value * (-1.0 if exporting is not None and exporting.value > 0 else 1.0))
+            ev.append(car.value if car is not None else 0.0)
+        others = [m - e for m, e in zip(meter, ev)]
+        return phase_room_a(others, (1.0, 1.0, 1.0), settings.grid_limit_a - settings.grid_margin_a)
+
+    async def set_force_charge(self, on: bool) -> None:
+        """Switch the owner's override and replan at once, so the sensors follow the switch."""
+        self.force_charge = on
+        await self._log_event("ev_force", on=on)
+        await self.async_refresh()                          # not the debounced request: a switch that answers late looks broken
 
     async def _log_event(self, event: str, **fields: Any) -> None:
         """Append one line to events.jsonl (fetches, status and action changes, settings) and log it in Home Assistant too."""
@@ -138,7 +213,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         engine = {"pv_max_ac_w": settings.pv_max_ac_w, "load_days": settings.load_days, "default_load_w": settings.default_load_w,
                   "max_slots": settings.max_slots, "soc_max_age_s": settings.soc_max_age.total_seconds(),
                   "latitude": round(settings.latitude, 2), "longitude": round(settings.longitude, 2)}
-        snapshot = settings_snapshot({"battery": settings.battery, "prices": settings.prices, "engine": engine, "water_heater": settings.water_heater})
+        snapshot = settings_snapshot({"battery": settings.battery, "prices": settings.prices, "engine": engine, "water_heater": settings.water_heater, "ev": settings.ev, "grid": {"limit_a": settings.grid_limit_a, "margin_a": settings.grid_margin_a}})
         if snapshot["hash"] != self._settings_hash:
             roles = {k: v for k, v in self.config_entry.data.items()}
             await self._log_event("settings", hash=snapshot["hash"], build=self.build, previous=self._settings_hash, values=snapshot["values"], roles=roles)
@@ -171,14 +246,16 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         if self._history_at and now - self._history_at < HISTORY_REFRESH:
             return
         roles = {k: self._entity(k) for k in (CONF_GRID, CONF_PV, CONF_BATTERY_POWER, CONF_EV, CONF_INVERTER)}
-        wanted = {e for e in roles.values() if e}
+        extras = list(self.config_entry.data.get(CONF_PV_EXTRA) or [])
+        wanted = {e for e in roles.values() if e} | set(extras)
         start = (now - timedelta(days=HISTORY_DAYS)).replace(minute=0, second=0, microsecond=0)
         series = await self._statistics(wanted, start)
         get = lambda role: series.get(roles[role], []) if roles[role] else []
         sign = -1.0 if self.config_entry.data.get(CONF_BATTERY_POSITIVE_DISCHARGING, True) else 1.0     # contract: + charging
         battery = [(t, v * sign) for t, v in get(CONF_BATTERY_POWER)]
-        self._history = base_load_history(get(CONF_GRID), get(CONF_PV), battery, get(CONF_EV), get(CONF_INVERTER))
-        self._pv_history = get(CONF_PV)
+        pv = sum_series([get(CONF_PV), *(series.get(e, []) for e in extras)])          # several arrays or inverters count as one PV
+        self._history = base_load_history(get(CONF_GRID), pv, battery, get(CONF_EV), get(CONF_INVERTER))
+        self._pv_history = pv
         self._history_at = now
         await self._log_event("history", base_load_hours=len(self._history), pv_hours=len(self._pv_history),
                               entities_with_statistics=sorted(e for e in wanted if series.get(e)),
@@ -341,7 +418,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         await self._refresh_market(now)
         await self._refresh_weather(now, settings)
         gain = self._calibrated_gain(settings)
-        settings = replace(settings, pv_gain_w_per_wm2=gain)
+        settings = replace(settings, pv_gain_w_per_wm2=gain, ev=self.ev_ceiling_a(settings))
         self._settings = settings
         await self._log_settings(settings)
         if self._last_gain is None or abs(gain - self._last_gain) > 0.02 * self._last_gain:
@@ -352,12 +429,17 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         inputs = EngineInputs(
             now=now, soc_pct=reading_from_state(self.hass.states.get(self._entity(CONF_SOC) or "")),
             import_curve=parse_price_curve(price_state.attributes.get("price_curve") if price_state else None),
-            load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market)
+            load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market,
+            ev=self.ev_state(settings) if settings.ev.enabled else None)
         output = await self.hass.async_add_executor_job(step, inputs, settings, self._previous)
         if output.decision:
             self._previous = output.decision
         weather_age = (now - self._weather.fetched_at).total_seconds() / 60 if self._weather else None
         execution = execute(output.decision, now, inputs.soc_pct, settings.battery, settings.soc_max_age)
+        allowed = self.ev_allowed_a(settings) if output.ev_plan is not None else None
+        car = ev_setpoint(output.ev_plan, now, inputs.ev, settings.ev, allowed) if output.ev_plan is not None and inputs.ev is not None else None
+        if car is not None:
+            output.trace.setdefault("ev", {})["setpoint"] = {"current_a": car.current_a, "planned_a": car.planned_a, "code": car.code, "allowed_a": allowed}
         await self._log_cycle(output, now, gain, weather_age, bool(inputs.import_curve), execution)
         reason = output.status if output.status in RETRY_STATUSES else "weather" if self._weather_retry_wanted else None
         if reason and self._retry_cancel is None:
@@ -368,7 +450,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         prices_until = max(known) + timedelta(minutes=15) if known else None
         text, windows, table = self._plan_for_users(output)
         return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table,
-                            self._weather)
+                            self._weather, car, allowed)
 
     def _plan_for_users(self, output: EngineOutput) -> tuple[str, tuple[dict, ...], str]:
         """The plan's windows as a sentence, as local-time records and as a Markdown table; empty when this cycle has no plan."""

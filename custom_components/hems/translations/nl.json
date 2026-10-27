@@ -21,7 +21,22 @@
         "data": {
           "inverter_output_entity": "AC-uitgang omvormer (W, optioneel; verbetert de huisverbruik-schatting)",
           "ev_power_entity": "EV-laadvermogen (W, optioneel; telt niet mee in het basisverbruik)",
-          "price_curve_entity": "Importprijs-sensor met een price_curve-attribuut (optioneel; terugval en controle)"
+          "price_curve_entity": "Importprijs-sensor met een price_curve-attribuut (optioneel; terugval en controle)",
+          "pv_extra_entities": "Meer PV-vermogenssensoren (opgeteld bij de PV-sensor; meerdere velden of omvormers)",
+          "ev_plugged_entity": "EV: auto aangesloten (binaire sensor)",
+          "ev_charging_entity": "EV: auto laadt (binaire sensor)",
+          "ev_problem_entity": "EV: probleem op het contact (binaire sensor)",
+          "ev_soc_entity": "EV: laadtoestand van de auto (%)",
+          "ev_limit_entity": "EV: laadlimiet-number (alleen het maximum wordt gelezen)",
+          "ev_current_l1_entity": "EV: laderstroom L1 (A)",
+          "ev_current_l2_entity": "EV: laderstroom L2 (A)",
+          "ev_current_l3_entity": "EV: laderstroom L3 (A)",
+          "meter_current_l1_entity": "Netmeter: stroom L1 (A)",
+          "meter_current_l2_entity": "Netmeter: stroom L2 (A)",
+          "meter_current_l3_entity": "Netmeter: stroom L3 (A)",
+          "meter_export_l1_entity": "Netmeter: terugleververmogen L1 (boven 0 = terugleveren)",
+          "meter_export_l2_entity": "Netmeter: terugleververmogen L2",
+          "meter_export_l3_entity": "Netmeter: terugleververmogen L3"
         }
       }
     },
@@ -65,6 +80,30 @@
               "water_heater_legionella_weekday": "Boiler: legionelladag"
             }
           },
+          "module_ev": {
+            "name": "Module: EV",
+            "description": "Plant wanneer en hoe hard de auto laadt (dry-run: er wordt niets naar de lader geschreven). Deadlines zijn lokale tijden per weekdag.",
+            "data": {
+              "ev_enabled": "EV-module aan (plant het laden van de auto; HEMS stuurt de lader niet)",
+              "ev_capacity_kwh": "Accucapaciteit auto (kWh)",
+              "ev_charge_efficiency": "Laadrendement, net naar accu (0-1)",
+              "ev_target_required_pct": "Verplichte doel-SoC bij elke deadline (%)",
+              "ev_target_max_pct": "Maximale doel-SoC, alleen via goedkope kwartieren (%)",
+              "ev_max_price": "Prijsdrempel voor de extra energie (EUR/kWh, effectieve prijs; overschot telt tegen de exportprijs)",
+              "ev_solar_only": "Extra energie alleen waar PV-overschot de minimale stroom dekt",
+              "ev_min_current_a": "Minimale laadstroom per fase (A)",
+              "ev_max_current_a": "Maximale laadstroom per fase (A)",
+              "ev_min_on_minutes": "Minimaal aantal minuten aan",
+              "ev_min_off_minutes": "Minimaal aantal minuten uit",
+              "ev_deadline_monday": "Deadline maandag (UU:MM, leeg = geen)",
+              "ev_deadline_tuesday": "Deadline dinsdag (UU:MM, leeg = geen)",
+              "ev_deadline_wednesday": "Deadline woensdag (UU:MM, leeg = geen)",
+              "ev_deadline_thursday": "Deadline donderdag (UU:MM, leeg = geen)",
+              "ev_deadline_friday": "Deadline vrijdag (UU:MM, leeg = geen)",
+              "ev_deadline_saturday": "Deadline zaterdag (UU:MM, leeg = geen)",
+              "ev_deadline_sunday": "Deadline zondag (UU:MM, leeg = geen)"
+            }
+          },
           "base_prices": {
             "name": "Basis: prijzen",
             "description": "Day-ahead prijzen en de prijscomponenten die alle modules gebruiken; ze komen overeen met de energy-prices add-on.",
@@ -91,6 +130,14 @@
               "weather_enabled": "Weer ophalen bij Open-Meteo",
               "pv_gain_w_per_wm2": "PV-factor (W per W/m2, 0 = automatisch kalibreren)",
               "pv_max_ac_w": "Piekvermogen PV (W): de PV-verwachting wordt hier afgekapt; neem wat de panelen maximaal halen, of de AC-limiet van de omvormer als die lager is"
+            }
+          },
+          "base_grid": {
+            "name": "Basis: netaansluiting",
+            "description": "De limiet van de aansluiting per fase, gedeeld door alle lasten.",
+            "data": {
+              "grid_limit_a": "Aansluitlimiet per fase (A)",
+              "grid_margin_a": "Marge onder de limiet (A)"
             }
           },
           "logging": {
@@ -179,11 +226,35 @@
       },
       "water_heater_plan": {
         "name": "Water heater plan"
+      },
+      "ev_plan": {
+        "name": "EV plan"
+      },
+      "ev_status": {
+        "name": "EV status",
+        "state": {
+          "off": "Uit",
+          "not_plugged": "Niet aangesloten",
+          "no_soc": "Geen SoC auto",
+          "problem": "Probleem",
+          "idle": "Rust",
+          "planned": "Gepland",
+          "deadline_at_risk": "Deadline in gevaar",
+          "forced": "Geforceerd"
+        }
+      },
+      "ev_setpoint": {
+        "name": "EV setpoint"
       }
     },
     "binary_sensor": {
       "tomorrow_prices_available": {
         "name": "Tomorrow prices available"
+      }
+    },
+    "switch": {
+      "ev_force_charge": {
+        "name": "EV force charge"
       }
     }
   },

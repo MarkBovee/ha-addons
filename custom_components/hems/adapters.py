@@ -59,3 +59,12 @@ def base_load_history(grid: Sequence[tuple[datetime, float]], pv: Sequence[tuple
         if load is not None:
             out.append((hour, load.value))
     return out
+
+
+def sum_series(series: Sequence[Sequence[tuple[datetime, float]]]) -> list[tuple[datetime, float]]:
+    """Hourly sum of several recorded series; an hour counts only when every series has it, because a partial sum would be too low."""
+    nonempty = [dict(rows) for rows in series]
+    if not nonempty or any(not rows for rows in nonempty):
+        return []
+    hours = set(nonempty[0]).intersection(*nonempty[1:])
+    return [(hour, sum(rows[hour] for rows in nonempty)) for hour in sorted(hours)]

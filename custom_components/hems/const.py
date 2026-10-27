@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 DOMAIN = "hems"
-PLATFORMS = ["sensor", "binary_sensor"]
+PLATFORMS = ["sensor", "binary_sensor", "switch"]
 
 # Entity roles chosen in the config flow (HEMS only ever sees these Home Assistant entities).
 CONF_SOC = "soc_entity"
@@ -13,6 +13,18 @@ CONF_GRID = "grid_entity"                      # + import / - export
 CONF_INVERTER = "inverter_output_entity"       # optional: AC output of the inverter, a better house-load source
 CONF_EV = "ev_power_entity"                    # optional: subtracted from the house load
 CONF_PRICE_CURVE = "price_curve_entity"        # optional: sensor with a `price_curve` attribute [{start, end, price}]; fallback and cross-check
+
+# Optional roles of the EV module, the grid and the solar component. Like the roles above they are Home Assistant entities picked by the
+# owner (reconfigure step); HEMS knows no charger brand, only that these carry the plug, the charge, the car's SoC and the currents.
+CONF_EV_PLUGGED = "ev_plugged_entity"          # binary_sensor: a car is connected to the socket
+CONF_EV_CHARGING = "ev_charging_entity"        # binary_sensor: the car is charging
+CONF_EV_PROBLEM = "ev_problem_entity"          # binary_sensor: the socket reports a problem
+CONF_EV_SOC = "ev_soc_entity"                  # sensor: the car's state of charge (%)
+CONF_EV_LIMIT = "ev_limit_entity"              # number (A): only its `max` attribute is read, as the charger's ceiling
+CONF_EV_CURRENTS = ("ev_current_l1_entity", "ev_current_l2_entity", "ev_current_l3_entity")           # the charger's current per phase (A)
+CONF_METER_CURRENTS = ("meter_current_l1_entity", "meter_current_l2_entity", "meter_current_l3_entity")  # the grid meter's current per phase (A, no sign)
+CONF_METER_EXPORTS = ("meter_export_l1_entity", "meter_export_l2_entity", "meter_export_l3_entity")      # the meter's feed-in power per phase: above 0 = exporting on that phase
+CONF_PV_EXTRA = "pv_extra_entities"            # more PV power sensors, added to `pv_entity` (several arrays or inverters)
 
 # Settings (options flow) and their defaults. Price components mirror the energy-prices add-on.
 DEFAULT_OPTIONS = {
@@ -33,6 +45,21 @@ DEFAULT_OPTIONS = {
     "water_heater_legionella_energy_kwh": 2.6,
     "water_heater_legionella_hours": 3,
     "water_heater_legionella_weekday": "saturday",
+    "ev_enabled": False,                       # the EV module: plans the charge of the car (dry-run, nothing is written to the charger)
+    "ev_capacity_kwh": 81.4,
+    "ev_charge_efficiency": 0.90,              # grid kWh to battery kWh; to be measured with charger kWh against the SoC jump
+    "ev_target_required_pct": 80.0,            # reached by every deadline
+    "ev_target_max_pct": 100.0,                # reached only through quarters under the price threshold
+    "ev_max_price": 0.20,                      # EUR/kWh, effective price (PV surplus counts at the export price)
+    "ev_solar_only": False,
+    "ev_min_current_a": 6.0,
+    "ev_max_current_a": 16.0,
+    "ev_min_on_minutes": 10.0,
+    "ev_min_off_minutes": 10.0,
+    "ev_deadline_monday": "07:30", "ev_deadline_tuesday": "", "ev_deadline_wednesday": "", "ev_deadline_thursday": "07:30",
+    "ev_deadline_friday": "", "ev_deadline_saturday": "", "ev_deadline_sunday": "",       # local HH:MM, empty = no deadline that day
+    "grid_limit_a": 25.0,                      # the connection's limit per phase (3x25 A)
+    "grid_margin_a": 1.0,                      # kept free below it
     "trace_full_plan": True,                   # also log every planned quarter each cycle (about 1 MB per day)
     "nordpool_enabled": True,                  # HEMS fetches day-ahead prices itself
     "delivery_area": "NL",

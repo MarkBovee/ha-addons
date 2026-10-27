@@ -21,7 +21,22 @@
         "data": {
           "inverter_output_entity": "Inverter AC output (W, optional; improves the house-load estimate)",
           "ev_power_entity": "EV charger power (W, optional; excluded from the base load)",
-          "price_curve_entity": "Import price sensor with a price_curve attribute (optional; fallback and cross-check)"
+          "price_curve_entity": "Import price sensor with a price_curve attribute (optional; fallback and cross-check)",
+          "pv_extra_entities": "More PV power sensors (added to the PV sensor; several arrays or inverters)",
+          "ev_plugged_entity": "EV: car connected (binary sensor)",
+          "ev_charging_entity": "EV: car charging (binary sensor)",
+          "ev_problem_entity": "EV: socket problem (binary sensor)",
+          "ev_soc_entity": "EV: car state of charge (%)",
+          "ev_limit_entity": "EV: charge limit number (only its maximum is read)",
+          "ev_current_l1_entity": "EV: charger current L1 (A)",
+          "ev_current_l2_entity": "EV: charger current L2 (A)",
+          "ev_current_l3_entity": "EV: charger current L3 (A)",
+          "meter_current_l1_entity": "Grid meter: current L1 (A)",
+          "meter_current_l2_entity": "Grid meter: current L2 (A)",
+          "meter_current_l3_entity": "Grid meter: current L3 (A)",
+          "meter_export_l1_entity": "Grid meter: feed-in power L1 (above 0 = exporting)",
+          "meter_export_l2_entity": "Grid meter: feed-in power L2",
+          "meter_export_l3_entity": "Grid meter: feed-in power L3"
         }
       }
     },
@@ -65,6 +80,30 @@
               "water_heater_legionella_weekday": "Water heater: legionella day"
             }
           },
+          "module_ev": {
+            "name": "Module: EV",
+            "description": "Plans when and how hard to charge the car (dry-run: nothing is written to the charger). Deadlines are local times per weekday.",
+            "data": {
+              "ev_enabled": "EV module on (plans the charge of the car; HEMS does not control the charger)",
+              "ev_capacity_kwh": "Car battery capacity (kWh)",
+              "ev_charge_efficiency": "Charging efficiency, grid to battery (0-1)",
+              "ev_target_required_pct": "Required target SoC at every deadline (%)",
+              "ev_target_max_pct": "Maximum target SoC, only through cheap quarters (%)",
+              "ev_max_price": "Price threshold for the extra energy (EUR/kWh, effective price; surplus counts at the export price)",
+              "ev_solar_only": "Extra energy only where PV surplus covers the minimum current",
+              "ev_min_current_a": "Minimum charging current per phase (A)",
+              "ev_max_current_a": "Maximum charging current per phase (A)",
+              "ev_min_on_minutes": "Minimum minutes on",
+              "ev_min_off_minutes": "Minimum minutes off",
+              "ev_deadline_monday": "Deadline Monday (HH:MM, empty = none)",
+              "ev_deadline_tuesday": "Deadline Tuesday (HH:MM, empty = none)",
+              "ev_deadline_wednesday": "Deadline Wednesday (HH:MM, empty = none)",
+              "ev_deadline_thursday": "Deadline Thursday (HH:MM, empty = none)",
+              "ev_deadline_friday": "Deadline Friday (HH:MM, empty = none)",
+              "ev_deadline_saturday": "Deadline Saturday (HH:MM, empty = none)",
+              "ev_deadline_sunday": "Deadline Sunday (HH:MM, empty = none)"
+            }
+          },
           "base_prices": {
             "name": "Base: prices",
             "description": "Day-ahead prices and the price components every module uses; they mirror the energy-prices add-on.",
@@ -91,6 +130,14 @@
               "weather_enabled": "Fetch weather from Open-Meteo",
               "pv_gain_w_per_wm2": "PV gain (W per W/m2, 0 = calibrate automatically)",
               "pv_max_ac_w": "Peak PV output (W): the PV forecast is clipped here; use what the panels peak at, or the inverter AC limit if that is lower"
+            }
+          },
+          "base_grid": {
+            "name": "Base: grid connection",
+            "description": "The limit of the connection per phase, shared by every load.",
+            "data": {
+              "grid_limit_a": "Connection limit per phase (A)",
+              "grid_margin_a": "Margin kept free below the limit (A)"
             }
           },
           "logging": {
@@ -179,11 +226,35 @@
       },
       "water_heater_plan": {
         "name": "Water heater plan"
+      },
+      "ev_plan": {
+        "name": "EV plan"
+      },
+      "ev_status": {
+        "name": "EV status",
+        "state": {
+          "off": "Off",
+          "not_plugged": "Not plugged in",
+          "no_soc": "No car SoC",
+          "problem": "Problem",
+          "idle": "Idle",
+          "planned": "Planned",
+          "deadline_at_risk": "Deadline at risk",
+          "forced": "Forced"
+        }
+      },
+      "ev_setpoint": {
+        "name": "EV setpoint"
       }
     },
     "binary_sensor": {
       "tomorrow_prices_available": {
         "name": "Tomorrow prices available"
+      }
+    },
+    "switch": {
+      "ev_force_charge": {
+        "name": "EV force charge"
       }
     }
   },

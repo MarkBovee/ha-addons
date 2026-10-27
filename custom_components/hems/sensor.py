@@ -5,19 +5,21 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass
-from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfIrradiance, UnitOfPower, UnitOfTemperature
+from homeassistant.const import CURRENCY_EURO, UnitOfElectricCurrent, UnitOfEnergy, UnitOfIrradiance, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import HemsConfigEntry
 from .coordinator import HemsCoordinator, HemsSnapshot
-from .engine import executor
+from .engine import ev as ev_module, executor
 from .engine.outlook import cheapest_block, first_window, forecast_series, hour_mean, hour_total, price_curve, window_total
 from .engine.windows import record
 from .entity import HemsEntity
 
 QUARTER = timedelta(minutes=15)
+EV_STATUSES = [ev_module.STATUS_OFF, ev_module.STATUS_NOT_PLUGGED, ev_module.STATUS_NO_SOC, ev_module.STATUS_PROBLEM, ev_module.STATUS_IDLE,
+               ev_module.STATUS_PLANNED, ev_module.STATUS_AT_RISK, ev_module.STATUS_FORCED]
 PLAN_PREVIEW_SLOTS = 48                       # 12 hours of quarters in the plan attribute
 
 
@@ -39,6 +41,31 @@ def _heating_attrs(snap: HemsSnapshot) -> dict[str, Any]:
     tz = dt_util.get_default_time_zone()
     return {"windows": [{"kind": r.kind, "start": r.start.astimezone(tz).isoformat(timespec="minutes"), "end": r.end.astimezone(tz).isoformat(timespec="minutes"),
                          "energy_kwh": round(r.energy_kwh, 2), "avg_price_eur_kwh": round(r.avg_price, 4)} for r in snap.output.heating_runs]}
+
+
+def _ev_start(snap: HemsSnapshot):
+    """Start of the first planned charge quarter of the EV module; None when the module is off or nothing is planned."""
+    plan = snap.output.ev_plan
+    return plan.quarters[0].start if plan and plan.quarters else None
+
+
+def _ev_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """The EV plan in local time: status and reason, the deadline, the energy still needed, and the coming quarters with current, price, surplus and tier."""
+    plan = snap.output.ev_plan
+    if plan is None:
+        return {}
+    tz = dt_util.get_default_time_zone()
+    return {"status": plan.status, "reason": plan.reason, "deadline": plan.deadline.astimezone(tz).isoformat(timespec="minutes") if plan.deadline else None,
+            "required_kwh": round(plan.required_kwh, 2), "optional_kwh": round(plan.optional_kwh, 2), "planned_kwh": round(plan.planned_kwh(), 2),
+            "shortfall_kwh": round(plan.shortfall_kwh, 2),
+            "quarters": [{"start": q.start.astimezone(tz).isoformat(timespec="minutes"), "current_a": q.current_a, "kwh": round(q.kwh, 2),
+                          "price_eur_kwh": round(q.price, 4), "surplus_kwh": round(q.surplus_kwh, 2), "tier": q.tier} for q in plan.quarters[:PLAN_PREVIEW_SLOTS]]}
+
+
+def _ev_setpoint_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """Why the setpoint is what it is: the plan's current, the grid headroom, and the rule that held or limited it."""
+    point = snap.ev_setpoint
+    return {} if point is None else {"planned_a": point.planned_a, "code": point.code, "reason": point.reason, "allowed_a": snap.ev_allowed_a}
 
 
 def _decision(snap: HemsSnapshot):
@@ -204,6 +231,11 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           value=lambda s: _window_start(s, "discharge"), attributes=lambda s: _window_attrs(s, "discharge")),
     HemsSensorDescription(key="water_heater_plan", translation_key="water_heater_plan", device_class=SensorDeviceClass.TIMESTAMP,
                           value=_heating_start, attributes=_heating_attrs),
+    HemsSensorDescription(key="ev_plan", translation_key="ev_plan", device_class=SensorDeviceClass.TIMESTAMP, value=_ev_start, attributes=_ev_attrs),
+    HemsSensorDescription(key="ev_status", translation_key="ev_status", device_class=SensorDeviceClass.ENUM, options=EV_STATUSES,
+                          value=lambda s: s.output.ev_plan.status if s.output.ev_plan else None),
+    HemsSensorDescription(key="ev_setpoint", translation_key="ev_setpoint", device_class=SensorDeviceClass.CURRENT, native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+                          value=lambda s: s.ev_setpoint.current_a if s.ev_setpoint else None, attributes=_ev_setpoint_attrs),
     HemsSensorDescription(key="pv_forecast_24h", translation_key="pv_forecast_24h", device_class=SensorDeviceClass.ENERGY,
                           native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
                           value=lambda s: round(sum(v for t, v in s.output.pv_kwh.items() if s.output.decision and
@@ -223,7 +255,7 @@ class HemsSensor(HemsEntity, SensorEntity):
     entity_description: HemsSensorDescription
 
     # Series of up to a few thousand characters change every quarter and say nothing in history: keep them out of the recorder.
-    _unrecorded_attributes = frozenset({"slots", "curve", "forecast", "windows", "markdown"})
+    _unrecorded_attributes = frozenset({"slots", "curve", "forecast", "windows", "markdown", "quarters"})
 
     def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry, description: HemsSensorDescription) -> None:
         """Bind to the coordinator under the shared device."""
