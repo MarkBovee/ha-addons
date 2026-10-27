@@ -7,10 +7,11 @@ positive market price (README of energy-prices and the Zonneplan page; the add-o
 unconditionally). Whether battery-sourced evening export earns it is unconfirmed, hence the two switches.
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Sequence
 
 from .contracts import MarketPrices
+from .forecast import LOCAL_TZ
 from .solar import is_daylight
 
 
@@ -24,6 +25,7 @@ class PriceModel:
     export_fixed_bonus: float = 0.02             # Zonnebonus fixed, always paid
     export_energy_tax: float = 0.11085           # refunded on export only while netting applies
     salderen: bool = True                        # 2026 rules; False = 2027 rules (no netting)
+    netting_ends: date | None = None             # first local day without netting (2027-01-01 by law); None = `salderen` decides alone
     bonus_only_daylight: bool = True             # percentage bonus only between sunrise and sunset
     bonus_only_positive_price: bool = True       # percentage bonus only for a positive market price
 
@@ -43,20 +45,30 @@ class PriceModel:
             return 0.0
         return self.export_bonus_pct
 
-    def export_price(self, market: float, daylight: bool) -> float:
-        """Consumer export price for a market price in a slot that is (not) in daylight (EUR/kWh)."""
+    def netting_applies(self, at: datetime | None) -> bool:
+        """Whether netting still applies in the slot starting at `at` (timezone-aware): the switch is on and the local day is before `netting_ends`.
+
+        Without a slot time only the switch decides, which is what callers that price a single number (tests, spot checks) get."""
+        if not self.salderen:
+            return False
+        return self.netting_ends is None or at is None or at.astimezone(LOCAL_TZ).date() < self.netting_ends
+
+    def export_price(self, market: float, daylight: bool, at: datetime | None = None) -> float:
+        """Consumer export price for a market price in a slot that is (not) in daylight (EUR/kWh); `at` is the slot start, for the end of netting."""
         base = market * (1 + self.bonus_pct_for(market, daylight))
-        if self.salderen:
+        if self.netting_applies(at):
             return base * self.export_vat_multiplier + self.export_fixed_bonus + self.export_energy_tax
         return base + self.export_fixed_bonus
 
 
-def curves(market: list[float], model: PriceModel, daylight: list[bool]) -> tuple[list[float], list[float]]:
-    """Import and export price per slot. `daylight` has one flag per slot (see hems.solar.is_daylight)."""
-    if len(daylight) != len(market):
-        raise ValueError("daylight needs one flag per slot")
+def curves(market: list[float], model: PriceModel, daylight: list[bool],
+           starts: Sequence[datetime] | None = None) -> tuple[list[float], list[float]]:
+    """Import and export price per slot. `daylight` has one flag per slot (see hems.solar.is_daylight); `starts` (one per slot) lets netting end on a date."""
+    if len(daylight) != len(market) or (starts is not None and len(starts) != len(market)):
+        raise ValueError("daylight and starts need one entry per slot")
+    at = starts if starts is not None else [None] * len(market)
     return ([model.import_price(m) for m in market],
-            [model.export_price(m, d) for m, d in zip(market, daylight)])
+            [model.export_price(m, d, a) for m, d, a in zip(market, daylight, at)])
 
 
 @dataclass(frozen=True)
@@ -76,12 +88,12 @@ def price_series_from_import_curve(curve: Sequence[tuple[datetime, float]], mode
     ordered = sorted(curve)
     starts = tuple(s for s, _ in ordered)
     market = [model.market_from_import(p) for _, p in ordered]
-    _, exp = curves(market, model, [is_daylight(s, latitude, longitude) for s in starts])
+    _, exp = curves(market, model, [is_daylight(s, latitude, longitude) for s in starts], starts)
     return PriceSeries(starts, tuple(p for _, p in ordered), tuple(exp))
 
 
 def build_price_series(market: MarketPrices, model: PriceModel, latitude: float, longitude: float) -> PriceSeries:
     """Apply the price model to market prices; daylight is evaluated at the start of each quarter."""
     daylight = [is_daylight(start, latitude, longitude) for start in market.starts]
-    imp, exp = curves(list(market.market_eur_kwh), model, daylight)
+    imp, exp = curves(list(market.market_eur_kwh), model, daylight, market.starts)
     return PriceSeries(market.starts, tuple(imp), tuple(exp))

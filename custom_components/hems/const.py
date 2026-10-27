@@ -44,6 +44,7 @@ DEFAULT_OPTIONS = {
     "export_fixed_bonus": 0.02,
     "export_energy_tax": 0.11085,
     "salderen": True,
+    "salderen_until": "2027-01-01",           # first local day without netting (the law ends it on 1 Jan 2027); empty = only the switch decides
     "bonus_only_daylight": True,
     "bonus_only_positive_price": True,
 }

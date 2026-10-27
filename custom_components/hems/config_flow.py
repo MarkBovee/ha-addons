@@ -13,6 +13,7 @@ from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_
 _ROLES_REQUIRED = (CONF_SOC, CONF_BATTERY_POWER, CONF_PV, CONF_GRID)
 _ROLES_OPTIONAL = (CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE)
 _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+_OPTIONAL_DATE = selector.TextSelector()          # an ISO date (2027-01-01) or empty; a date picker cannot be left empty
 _WEEKDAY = selector.SelectSelector(selector.SelectSelectorConfig(
     options=["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], mode=selector.SelectSelectorMode.DROPDOWN, translation_key="weekday"))
 
@@ -52,7 +53,7 @@ SECTIONS: dict[str, tuple[str, ...]] = {
     "module_water_heater": ("water_heater_enabled", "water_heater_energy_kwh", "water_heater_hours", "water_heater_night_energy_kwh",
                      "water_heater_legionella_energy_kwh", "water_heater_legionella_hours", "water_heater_legionella_weekday"),
     "base_prices": ("nordpool_enabled", "delivery_area", "import_vat_multiplier", "import_markup", "import_energy_tax", "export_vat_multiplier",
-               "export_bonus_pct", "export_fixed_bonus", "export_energy_tax", "salderen", "bonus_only_daylight", "bonus_only_positive_price"),
+               "export_bonus_pct", "export_fixed_bonus", "export_energy_tax", "salderen", "salderen_until", "bonus_only_daylight", "bonus_only_positive_price"),
     "base_forecast": ("weather_enabled", "pv_gain_w_per_wm2", "pv_max_ac_w"),
     "logging": ("trace_full_plan",),
 }
@@ -69,7 +70,7 @@ def _field(key: str) -> Any:
     """The input for one setting: a number box, the weekday choice, the area text, or a switch."""
     if key in NUMBERS:
         return _number(*NUMBERS[key])
-    return {"water_heater_legionella_weekday": _WEEKDAY, "delivery_area": str}.get(key, bool)
+    return {"water_heater_legionella_weekday": _WEEKDAY, "delivery_area": str, "salderen_until": _OPTIONAL_DATE}.get(key, bool)
 
 
 def _options_schema(current: dict[str, Any]) -> vol.Schema:

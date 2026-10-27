@@ -5,7 +5,7 @@ recorder statistics for the consumption history, and one HTTP weather source own
 """
 import logging
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +67,18 @@ def water_heater_from_options(o: dict[str, Any]) -> WaterHeaterConfig:
                              legionella_weekday=WEEKDAYS.index(weekday) if weekday in WEEKDAYS else WEEKDAYS.index(DEFAULT_OPTIONS["water_heater_legionella_weekday"]))
 
 
+def netting_end_from_options(o: dict[str, Any]) -> date | None:
+    """The first day without netting: empty means only the `salderen` switch decides; an unreadable date falls back to the legal 2027-01-01 and says so."""
+    text = str(o["salderen_until"]).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        _LOGGER.warning("salderen_until %r is not an ISO date; using %s", text, DEFAULT_OPTIONS["salderen_until"])
+        return date.fromisoformat(DEFAULT_OPTIONS["salderen_until"])
+
+
 def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -> EngineSettings:
     """Engine settings from the options (defaults fill gaps) and the Home Assistant location."""
     o = {**DEFAULT_OPTIONS, **entry.options}
@@ -76,7 +88,7 @@ def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -
     prices = PriceModel(import_vat_multiplier=o["import_vat_multiplier"], import_markup=o["import_markup"],
                         import_energy_tax=o["import_energy_tax"], export_vat_multiplier=o["export_vat_multiplier"],
                         export_bonus_pct=o["export_bonus_pct"], export_fixed_bonus=o["export_fixed_bonus"],
-                        export_energy_tax=o["export_energy_tax"], salderen=o["salderen"],
+                        export_energy_tax=o["export_energy_tax"], salderen=o["salderen"], netting_ends=netting_end_from_options(o),
                         bonus_only_daylight=o["bonus_only_daylight"], bonus_only_positive_price=o["bonus_only_positive_price"])
     return EngineSettings(battery=battery, prices=prices, latitude=latitude, longitude=longitude,
                           pv_gain_w_per_wm2=o["pv_gain_w_per_wm2"] or 7.0, pv_max_ac_w=o["pv_max_ac_w"],

@@ -239,3 +239,20 @@ def test_planned_ac_power_never_exceeds_the_inverter_limit():
     peak_kw = max(abs(s.battery_kwh) for s in p.slots) / 0.25
     assert 7.0 < peak_kw <= 8.0 + 1e-9
 
+
+
+def test_export_price_drops_when_netting_ends_on_the_date():
+    """Intent: the export price loses VAT and the energy-tax refund from the first local day without netting, slot by slot.
+    Why: the law ends netting on 2027-01-01 and a planner that still sells at the netting price overvalues every evening sale after that."""
+    from hems.prices import build_price_series
+    from hems.contracts import MarketPrices
+    cet = timezone(timedelta(hours=1))
+    last_netted = datetime(2026, 12, 31, 23, 45, tzinfo=cet).astimezone(timezone.utc)
+    first_free = datetime(2027, 1, 1, 0, 0, tzinfo=cet).astimezone(timezone.utc)
+    market = MarketPrices((last_netted, first_free), (0.10, 0.10), last_netted)
+    model = PriceModel(netting_ends=date(2027, 1, 1), bonus_only_daylight=False)
+    before, after = build_price_series(market, model, *UTRECHT).export_eur_kwh
+    assert before == pytest.approx(PriceModel(bonus_only_daylight=False).export_price(0.10, True))
+    assert after == pytest.approx(PriceModel(salderen=False, bonus_only_daylight=False).export_price(0.10, True))
+    assert before - after > 0.10
+    assert PriceModel().export_price(0.10, True) == PriceModel(netting_ends=date(2027, 1, 1)).export_price(0.10, True)

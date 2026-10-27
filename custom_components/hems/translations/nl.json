@@ -79,6 +79,7 @@
               "export_fixed_bonus": "Zonnebonus vast (EUR/kWh)",
               "export_energy_tax": "Export energiebelasting-teruggave (EUR/kWh, alleen saldering)",
               "salderen": "Saldering geldt",
+              "salderen_until": "Saldering stopt op (eerste dag zonder saldering, leeg = alleen de schakelaar)",
               "bonus_only_daylight": "Percentagebonus alleen tussen zonsopkomst en zonsondergang",
               "bonus_only_positive_price": "Percentagebonus alleen bij een positieve marktprijs"
             }

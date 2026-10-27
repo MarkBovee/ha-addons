@@ -79,6 +79,7 @@
               "export_fixed_bonus": "Solar bonus fixed (EUR/kWh)",
               "export_energy_tax": "Export energy tax refund (EUR/kWh, netting only)",
               "salderen": "Netting (salderen) applies",
+              "salderen_until": "Netting ends on (first day without netting, empty = only the switch)",
               "bonus_only_daylight": "Percentage bonus only between sunrise and sunset",
               "bonus_only_positive_price": "Percentage bonus only for a positive market price"
             }
