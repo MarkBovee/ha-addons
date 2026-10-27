@@ -161,7 +161,9 @@ Gedaan, met Marks akkoord:
 - Water-heater-add-on: `price_sensor_entity_id` is `sensor.hems_import_price` (alleen dat veld gewijzigd, de rest van de opties is intact), add-on herstart; hij leest €0,336 en plant hetzelfde venster als eerst (12:00 tot 13:00). `sensor.wh_heating_plan` bestaat weer.
 - Overzichtsdashboard: de negen verwijzingen naar energy-prices (drie tegels, vier chartreeksen) wijzen naar HEMS. Back-up van de vorige configuratie: scratchpad van deze sessie (`lovelace-overview-backup.json`).
 
-Nog niet gedaan: energy-prices stoppen (na een week meekijken, beslist), de `price_curve_entity`-rol van HEMS (terugval en controle) omzetten of verwijderen, het dashboard `battery-management` (BM-tegels, fase 2).
+- De HEMS-rol `price_curve_entity` (terugval en controle op energy-prices) is op 27 okt 19:19 verwijderd (Mark): HEMS plant nu alleen op zijn eigen Nord Pool-prijzen (`price_source=market`, `price_curve_configured=False`, geen `price_check_max_diff` meer). Valt Nord Pool uit, dan is de status `no_prices` zonder terugval. **Valkuil:** de reconfigure-tool van de HA-MCP zet een weggelaten optionele rol terug uit de voorgestelde waarden; de rol verdween pas na het indienen van HEMS' eigen reconfigure-flow zonder dat veld (REST `POST /api/config/config_entries/flow` met `entry_id`, `source: reconfigure`).
+
+Nog niet gedaan: energy-prices stoppen (na een week meekijken, 3 nov, beslist), het dashboard `battery-management` (BM-tegels, fase 2).
 
 Opgemerkt: `sensor.energy_prices_electricity_import_price` heeft een staat (0,1783) die niet bij zijn eigen curve past (0,3236 in dat kwartier); wie de staat leest, kreeg al een afwijkende waarde. De helper en de boiler lazen de curve.
 **Legionella:** de water-heater-add-on meldt `needs_protection=True, next_due=Now` met laatste run 17 okt; de run van zaterdag 24 okt is uitgebleven en de add-on voert hem ook nu niet uit. Niet door deze wijziging veroorzaakt; wel uit te zoeken.
