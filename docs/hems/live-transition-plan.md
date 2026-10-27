@@ -107,8 +107,26 @@ Verworpen: route A (battery-api krijgt een HA-native schema-entiteit via MQTT Di
 | 6 | **Gesloten-lus-test** | De huidige bewijzen zijn replay met orakel en planvergelijking. Eerst één begeleide dag in advisory (schema loggen en vergelijken met wat BM echt deed), dan één dag auto met Mark erbij |
 | 7 | **Wat BM extra doet** | Adaptive/passive bijsturen op het huisverbruik; HEMS plant vermogen per kwartier. Eerst meten of dat verschil iets kost of oplevert (aansluiten op het margeverhaal) |
 | 8 | **Prijssensoren en dashboards** | Min, max, gemiddeld vandaag en max winst als HEMS-sensoren (of tegels laten vervallen); nieuw dashboard op HEMS; `current_price` omzetten |
-| 9 | **Boiler** | Twee opties: de water-heater-add-on laten sturen (met HEMS-prijs als bron) of een HEMS-boileruitvoerder bouwen die `water_heater.set_temperature` schrijft en de legionella-, bad-, away- en negatieve-prijsregels van de add-on overneemt. Het laatste is veel werk met weinig winst nu |
+| 9 | **Boiler** (HEMS vervangt de add-on uiteindelijk, besluit Mark 27 okt) | De regels van de add-on gaan mee, inclusief de legionella-les van hoofdstuk 5.1. Twee opties: de water-heater-add-on laten sturen (met HEMS-prijs als bron) of een HEMS-boileruitvoerder bouwen die `water_heater.set_temperature` schrijft en de legionella-, bad-, away- en negatieve-prijsregels van de add-on overneemt. Het laatste is veel werk met weinig winst nu |
 | 10 | **EV-uitvoerder** | `number.set_value` op de laadlimiet en de schakelaar, na de stroomproef en met het vangnet uit het EV-onderzoek (geldigheidsduur of dagschema) |
+
+### 5.1 Regels van de water-heater-add-on die HEMS moet overnemen
+
+Mark (27 okt 2026): HEMS vervangt de water-heater-add-on uiteindelijk, dus alles wat de add-on weet gaat mee. Wat nu bekend is, met de les van 24 okt:
+
+| Regel | Eis voor de HEMS-boileruitvoerder |
+|---|---|
+| **Legionella: verschuldigd op kalenderdagen** | Verschuldigd zeven kalenderdagen na de *dag* van de laatste run, niet na 168 verstreken uren. De add-on telde `(nu − laatste).days >= 7` en sloeg zaterdag 24 okt over (zie hieronder). Test op exact die situatie: start 17 okt 13:00, laatste stempel 18:30, venster 24 okt 14:00 moet verschuldigd zijn |
+| **Legionella: alleen op de gekozen weekdag** | Alleen op de gekozen weekdag (standaard zaterdag), na het nachtvenster, en alleen als verschuldigd; geen inhaal op andere dagen (Marks keuze). Een gemiste zaterdag wacht op de volgende |
+| **Stempel van de run** | De add-on ververst de tijdstempel elk uur zolang het water boven 60 °C blijft; de stempel is dus het einde van de warme periode, niet de start. Met een datumregel maakt dat niet uit zolang de run niet over middernacht loopt; HEMS moet dit bewust vastleggen (bij voorkeur de dag waarop 60 °C is bereikt, niet elke verversing) |
+| Wat telt als run | Water ≥ 60 °C (drempel `LEGIONELLA_TEMP_THRESHOLD`), ook door een andere oorzaak (negatieve prijs, handmatig); de add-on stempelt ook dan |
+| Venster | Het goedkoopste blok van `legionella_duration_hours` (3) in het dagdeel 06 tot 24, met de optimalisatie van 15 minuten eerder of later; temperatuur 62 °C (preset comfort) |
+| Programma's | Nacht (00 tot 06), dag (06 tot 24), bad (58 °C, schakelt uit boven `bath_auto_off_temp`), weg (35 °C, legionella blijft gelden), negatieve of nulprijs (70 °C), tussentijd van minimaal 50 minuten (`min_cycle_gap_minutes`) |
+| Prijsbron | Een `price_curve` met hele lokale dag, UTC (de add-on had een UTC-fout die in 1.2.13 is opgelost; HEMS rekent al in UTC en zet om naar lokale uren) |
+| Terugmelding | `sensor.wh_last_legionella` (laatste run, dagen geleden, volgende verschuldigd) en een statustekst; HEMS publiceert het equivalent |
+| Wat HEMS nu al plant | `heater.py` plant elke zaterdag 3 uur legionella en de dagelijkse run, **zonder** te weten of de bescherming verschuldigd is. Voor sturen is de verschuldigdheidsstaat nodig (laatste run, bijgehouden en bewaard over herstarten) |
+
+Het incident, voor het bewijs: de run van zaterdag 17 okt 2026 begon om 13:00 en werd afgetekend om 18:30; op 24 okt stond het dagvenster om 14:00, 6 dagen en 19,5 uur later, geteld als 6, dus overgeslagen; de volgende dag was 31 okt (14 dagen tussen twee runs). Opgelost in add-on 1.3.1 (master `0b635d4`, geïnstalleerd 27 okt 09:34).
 
 ## 6. Gefaseerd plan
 
