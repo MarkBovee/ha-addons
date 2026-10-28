@@ -67,21 +67,9 @@ DAYS_OF_WEEK = {
 
 WINTER_MONTHS = {10, 11, 12, 1, 2, 3}
 
-# Track previous status to avoid unnecessary updates
-_previous_status_state = {
-    'message': None,
-    'program': None,
-    'target_temp': None,
-    'icon': None,
-    'color': None
-}
-
-_previous_legionella_state = {
-    'state': '__UNINITIALIZED__',  # Sentinel value to force first update
-    'days_ago': None,
-    'next_due': None,
-    'needs_protection': None
-}
+# Last published signature and time per REST entity, to skip unchanged posts.
+_previous_status: Dict[str, Any] = {'signature': None, 'at': None}
+_previous_legionella: Dict[str, Any] = {'signature': None, 'at': None}
 
 
 def get_status_visual(program: ProgramType, current_time: datetime) -> Tuple[str, Optional[str]]:
@@ -380,19 +368,13 @@ def get_price_level(current_price: float, prices: Dict[datetime, float]) -> str:
 def update_status_entity(ha_api: HomeAssistantApi, status_msg: str, 
                          program: ProgramType, target_temp: int,
                          status_icon: str, status_color: Optional[str]):
-    """Update the status input_text entity only if something changed."""
-    global _previous_status_state
-    
-    # Check if anything changed
-    if (_previous_status_state['message'] == status_msg and
-        _previous_status_state['program'] == program.value and
-        _previous_status_state['target_temp'] == target_temp and
-        _previous_status_state['icon'] == status_icon and
-        _previous_status_state['color'] == status_color):
-        # Nothing changed, skip update
+    """Update the status entity when something changed, and at least hourly (see should_publish)."""
+    signature = (status_msg, program.value, target_temp, status_icon, status_color)
+    now = datetime.now()
+    if not should_publish(_previous_status, signature, now):
         logger.debug("Status unchanged, skipping update")
         return
-    
+
     # Something changed, update the entity
     attributes = {
         "friendly_name": "Heating Schedule Status",
@@ -410,17 +392,20 @@ def update_status_entity(ha_api: HomeAssistantApi, status_msg: str,
         log_success=False
     )
     
-    # Update tracking state
-    _previous_status_state['message'] = status_msg
-    _previous_status_state['program'] = program.value
-    _previous_status_state['target_temp'] = target_temp
-    _previous_status_state['icon'] = status_icon
-    _previous_status_state['color'] = status_color
-    
+    _previous_status.update(signature=signature, at=now)
+
     logger.info("Status updated: %s", status_msg)
 
 
 _previous_plan: Dict[str, Any] = {'signature': None, 'at': None}
+
+
+def should_publish(previous: Dict[str, Any], signature: Any, now: datetime) -> bool:
+    """Return True when a REST entity must be posted: its content changed or the last post is older than PLAN_REPUBLISH.
+
+    A state set over REST is gone after a Home Assistant restart, so an unchanged entity still gets reposted hourly."""
+    last_at = previous['at']
+    return signature != previous['signature'] or last_at is None or now - last_at >= PLAN_REPUBLISH
 
 
 def publish_heating_plan(config: ScheduleConfig, ha_api: HomeAssistantApi, entity_reader: EntityStateReader, state: HeaterState,
@@ -436,8 +421,7 @@ def publish_heating_plan(config: ScheduleConfig, ha_api: HomeAssistantApi, entit
         legionella_weekday=DAYS_OF_WEEK.get(config.legionella_day, 5))
     plan_state_text, attributes = plan_state(windows), plan_attributes(windows, config)
     signature = json.dumps([plan_state_text, attributes], sort_keys=True)
-    last_at = _previous_plan['at']
-    if signature == _previous_plan['signature'] and last_at is not None and now - last_at < PLAN_REPUBLISH:
+    if not should_publish(_previous_plan, signature, now):
         return
     ha_api.create_or_update_entity(entity_id=HEATING_PLAN_ENTITY, state=plan_state_text, attributes=attributes, log_success=False)
     _previous_plan.update(signature=signature, at=now)
@@ -445,8 +429,7 @@ def publish_heating_plan(config: ScheduleConfig, ha_api: HomeAssistantApi, entit
 
 
 def update_legionella_entity(ha_api: HomeAssistantApi, last_protection: Optional[datetime]) -> None:
-    """Publish last legionella run and next due information only if changed."""
-    global _previous_legionella_state
+    """Publish last legionella run and next due information when changed, and at least hourly (see should_publish)."""
     now = datetime.now()
 
     if last_protection is None:
@@ -468,12 +451,8 @@ def update_legionella_entity(ha_api: HomeAssistantApi, last_protection: Optional
             next_due = f"In {days_until} days" if days_until > 0 else "Tomorrow"
             needs_protection = False
 
-    # Check if anything changed
-    if (_previous_legionella_state['state'] == state and
-        _previous_legionella_state['days_ago'] == days_ago and
-        _previous_legionella_state['next_due'] == next_due and
-        _previous_legionella_state['needs_protection'] == needs_protection):
-        # Nothing changed, skip update
+    signature = (state, days_ago, next_due, needs_protection)
+    if not should_publish(_previous_legionella, signature, now):
         logger.debug("Legionella status unchanged, skipping update")
         return
 
@@ -496,12 +475,8 @@ def update_legionella_entity(ha_api: HomeAssistantApi, last_protection: Optional
         log_success=False,
     )
     
-    # Update tracking state
-    _previous_legionella_state['state'] = state
-    _previous_legionella_state['days_ago'] = days_ago
-    _previous_legionella_state['next_due'] = next_due
-    _previous_legionella_state['needs_protection'] = needs_protection
-    
+    _previous_legionella.update(signature=signature, at=now)
+
     logger.info("Legionella status updated: %s, needs_protection=%s, next_due=%s", 
                 state, needs_protection, next_due)
 

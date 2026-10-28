@@ -2,6 +2,12 @@
 
 All notable changes to the Water Heater Scheduler add-on will be documented in this file.
 
+## [1.3.2] - 2026-10-28
+
+### Fixed
+- **`sensor.wh_last_legionella` and the status entity were gone after a Home Assistant restart.** They were only posted when their content changed, and a state set over REST does not survive a restart, so an unchanged sensor stayed missing until the next legionella run. Both are now reposted at least hourly, like `sensor.wh_heating_plan`; one helper (`should_publish`) decides for all three.
+- Tests: `tests/test_republish.py`.
+
 ## [1.3.1] - 2026-10-27
 
 ### Fixed
