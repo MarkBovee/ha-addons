@@ -82,6 +82,8 @@
               "water_heater_night_energy_kwh": "Water heater: energy of the night run (kWh, 0 = no night run)",
               "water_heater_legionella_energy_kwh": "Water heater: energy of the legionella run (kWh)",
               "water_heater_legionella_hours": "Water heater: length of the legionella run (hours)",
+              "water_heater_legionella_temp_c": "Water heater: temperature of the legionella run (°C)",
+              "water_heater_legionella_min_c": "Water heater: a tank at or above this counts as a legionella run (°C)",
               "water_heater_legionella_weekday": "Water heater: legionella day"
             }
           },
@@ -289,6 +291,9 @@
       },
       "battery_schedule": {
         "name": "Battery schedule"
+      },
+      "last_legionella": {
+        "name": "Last legionella run"
       }
     },
     "binary_sensor": {

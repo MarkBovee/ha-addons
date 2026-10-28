@@ -33,7 +33,7 @@ Per dag bewaart HEMS kosten, baselinekosten, import, export, zon, huis en auto i
 
 Wijs bij **Reconfigure** optioneel nog drie entiteiten toe:
 - `water_heater_entity`: de boiler of de tanktemperatuur
-- `legionella_last_entity`: tijdstip van de laatste legionella-run
+- `legionella_last_entity`: tijdstip van de laatste legionella-run van de water-heater-add-on (alleen voor de overgang). HEMS houdt zelf bij wanneer de tank voor het eerst op een dag de minimumtemperatuur haalt (instelling, standaard 60 °C), slaat dat op en publiceert `sensor.hems_last_legionella` (met `due` en `source`); de nieuwste van beide telt. Als de add-on weg is, kan deze rol leeg
 - `compare_action_entity`: de actiesensor van de oude battery manager, voor de vergelijking per kwartier in **Insights**. Die gaat op netintentie: `Charging` is laden, `Discharging` en `Adaptive` vanaf 2000 W is verkopen, de rest (`Adaptive` dat het huis dekt, `Opportunistic`/`Passive Solar`) is idle, net als zelfverbruik in HEMS
 
 ## Sturen en advies

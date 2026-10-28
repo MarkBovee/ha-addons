@@ -32,6 +32,11 @@ class HemsSensorDescription(SensorEntityDescription):
     attributes: Callable[[HemsSnapshot], dict[str, Any]] | None = None
 
 
+def _legionella_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """When the next run is due and where the last one comes from (HEMS's own tank record or the add-on's sensor)."""
+    return {"due": snap.legionella_due.date().isoformat() if snap.legionella_due else None, "source": snap.legionella_source}
+
+
 def _schedule_value(snap: HemsSnapshot) -> str | None:
     """The SAJ slots HEMS would write, in a few words ('2 charge · 1 sell slots'); None without a plan."""
     advice = snap.saj
@@ -298,6 +303,8 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
     HemsSensorDescription(key="plan", translation_key="plan", value=lambda s: s.plan_text or None, attributes=_plan_preview),
     HemsSensorDescription(key="plan_diff", translation_key="plan_diff", state_class=SensorStateClass.MEASUREMENT, native_unit_of_measurement="quarters",
                           value=_plan_diff_value, attributes=_plan_diff_attrs),
+    HemsSensorDescription(key="last_legionella", translation_key="last_legionella", device_class=SensorDeviceClass.TIMESTAMP,
+                          value=lambda s: s.legionella_last, attributes=_legionella_attrs),
     HemsSensorDescription(key="battery_schedule", translation_key="battery_schedule", value=_schedule_value, attributes=_schedule_attrs),
     HemsSensorDescription(key="last_cycle", translation_key="last_cycle", device_class=SensorDeviceClass.TIMESTAMP, entity_category=EntityCategory.DIAGNOSTIC,
                           value=lambda s: s.cycle_at),

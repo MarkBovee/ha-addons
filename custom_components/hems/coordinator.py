@@ -24,9 +24,9 @@ from .adapters import base_load_history, parse_price_curve, reading_from_state, 
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT, CONF_EV_PLUGGED,
                     CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_PRICE_CURVE,
                     CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
-                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
+                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
-from .engine.heater import legionella_overdue
+from .engine.heater import legionella_due_date, legionella_overdue, record_legionella
 from .engine.contracts import MarketPrices
 from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot, window_tree
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
@@ -70,6 +70,9 @@ class HemsSnapshot:
     cycle_at: datetime | None = None       # when this cycle ran (UTC)
     previous_decision: Decision | None = None   # the plan of the cycle before, for the dashboard's plan diff
     saj: SajAdvice | None = None           # the SAJ slots HEMS would write now and how they differ from the inverter (advisory)
+    legionella_last: datetime | None = None    # the last legionella run (own tank record or the add-on's sensor)
+    legionella_due: datetime | None = None     # local midnight of the day the next run is due
+    legionella_source: str | None = None       # "tank" (HEMS's own record) or "role" (the add-on's sensor)
 
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -79,7 +82,8 @@ def water_heater_from_options(o: dict[str, Any]) -> WaterHeaterConfig:
     """The water heater module's settings from the (default-filled) options; an unknown weekday falls back to the default one."""
     weekday = o["water_heater_legionella_weekday"]
     return WaterHeaterConfig(enabled=bool(o["water_heater_enabled"]), energy_kwh=float(o["water_heater_energy_kwh"]), hours=int(o["water_heater_hours"]), night_energy_kwh=float(o["water_heater_night_energy_kwh"]),
-                             legionella_energy_kwh=float(o["water_heater_legionella_energy_kwh"]), legionella_hours=int(o["water_heater_legionella_hours"]),
+                             legionella_energy_kwh=float(o["water_heater_legionella_energy_kwh"]), legionella_hours=int(o["water_heater_legionella_hours"]), legionella_temp_c=float(o["water_heater_legionella_temp_c"]),
+                             legionella_min_c=float(o["water_heater_legionella_min_c"]),
                              legionella_weekday=WEEKDAYS.index(weekday) if weekday in WEEKDAYS else WEEKDAYS.index(DEFAULT_OPTIONS["water_heater_legionella_weekday"]))
 
 
@@ -173,6 +177,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.force_charge = False                  # the owner's override on the EV module; a restart clears it on purpose
         self.saj_names = entity_names(SAJ_PREFIX)
+        self.legionella_seen: datetime | None = None   # HEMS's own record: the day the tank last reached 60 °C (survives the add-on)
         self._cycles = 0                           # cycles since start: the first one never writes (no old schedule is repeated)
 
     def _on(self, role: str) -> bool | None:
@@ -476,7 +481,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._cycles += 1
         saj = await self._saj_round(output)
         return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table,
-                            self._weather, car, allowed, cycle_at=now, previous_decision=previous, saj=saj)
+                            self._weather, car, allowed, cycle_at=now, previous_decision=previous, saj=saj,
+                            legionella_last=self.legionella_last(), legionella_due=self.legionella_due(), legionella_source=self._legionella_source())
 
     def may_write(self, output: EngineOutput) -> bool:
         """True only when every condition for a write round holds: the phase lock open, the battery in auto, the master switch on,
@@ -508,9 +514,12 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         data = await self._store.async_load() or {}
         self.ledger.restore(data.get("ledger"))
         self.control.restore(data.get("control"))
+        seen = data.get("legionella_seen")
+        self.legionella_seen = dt_util.parse_datetime(seen) if isinstance(seen, str) else None
 
     def _stored(self) -> dict[str, Any]:
-        return {"ledger": self.ledger.state() if self.ledger else None, "control": self.control.state()}
+        return {"ledger": self.ledger.state() if self.ledger else None, "control": self.control.state(),
+                "legionella_seen": self.legionella_seen.isoformat() if self.legionella_seen else None}
 
     def _save(self) -> None:
         self._store.async_delay_save(self._stored, 30)
@@ -526,6 +535,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
     @callback
     def async_sample(self, now: datetime) -> None:
         """Integrate the live grid, PV and battery power into the open quarter; close and price quarters that ended."""
+        self._watch_tank(now)
         if self.ledger is None:
             return
         battery_sign = -1.0 if self.config_entry.data.get(CONF_BATTERY_POSITIVE_DISCHARGING, True) else 1.0
@@ -627,8 +637,43 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
                              "configured": bool(self._entity(CONF_LEGIONELLA_LAST))}
         return out
 
+    def tank_temperature(self) -> float | None:
+        """The tank temperature from the water heater role: a water_heater's current_temperature, or a sensor's state."""
+        state = self.hass.states.get(self._entity(CONF_WATER_HEATER) or "")
+        if state is None:
+            return None
+        value = state.attributes.get("current_temperature") if state.domain == "water_heater" else state.state
+        try:
+            return float(value) if value not in (None, "unknown", "unavailable") else None
+        except (TypeError, ValueError):
+            return None
+
+    def _watch_tank(self, now: datetime) -> None:
+        """Record the day the tank first reaches the legionella minimum (60 °C by default; HEMS's own record); stored at once when it changes."""
+        min_c = self._settings.water_heater.legionella_min_c if self._settings else DEFAULT_OPTIONS["water_heater_legionella_min_c"]
+        seen = record_legionella(self.legionella_seen, self.tank_temperature(), now, dt_util.get_default_time_zone(), min_c)
+        if seen != self.legionella_seen:
+            self.legionella_seen = seen
+            self._save()
+            self.hass.async_create_task(self._log_event("legionella_seen", at=seen.isoformat(), tank_c=self.tank_temperature()))
+
     def legionella_last(self) -> datetime | None:
-        """The last legionella run from its role (the add-on's `sensor.wh_last_legionella`, 'YYYY-MM-DD HH:MM' local); None when unknown."""
+        """The last legionella run: HEMS's own record, or the add-on's sensor while it still runs (the later of the two)."""
+        known = [t for t in (self.legionella_seen, self._legionella_from_role()) if t is not None]
+        return max(known) if known else None
+
+    def legionella_due(self) -> datetime | None:
+        """The local day the next run is due (as a midnight timestamp), None when no run is known."""
+        due = legionella_due_date(self.legionella_last(), dt_util.get_default_time_zone())
+        return None if due is None else datetime.combine(due, time(0), tzinfo=dt_util.get_default_time_zone())
+
+    def _legionella_source(self) -> str | None:
+        """Which record the last run comes from: 'tank' when HEMS's own is the latest, 'role' for the add-on's sensor."""
+        last = self.legionella_last()
+        return None if last is None else "tank" if last == self.legionella_seen else "role"
+
+    def _legionella_from_role(self) -> datetime | None:
+        """The last run from the optional role (the add-on's `sensor.wh_last_legionella`, 'YYYY-MM-DD HH:MM' local); None when unknown."""
         last = self.hass.states.get(self._entity(CONF_LEGIONELLA_LAST) or "")
         if not last or last.state in ("unknown", "unavailable", "", "Never"):
             return None

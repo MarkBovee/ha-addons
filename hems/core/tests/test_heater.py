@@ -4,7 +4,7 @@ import pytest
 
 from hems.dryrun import EngineInputs, EngineSettings, _load_forecast
 from hems.forecast import LOCAL_TZ
-from hems.heater import HeatingRun, WaterHeaterConfig, legionella_due, legionella_overdue, plan_runs, run_kwh_per_quarter, without_daily_peak
+from hems.heater import HeatingRun, WaterHeaterConfig, legionella_due, legionella_overdue, plan_runs, record_legionella, run_kwh_per_quarter, without_daily_peak
 from hems.prices import PriceSeries
 
 NOW = datetime(2026, 10, 15, 9, 7, tzinfo=LOCAL_TZ)
@@ -170,3 +170,15 @@ def test_the_overdue_alert_waits_one_day_past_the_due_day():
     last = datetime(2026, 10, 17, 18, 30, tzinfo=LOCAL_TZ)
     assert [legionella_overdue(last, datetime(2026, 10, d).date(), LOCAL_TZ) for d in (24, 25, 26)] == [False, False, True]
     assert not legionella_overdue(None, datetime(2026, 10, 26).date(), LOCAL_TZ)
+
+
+def test_hems_records_the_day_the_tank_first_reaches_60_degrees():
+    """HEMS keeps its own record (the add-on goes): the first moment of a local day at 60 °C or more; staying hot does not move it, a
+    cooler tank does not either, the next day's hot tank does."""
+    sat = datetime(2026, 10, 24, 13, 40, tzinfo=LOCAL_TZ)
+    assert record_legionella(None, 58.0, sat, LOCAL_TZ) is None and record_legionella(None, None, sat, LOCAL_TZ) is None
+    first = record_legionella(None, 60.5, sat, LOCAL_TZ)
+    assert first == sat
+    assert record_legionella(first, 62.0, sat.replace(hour=18, minute=30), LOCAL_TZ) == sat, "not refreshed while hot (the add-on's mistake)"
+    sunday = datetime(2026, 10, 25, 9, 0, tzinfo=LOCAL_TZ)
+    assert record_legionella(first, 45.0, sunday, LOCAL_TZ) == sat and record_legionella(first, 70.0, sunday, LOCAL_TZ) == sunday

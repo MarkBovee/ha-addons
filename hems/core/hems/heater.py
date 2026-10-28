@@ -35,6 +35,8 @@ class WaterHeaterConfig:
     legionella_energy_kwh: float = 2.6
     legionella_hours: int = 3
     legionella_weekday: int = 5              # 0 = Monday ... 5 = Saturday
+    legionella_temp_c: float = 62.0          # the temperature of the legionella run (the add-on's setting); for the executor, not planned on
+    legionella_min_c: float = 60.0           # a tank at or above this counts as a protection run (the add-on's LEGIONELLA_TEMP_THRESHOLD)
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,18 @@ def _cheapest_window(hours: dict[datetime, float], part_start: datetime, part_en
 
 
 LEGIONELLA_INTERVAL_DAYS = 7
+def record_legionella(last_run: datetime | None, tank_c: float | None, now: datetime, tz: tzinfo, min_c: float = 60.0) -> datetime | None:
+    """The last protection run after one tank reading: `now` the first time on a local day the tank reaches `min_c`
+    (WaterHeaterConfig.legionella_min_c),
+    otherwise unchanged. Any cause counts (the legionella run, a negative price, heating by hand), as in the add-on.
+
+    The stamp is the moment 60 °C was first reached that day, not refreshed while the tank stays hot: the add-on refreshed it every hour,
+    which is what made the elapsed-time rule skip 24 Oct 2026 (§5.1 of the live-transition plan)."""
+    if tank_c is None or tank_c < min_c:
+        return last_run
+    if last_run is not None and last_run.astimezone(tz).date() >= now.astimezone(tz).date():
+        return last_run
+    return now
 LEGIONELLA_SLACK_DAYS = 1                 # the alert waits one day past the due day before it calls the run overdue
 
 

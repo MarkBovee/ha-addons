@@ -57,6 +57,8 @@ DEFAULT_OPTIONS = {
     "water_heater_night_energy_kwh": 0.0,       # 0 = the day part carries the heating, no night run
     "water_heater_legionella_energy_kwh": 2.6,
     "water_heater_legionella_hours": 3,
+    "water_heater_legionella_temp_c": 62.0,    # temperature of the legionella run (for the executor; the add-on's setting)
+    "water_heater_legionella_min_c": 60.0,     # a tank at or above this counts as a run in HEMS's own record
     "water_heater_legionella_weekday": "saturday",
     "ev_enabled": False,                       # the EV module: plans the charge of the car (dry-run, nothing is written to the charger)
     "ev_capacity_kwh": 81.4,

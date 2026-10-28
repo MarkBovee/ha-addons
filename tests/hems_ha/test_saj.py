@@ -1,6 +1,6 @@
 """The SAJ write layer against a fake inverter: `text.set_value` and `number.set_value` services that update the entities, one
 that fails, one the inverter ignores. Phase 3: the coordinator never writes, even with the battery set to auto and armed."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -121,3 +121,24 @@ async def test_phase_3_never_writes_even_in_auto_and_armed(hass: HomeAssistant, 
     assert not coordinator.may_write(coordinator.data.output)
     state = hass.states.get("sensor.hems_battery_schedule")
     assert state is not None and state.state.endswith("slots") and state.attributes["writes"] > 0
+
+
+async def test_hems_keeps_its_own_legionella_record_from_the_tank_and_survives_a_restart(hass: HomeAssistant, freezer, aioclient_mock):
+    """The tank reaches 62 °C: HEMS stamps that moment, stores it, and its sensor shows it with the due day a week later; the add-on's
+    sensor is not needed (it goes)."""
+    from custom_components.hems.const import CONF_WATER_HEATER
+    from test_integration import ROLES
+    set_states(hass)
+    hass.states.async_set("water_heater.boiler", "eco", {"current_temperature": 55})
+    entry = await setup_entry(hass, freezer, aioclient_mock, roles={**ROLES, CONF_WATER_HEATER: "water_heater.boiler"})
+    coordinator = entry.runtime_data
+    coordinator.async_sample(datetime.now(timezone.utc))
+    assert coordinator.legionella_seen is None
+    hass.states.async_set("water_heater.boiler", "performance", {"current_temperature": 62})
+    now = datetime.now(timezone.utc)
+    coordinator.async_sample(now)
+    assert coordinator.legionella_seen == now and coordinator._stored()["legionella_seen"] == now.isoformat()
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    state = hass.states.get("sensor.hems_last_legionella")
+    assert state.attributes["source"] == "tank" and state.attributes["due"] == (now.astimezone(TZ).date() + timedelta(days=7)).isoformat()

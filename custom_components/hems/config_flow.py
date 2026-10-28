@@ -71,7 +71,8 @@ def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelec
 SECTIONS: dict[str, tuple[str, ...]] = {
     "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "reserve_load_factor", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
     "module_water_heater": ("water_heater_enabled", "water_heater_energy_kwh", "water_heater_hours", "water_heater_night_energy_kwh",
-                     "water_heater_legionella_energy_kwh", "water_heater_legionella_hours", "water_heater_legionella_weekday"),
+                     "water_heater_legionella_energy_kwh", "water_heater_legionella_hours", "water_heater_legionella_weekday",
+                     "water_heater_legionella_temp_c", "water_heater_legionella_min_c"),
     "module_ev": ("ev_enabled", "ev_capacity_kwh", "ev_charge_efficiency", "ev_target_required_pct", "ev_target_max_pct", "ev_max_price", "ev_solar_only",
                   "ev_min_current_a", "ev_max_current_a", "ev_min_on_minutes", "ev_min_off_minutes", "ev_deadline_monday", "ev_deadline_tuesday",
                   "ev_deadline_wednesday", "ev_deadline_thursday", "ev_deadline_friday", "ev_deadline_saturday", "ev_deadline_sunday"),
@@ -88,6 +89,7 @@ NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_
            "export_vat_multiplier": (1, 2, 0.01), "export_bonus_pct": (0, 1, 0.01), "export_fixed_bonus": (-0.5, 0.5, 0.0001),
            "export_energy_tax": (0, 1, 0.00001), "water_heater_energy_kwh": (0, 15, 0.1), "water_heater_hours": (1, 6, 1),
            "water_heater_night_energy_kwh": (0, 15, 0.1), "water_heater_legionella_energy_kwh": (0, 15, 0.1), "water_heater_legionella_hours": (1, 6, 1),
+           "water_heater_legionella_temp_c": (55, 75, 1), "water_heater_legionella_min_c": (50, 70, 1),
            "ev_capacity_kwh": (10, 200, 0.1), "ev_charge_efficiency": (0.5, 1, 0.01), "ev_target_required_pct": (0, 100, 1), "ev_target_max_pct": (0, 100, 1),
            "ev_max_price": (-1, 2, 0.01), "ev_min_current_a": (1, 32, 1), "ev_max_current_a": (6, 32, 1), "ev_min_on_minutes": (0, 120, 1),
            "ev_min_off_minutes": (0, 120, 1), "grid_limit_a": (6, 80, 1), "grid_margin_a": (0, 10, 0.5)}
