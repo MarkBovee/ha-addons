@@ -234,7 +234,8 @@ def plan_windows(segments: Sequence[Mapping], tz: tzinfo) -> list[dict]:
     """The charge and discharge periods (see outlook.periods) with readable names and local times, for a sensor attribute."""
     return [{"action": s["action"], "from": datetime.fromisoformat(s["from"]).astimezone(tz).isoformat(),
              "to": datetime.fromisoformat(s["to"]).astimezone(tz).isoformat(), "kwh": s["kwh"], "power_w": s["avg_w"],
-             "soc_from_pct": s["soc_from_pct"], "soc_to_pct": s["soc_to_pct"], "avg_price_eur_kwh": s["avg_price"]} for s in periods(segments)]
+             "soc_from_pct": s["soc_from_pct"], "soc_to_pct": s["soc_to_pct"], "avg_price_eur_kwh": s["avg_price"],
+             "active_min": s["active_min"]} for s in periods(segments)]
 
 
 def _compare_text(compare: Mapping, start: datetime, tz: tzinfo) -> str:

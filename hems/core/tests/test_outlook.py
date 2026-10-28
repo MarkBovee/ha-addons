@@ -89,6 +89,7 @@ def test_a_period_continues_over_idle_quarters_and_ends_where_the_opposite_actio
     assert charge["avg_w"] == round(5.0 * 1000 / (10 * 0.25))                 # 10 active quarters, the idle one does not count
     assert (discharge["begin"], discharge["end"]) == (START + 20 * QUARTER, START + 28 * QUARTER) and discharge["kwh"] == 4.0
     assert discharge["avg_price"] == 0.475 and (discharge["soc_from_pct"], discharge["soc_to_pct"]) == (60, 44), "the later charge is another period"
+    assert (charge["active_min"], discharge["active_min"]) == (150, 90), "the pauses inside a period are not counted as charging or selling"
 
 
 def test_the_period_that_is_going_on_starts_at_the_current_quarter():

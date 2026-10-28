@@ -583,6 +583,9 @@ function dayWord(d) {
   return k === today ? "today" : k === tomorrow ? "tomorrow" : fmt("wd", { weekday: "short" }).format(new Date(d));
 }
 
+/** Minutes as "2 h 15 min", "45 min" or "3 h". */
+function duration(min) { if (min === null || min === undefined) return ""; const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h} h${m ? " " + m + " min" : ""}` : `${m} min`; }
+
 /** A window as "tomorrow 11:30–15:15" (no day word for today). */
 function span(from, to) { const w = dayWord(from); return `${w === "today" ? "" : w + " "}${hhmm(from)}–${hhmm(to)}`; }
 
@@ -601,9 +604,12 @@ function headline(p) {
   const lead = act === "charge" ? `Charging the battery at ${kw(Math.abs(w))} kW.` : act === "discharge" ? `Selling from the battery at ${kw(Math.abs(w))} kW.` : "Holding the battery.";
   const ch = nextWindow(p, "charge"), dis = nextWindow(p, "discharge");
   const parts = [];
-  if (ch && act !== "charge") parts.push({ word: "Charging", text: span(ch.from, ch.to), cls: "c-charge" });
-  if (dis && act !== "discharge") parts.push({ word: parts.length ? "selling" : "Selling", text: span(dis.from, dis.to), cls: "c-discharge" });
-  const rest = parts.map((x) => `${x.word} <span class="${x.cls}">${esc(x.text)}</span>`).join(", ");
+  // the active time goes with the window: a sale between 16:30 and 19:30 with pauses is not three hours of selling
+  if (ch && act !== "charge") parts.push({ word: "Charging", text: span(ch.from, ch.to), time: ch.active_min, cls: "c-charge" });
+  if (dis && act !== "discharge") parts.push({ word: parts.length ? "selling" : "Selling", text: span(dis.from, dis.to), time: dis.active_min, cls: "c-discharge" });
+  const paused = (w) => w && w.active_min && w.active_min < (new Date(w.to) - new Date(w.from)) / 60000 - 1;
+  parts.forEach((x, i) => { x.paused = paused(i === 0 && ch && act !== "charge" ? ch : dis); });
+  const rest = parts.map((x) => `${x.word} ${x.paused ? duration(x.time) + " between " : ""}<span class="${x.cls}">${esc(x.text)}</span>`).join(", ");
   const c = d.compare || {};
   const why = c.code === "hold" ? `Selling now pays ${eur(c.sell, 3)} €/kWh; keeping it for later is worth ${eur(c.keep, 3)}.`
     : c.code === "sell" ? `Selling now pays ${eur(c.sell, 3)} €/kWh, more than keeping it (${eur(c.keep, 3)}).`
@@ -655,7 +661,7 @@ function agenda(p) {
   const now = Date.now();
   const items = [];
   for (const w of p.windows || []) {
-    items.push({ from: w.from, to: w.to, cls: `c-${w.action}`, what: w.action === "charge" ? `Battery · charge to ${num(w.soc_to_pct, 0)} %, ${num(w.kwh, 1)} kWh` : `Battery · sell, down to ${num(w.soc_to_pct, 0)} %`, price: w.avg_price_eur_kwh });
+    items.push({ from: w.from, to: w.to, cls: `c-${w.action}`, what: `Battery · ${w.action === "charge" ? "charge" : "sell"} ${w.active_min ? duration(w.active_min) + ", " : ""}${num(w.kwh, 1)} kWh, ${num(w.soc_from_pct, 0)} → ${num(w.soc_to_pct, 0)} %`, price: w.avg_price_eur_kwh });
   }
   for (const h of p.heating || []) items.push({ from: h.from, to: h.to, cls: "", what: `Water heater · ${HEAT_LABEL[h.kind] || h.kind} run, ${num(h.kwh, 1)} kWh`, price: h.avg_price });
   for (const b of evBlocks((p.quarters || []).filter((r) => r.ev_a))) items.push({ from: b.from, to: b.to, cls: "c-charge", what: `EV · ${num(b.a, 0)} A, ${TIER_LABEL[b.tier] || b.tier}`, price: b.price });
@@ -879,7 +885,7 @@ class HemsPanel extends HTMLElement {
     return `
       <section class="hero">
         <div class="say">
-          <span class="quiet">Now · ${hhmm(Date.now())} · would do</span>
+          <span class="quiet">Now · ${hhmm(Date.now())}</span>
           <h1>${esc(h.lead)} ${h.rest}</h1>
           <p class="why">${h.why}</p>
         </div>
@@ -906,7 +912,7 @@ class HemsPanel extends HTMLElement {
         <div>
           <h2>Today</h2>
           ${this._moneyRows(p, d)}
-          <a href="#insights" data-view="insights" class="small">How this is measured →</a>
+          <a href="#insights" data-view="insights" class="small">More in Insights →</a>
         </div>
       </section>`;
   }
@@ -915,16 +921,16 @@ class HemsPanel extends HTMLElement {
     const r = p && p.realised, t = r && r.today;
     const signed = (v) => v === null || v === undefined ? "—" : (v > 0 ? "+ " : v < 0 ? "− " : "") + "€ " + num(Math.abs(v), 2);
     return `<div class="rows">
-      <div><span>Expected gain (horizon)</span><span class="mono">${d ? "€ " + num(d.expected_saving, 2) : "—"}</span></div>
-      <div><span>Net cost so far</span><span class="mono">${t && t.quarters ? "€ " + num(t.cost, 2) : "—"}</span></div>
-      <div><span>vs self-consumption</span><span class="mono" style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t && t.quarters ? signed(t.gain) : "—"}</span></div>
+      <div><span>Expected gain</span><span class="mono">${d ? "€ " + num(d.expected_saving, 2) : "—"}</span></div>
+      <div><span>Cost</span><span class="mono">${t && t.quarters ? "€ " + num(t.cost, 2) : "—"}</span></div>
+      <div><span>Saved</span><span class="mono" style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t && t.quarters ? signed(t.gain) : "—"}</span></div>
     </div>`;
   }
 
   /* ---------------- Plan */
   _view_plan(p) {
     return `
-      ${p && p.decision ? `<section class="say"><span class="quiet">Plan in words</span><h1 class="mid">${esc(p.decision.plan_text || "—")}</h1></section>` : ""}
+      ${p && p.decision ? `<section class="say"><span class="quiet">Plan</span><h1 class="mid">${esc(p.decision.plan_text || "—")}</h1></section>` : ""}
       <section class="block">
         <div class="chart-head"><h2>Timeline</h2><span class="sp"></span>${this._hoursSeg()}</div>
         <svg id="tl" style="display:block;width:100%"></svg>
@@ -932,7 +938,7 @@ class HemsPanel extends HTMLElement {
       </section>
       <section class="two">
         <div><h2>Windows</h2><div class="scroll-x">${windowsTable(p)}</div></div>
-        <div><h2>Changed since the previous plan</h2>${diffHtml(p)}</div>
+        <div><h2>Changes</h2>${diffHtml(p)}</div>
       </section>`;
   }
 
@@ -956,7 +962,7 @@ class HemsPanel extends HTMLElement {
         <p>${esc(h.lead)} ${h.rest}</p>
         <div class="meter"><i style="width:${soc ?? 0}%"></i><em style="left:${b.reserve_kwh / b.capacity_kwh * 100}%"></em></div>
         <div class="mono quiet small spread"><span>${soc === null ? "—" : num(soc, 0) + " % · " + num(soc / 100 * b.capacity_kwh, 1) + " kWh"}</span><span>reserve ${num(b.reserve_kwh / b.capacity_kwh * 100, 0)} % · floor ${num(b.floor_kwh / b.capacity_kwh * 100, 0)} %</span></div>
-        <details><summary>Why, decision chain and sell windows</summary>
+        <details><summary>Details</summary>
           <div class="stack" style="margin-top:12px">${verdictHtml(p, 24)}${chainHtml(p)}<div class="scroll-x">${sellTable(p)}</div></div>
         </details>
       </div>
@@ -1019,26 +1025,26 @@ class HemsPanel extends HTMLElement {
     return `
       <section class="hero">
         <div class="say">
-          <span class="quiet">${r && r.since ? "Since " + esc(dayShort(r.since)) : "Since the first measured day"}, vs battery on self-consumption</span>
+          <span class="quiet">Saved since ${r && r.since ? esc(dayShort(r.since)) : "the first measured day"}</span>
           <h1 class="money" style="color:var(${r && r.gain_total >= 0 ? "--ok" : "--fault"})">${r && r.daily && r.daily.length ? signed(r.gain_total) : "—"}</h1>
-          <p class="why">Measured at the meter, priced per quarter.</p>
+          <p class="why">Compared with the battery on self-consumption only.</p>
         </div>
         <svg id="days" style="display:block;flex:1 1 420px;min-width:0"></svg>
       </section>
       <section class="three">
-        <div class="block"><h2>Forecasts, last 7 days</h2><div class="rows">${errRow(err.pv, "Solar off by")}${errRow(err.load, "House off by")}</div>
+        <div class="block"><h2>Forecasts</h2><div class="rows">${errRow(err.pv, "Solar off by")}${errRow(err.load, "House off by")}</div>
           ${err.pv || err.load ? "" : `<p class="quiet small">Needs a few days of measurements.</p>`}</div>
         <div class="block"><h2>Prices</h2><div class="rows">
           <div><span>Today average</span><span class="mono">${eur(st.avg, 3)}</span></div>
           <div><span>Cheapest 3 h</span><span class="mono c-charge">${cheap ? esc(span(cheap.from, cheap.to)) : "—"}</span></div>
           <div><span>Highest</span><span class="mono c-discharge">${eur(st.max, 3)}</span></div></div>
           <p class="quiet small">Net metering ends ${esc((store.settings && store.settings.options && store.settings.options.salderen_until) || "2027-01-01")}.</p></div>
-        <div class="block"><h2>vs old battery manager</h2><div class="rows">
-          <div><span>Agree, last 24 h</span><span class="mono">${withOther.length ? `${agree} of ${withOther.length}` : "—"}</span></div></div>
+        <div class="block"><h2>Old battery manager</h2><div class="rows">
+          <div><span>Agrees</span><span class="mono">${withOther.length ? `${agree} of ${withOther.length}` : "—"}</span></div></div>
           ${withOther.length ? "" : `<p class="quiet small">Fills per quarter once its action sensor is assigned.</p>`}</div>
       </section>
-      <details class="block"><summary>Prices per quarter</summary><div class="scroll-x" style="margin-top:12px"><svg id="heat" style="display:block;min-width:620px;width:100%"></svg></div></details>
-      <details class="block"><summary>Quarter by quarter, last 24 hours</summary><div style="margin-top:12px">${this._quarterTable(qs)}</div></details>`;
+      <details class="block"><summary>Prices</summary><div class="scroll-x" style="margin-top:12px"><svg id="heat" style="display:block;min-width:620px;width:100%"></svg></div></details>
+      <details class="block"><summary>Last 24 hours</summary><div style="margin-top:12px">${this._quarterTable(qs)}</div></details>`;
   }
 
   _quarterTable(qs) {
@@ -1068,10 +1074,10 @@ class HemsPanel extends HTMLElement {
         <p class="quiet small">No module writes to a device yet; arming changes nothing now, but it is logged. After a restart the master switch is always off. Per-device modes are on Devices.</p>
       </section>
       <section class="block stack">
-        <div class="spread"><h2>Settings in words</h2>${configureLink(s)}</div>
+        <div class="spread"><h2>Settings</h2>${configureLink(s)}</div>
         ${settingsInWords(s.options).map(([h, t]) => `<div><b>${h}</b><p class="quiet small" style="margin:2px 0 0">${t}</p></div>`).join("")}
       </section>
-      <details class="block"><summary>Entity per role</summary><div class="scroll-x" style="margin-top:12px"><table>
+      <details class="block"><summary>Entities</summary><div class="scroll-x" style="margin-top:12px"><table>
         ${Object.entries(s.roles).sort().map(([k, v]) => `<tr><td class="mono">${esc(k.replace(/_entity$|_entities$/, ""))}</td><td class="mono">${esc(Array.isArray(v) ? v.join(", ") : String(v))}</td><td class="mono small">${typeof v === "string" && v.includes(".") ? (this._hass.states[v] ? esc(this._hass.states[v].state) : `<span class="c-fault">missing</span>`) : ""}</td></tr>`).join("")}
       </table></div></details>
       <p class="quiet small mono">panel ${VERSION} · HEMS build ${esc((p && p.meta.build) || "?")}</p>`;
@@ -1271,8 +1277,8 @@ function settingsInWords(o) {
 function windowsTable(p) {
   const ws = (p && p.windows) || [];
   if (!ws.length) return `<div class="empty">No charge or discharge windows planned.</div>`;
-  return `<table><tr><th>Action</th><th>From</th><th>To</th><th>kWh</th><th>kW</th><th>Avg. price</th><th>SoC</th></tr>
-    ${ws.map((w) => `<tr><td class="c-${w.action}">${esc(ACTION_LABEL[w.action] || w.action)}</td><td class="mono">${dayShort(w.from)} ${hhmm(w.from)}</td><td class="mono">${hhmm(w.to)}</td>
+  return `<table><tr><th>Action</th><th>From</th><th>To</th><th>Active</th><th>kWh</th><th>kW</th><th>Avg. price</th><th>SoC</th></tr>
+    ${ws.map((w) => `<tr><td class="c-${w.action}">${esc(ACTION_LABEL[w.action] || w.action)}</td><td class="mono">${dayShort(w.from)} ${hhmm(w.from)}</td><td class="mono">${hhmm(w.to)}</td><td class="n">${esc(duration(w.active_min))}</td>
       <td class="n">${num(w.kwh, 1)}</td><td class="n">${kw(Math.abs(w.power_w))}</td><td class="n">${eur(w.avg_price_eur_kwh)}</td><td class="n">${num(w.soc_from_pct, 0)} → ${num(w.soc_to_pct, 0)} %</td></tr>`).join("")}</table>`;
 }
 

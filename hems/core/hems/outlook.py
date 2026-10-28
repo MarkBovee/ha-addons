@@ -95,6 +95,8 @@ def _merge(runs: Sequence[Mapping]) -> dict:
     priced = [(r["kwh"], r["avg_price"]) for r in runs if r.get("avg_price") is not None and r["kwh"]]
     return {"begin": datetime.fromisoformat(runs[0]["from"]), "end": datetime.fromisoformat(runs[-1]["to"]), "from": runs[0]["from"], "to": runs[-1]["to"],
             "action": runs[0]["action"], "kwh": round(kwh, 2), "avg_w": round(kwh * 1000 / active_h) if active_h else 0,
+            # the time energy actually moves: a period may hold pauses where the price dips, so from-to overstates it
+            "active_min": round(active_h * 60),
             "soc_from_pct": runs[0]["soc_from_pct"], "soc_to_pct": runs[-1]["soc_to_pct"],
             "avg_price": round(sum(k * p for k, p in priced) / sum(k for k, _ in priced), 4) if priced else None}
 

@@ -193,7 +193,9 @@ def test_the_summary_of_a_real_plan_names_every_window_the_tree_names():
     windows = plan_windows(record["segments"], LOCAL_TZ)
     assert len(text.split(" · ")) == len(windows) >= 2 and "Charge" in text and "Discharge" in text
     first = windows[0]
-    assert first["from"].endswith("+02:00") and set(first) == {"action", "from", "to", "kwh", "power_w", "soc_from_pct", "soc_to_pct", "avg_price_eur_kwh"}
+    assert first["from"].endswith("+02:00") and set(first) == {"action", "from", "to", "kwh", "power_w", "soc_from_pct", "soc_to_pct", "avg_price_eur_kwh", "active_min"}
+    span_min = (datetime.fromisoformat(first["to"]) - datetime.fromisoformat(first["from"])).total_seconds() / 60
+    assert 0 < first["active_min"] <= span_min
     assert all(w["action"] in ("charge", "discharge") for w in windows)
 
 
