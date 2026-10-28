@@ -1094,6 +1094,12 @@ class HemsPanel extends HTMLElement {
         <p class="quiet small">No module writes to a device yet; arming changes nothing now, but it is logged. After a restart the master switch is always off. Per-device modes are on Devices.</p>
       </section>
       <section class="block stack">
+        <h2>Energy dashboard</h2>
+        <p class="quiet small">Adds HEMS's solar and battery counters and its import and export price to Home Assistant's Energy dashboard where they are missing. Nothing you set is removed or replaced.</p>
+        <div class="row"><button type="button" class="btn" data-act="energy-preview">Check</button>${this._energy && this._energy.changes.length && this._energy.preview ? `<button type="button" class="btn pri" data-act="energy-apply">Add ${this._energy.changes.length}</button>` : ""}</div>
+        ${this._energy ? `<p class="quiet small">${this._energy.changes.length ? (this._energy.saved ? "Added: " : "Would add: ") + this._energy.changes.map(esc).join(" · ") : "Nothing missing: the Energy dashboard already has solar, battery and prices."}</p>` : ""}
+      </section>
+      <section class="block stack">
         <div class="spread"><h2>Settings</h2>${configureLink(s)}</div>
         ${settingsInWords(s.options).map(([h, t]) => `<div><b>${h}</b><p class="quiet small" style="margin:2px 0 0">${t}</p></div>`).join("")}
       </section>
@@ -1124,6 +1130,13 @@ class HemsPanel extends HTMLElement {
     const on = (sel, fn) => { const b = root.querySelector(sel); if (b) b.addEventListener("click", fn); };
     on('[data-act="details"]', () => { this._details = !this._details; this._render(); });
     root.querySelectorAll('[data-act="disarm"]').forEach((b) => b.addEventListener("click", () => this._hass.callService("hems", "disarm_all", {})));
+    // Energy dashboard setup: first a preview, then the owner adds what it lists
+    const energy = async (preview) => {
+      const res = await this._hass.callService("hems", "setup_energy_dashboard", { preview }, undefined, true, true);
+      this._energy = res && res.response; this._render();
+    };
+    on('[data-act="energy-preview"]', () => energy(true));
+    on('[data-act="energy-apply"]', () => energy(false));
     root.querySelectorAll("[data-apply]").forEach((b) => b.addEventListener("click", () => { this._applyId = b.dataset.apply; this._render(); }));
     root.querySelectorAll("[data-apply-no]").forEach((b) => b.addEventListener("click", () => { this._applyId = null; this._render(); }));
     root.querySelectorAll("[data-apply-yes]").forEach((b) => b.addEventListener("click", () => {

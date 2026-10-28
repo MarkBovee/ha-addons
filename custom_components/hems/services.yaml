@@ -11,3 +11,9 @@ dismiss_recommendation:
       selector:
         text:
 disarm_all:
+setup_energy_dashboard:
+  fields:
+    preview:
+      default: false
+      selector:
+        boolean:

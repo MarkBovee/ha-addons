@@ -4,7 +4,7 @@
   "codeowners": ["@MarkBovee"],
   "config_flow": true,
   "dependencies": ["http", "recorder", "websocket_api"],
-  "after_dependencies": ["frontend", "panel_custom"],
+  "after_dependencies": ["energy", "frontend", "panel_custom"],
   "documentation": "https://github.com/MarkBovee/ha-addons/tree/master/hems",
   "integration_type": "service",
   "iot_class": "calculated",

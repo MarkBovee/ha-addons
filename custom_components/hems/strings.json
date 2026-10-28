@@ -294,6 +294,15 @@
       },
       "last_legionella": {
         "name": "Last legionella run"
+      },
+      "solar_energy": {
+        "name": "Solar energy"
+      },
+      "battery_charged_energy": {
+        "name": "Battery energy charged"
+      },
+      "battery_discharged_energy": {
+        "name": "Battery energy discharged"
       }
     },
     "binary_sensor": {
@@ -382,6 +391,16 @@
     "disarm_all": {
       "name": "Everything to dry-run",
       "description": "Switch the master off and put every module back in dry-run."
+    },
+    "setup_energy_dashboard": {
+      "name": "Set up the Energy dashboard",
+      "description": "Adds HEMS's solar and battery counters and its import and export price to the Energy dashboard where they are missing. Never removes or replaces what is set.",
+      "fields": {
+        "preview": {
+          "name": "Preview",
+          "description": "Only report what would change."
+        }
+      }
     }
   },
   "exceptions": {

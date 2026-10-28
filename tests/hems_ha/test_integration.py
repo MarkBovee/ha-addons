@@ -750,7 +750,7 @@ def test_the_integration_is_english_only():
     names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
                     for key, ent in group.items()} for file in ("strings", "translations/en")}
     assert names["translations/en"] == names["strings"]
-    assert len(names["strings"]) == 44 and names["strings"][("sensor", "charge_window")] == "Charge window"
+    assert len(names["strings"]) == 47 and names["strings"][("sensor", "charge_window")] == "Charge window"
 
 
 EV_ROLES = {**ROLES, CONF_EV_PLUGGED: "binary_sensor.car_plugged", CONF_EV_CHARGING: "binary_sensor.car_charging", CONF_EV_SOC: "sensor.car_soc",

@@ -4,6 +4,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 
 from .const import DOMAIN
+from .energy_setup import async_setup_energy
 
 
 def _coordinator(hass: HomeAssistant):
@@ -31,4 +32,11 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     hass.services.async_register(DOMAIN, "apply_recommendation", apply, vol.Schema({vol.Required("id"): str}), supports_response=SupportsResponse.OPTIONAL)
     hass.services.async_register(DOMAIN, "dismiss_recommendation", dismiss, vol.Schema({vol.Required("id"): str}))
+    async def setup_energy_dashboard(call: ServiceCall):
+        """Add HEMS's solar, battery and prices to the Energy dashboard where missing; with preview, only say what would change."""
+        coordinator = _coordinator(hass)
+        return await async_setup_energy(hass, coordinator.config_entry.entry_id, call.data.get("preview", False))
+
     hass.services.async_register(DOMAIN, "disarm_all", disarm_all, vol.Schema({}))
+    hass.services.async_register(DOMAIN, "setup_energy_dashboard", setup_energy_dashboard, vol.Schema({vol.Optional("preview", default=False): bool}),
+                                 supports_response=SupportsResponse.OPTIONAL)

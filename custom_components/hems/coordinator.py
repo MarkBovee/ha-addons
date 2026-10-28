@@ -42,7 +42,7 @@ from .engine.trace import TraceWriter
 from .engine.windows import UNSOLD
 from .dashboard import build_payload
 from .advice import EVENT_APPLIED, MODE_AUTO, MODES, MODULES, Control
-from .realised import Ledger, PlannedQuarter, QuarterPrice, quarter_start
+from .realised import EnergyCounters, Ledger, PlannedQuarter, QuarterPrice, quarter_start
 from .saj import SajAdvice, advise, async_apply, read_inputs
 from .engine.saj_protocol import entity_names, plan_writes
 from .const import SAJ_PREFIX, WRITE_UNLOCKED
@@ -177,6 +177,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.force_charge = False                  # the owner's override on the EV module; a restart clears it on purpose
         self.saj_names = entity_names(SAJ_PREFIX)
+        self.energy = EnergyCounters()                 # kWh totals for HA's Energy dashboard (solar, battery in and out)
         self.legionella_seen: datetime | None = None   # HEMS's own record: the day the tank last reached 60 °C (survives the add-on)
         self._cycles = 0                           # cycles since start: the first one never writes (no old schedule is repeated)
 
@@ -514,12 +515,13 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         data = await self._store.async_load() or {}
         self.ledger.restore(data.get("ledger"))
         self.control.restore(data.get("control"))
+        self.energy.restore(data.get("energy"))
         seen = data.get("legionella_seen")
         self.legionella_seen = dt_util.parse_datetime(seen) if isinstance(seen, str) else None
 
     def _stored(self) -> dict[str, Any]:
         return {"ledger": self.ledger.state() if self.ledger else None, "control": self.control.state(),
-                "legionella_seen": self.legionella_seen.isoformat() if self.legionella_seen else None}
+                "legionella_seen": self.legionella_seen.isoformat() if self.legionella_seen else None, "energy": self.energy.state()}
 
     def _save(self) -> None:
         self._store.async_delay_save(self._stored, 30)
@@ -544,7 +546,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         pv = sum(r.value for r in pv_values if r is not None) if pv_values else None
         soc = self._power(CONF_SOC)
         soc_kwh = None if soc is None else soc / 100 * self.ledger.capacity_kwh
-        closed = self.ledger.sample(now, self._power(CONF_GRID), pv, self._power(CONF_BATTERY_POWER, battery_sign), soc_kwh,
+        battery_w = self._power(CONF_BATTERY_POWER, battery_sign)
+        self.energy.sample(now.astimezone(timezone.utc), pv, battery_w)
+        closed = self.ledger.sample(now, self._power(CONF_GRID), pv, battery_w, soc_kwh,
                                     ev_w=self._power(CONF_EV) or 0.0, prices=self._quarter_info, tz=dt_util.get_default_time_zone())
         if closed:
             cutoff = quarter_start(now) - timedelta(hours=2)
