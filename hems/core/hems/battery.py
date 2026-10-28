@@ -87,6 +87,12 @@ class Plan:
         return self.baseline_cost - self.total_cost
 
 
+def _between(d: int, own: int) -> bool:
+    """True for a step between self-consumption and 0: holding while the house imports (own < d <= 0) or storing less PV than the
+    surplus (0 <= d < own). The inverter cannot do either outside a slot, so the plan may not; a charge or a sale goes past 0 or past own."""
+    return own < d <= 0 if own < 0 else 0 <= d < own if own > 0 else False
+
+
 def _ac(d: int, step: float, eff: float) -> float:
     """AC-side energy of a SoC change of `d` steps: charging loses energy before the cells, discharging after."""
     return d * step / eff if d > 0 else d * step * eff
@@ -238,6 +244,8 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
                 if k2 > hi:
                     continue
                 if d < own and k2 < min(lo, k):              # discharging past self-consumption is a sale: never below the sell floor
+                    continue
+                if _between(d, own):                         # a hold or curtailed PV: no SAJ setting does that, self-consumption always runs
                     continue
                 dsoc = d * step
                 ac = _ac(d, step, eff)                       # AC-side energy

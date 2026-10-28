@@ -739,7 +739,7 @@ async def test_the_sell_window_follows_a_sale_of_stock_and_the_saving_sensor_is_
     set_states(hass, soc="95")
     await setup_entry(hass, freezer, aioclient_mock)
     sell = hass.states.get("sensor.hems_sell_window")
-    assert sell.state not in ("unknown", "unavailable") and sell.attributes["outside_kwh"] == 0
+    assert sell.state not in ("unknown", "unavailable") and sell.attributes["outside_kwh"] < 2      # without holds the sale starts a quarter before the detected window
     assert "revenue" in hass.states.get("sensor.hems_expected_saving").attributes["friendly_name"].lower()
 
 
@@ -750,7 +750,7 @@ def test_the_integration_is_english_only():
     names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
                     for key, ent in group.items()} for file in ("strings", "translations/en")}
     assert names["translations/en"] == names["strings"]
-    assert len(names["strings"]) == 42 and names["strings"][("sensor", "charge_window")] == "Charge window"
+    assert len(names["strings"]) == 43 and names["strings"][("sensor", "charge_window")] == "Charge window"
 
 
 EV_ROLES = {**ROLES, CONF_EV_PLUGGED: "binary_sensor.car_plugged", CONF_EV_CHARGING: "binary_sensor.car_charging", CONF_EV_SOC: "sensor.car_soc",

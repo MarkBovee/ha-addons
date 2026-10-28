@@ -972,6 +972,7 @@ class HemsPanel extends HTMLElement {
         <details><summary>Details</summary>
           <div class="stack" style="margin-top:12px">${verdictHtml(p, 24)}${chainHtml(p)}<div class="scroll-x">${sellTable(p)}</div></div>
         </details>
+        ${wouldWriteHtml(p && p.saj)}
       </div>
       <div class="ctl"><span class="quiet small">Mode</span>${modeSegHtml(p, "battery")}</div>
     </section>`;
@@ -1278,6 +1279,19 @@ function otherAction(v) {
   if (x.startsWith("discharging")) return w > 0 ? "discharge" : "idle";
   if (x.startsWith("adaptive") && w >= OTHER_SELL_W) return "discharge";
   return "idle";
+}
+
+/* The SAJ slots HEMS would write (advisory): nothing is sent to the inverter until auto is opened in phase 4. */
+function wouldWriteHtml(saj) {
+  if (!saj) return "";
+  const row = (s, kind) => `<tr><td class="c-${kind}">${kind === "charge" ? "Charge" : "Sell"}</td><td class="mono">${esc(s.start)}–${esc(s.end)}</td><td class="n">${s.power_pct} %</td><td class="n">${num(s.kwh, 1)} kWh</td></tr>`;
+  const rows = [...saj.charge.map((s) => row(s, "charge")), ...saj.discharge.map((s) => row(s, "discharge"))].join("");
+  const state = saj.missing.length ? `<span class="c-fault">${saj.missing.length} SAJ entities missing</span>`
+    : saj.writes ? `${saj.writes} changes from what the inverter has now` : "the inverter already has this";
+  return `<details><summary>Would write</summary><div class="stack" style="margin-top:12px">
+    <p class="quiet small">SAJ time slots for the next 24 hours, rebuilt every quarter. Nothing is written yet. Mode would be ${saj.mode === 1 ? "Time-of-use" : "Self-consumption"}; ${state}.${saj.merge_cost_eur ? ` Merging short pauses costs € ${num(saj.merge_cost_eur, 2)}.` : ""}</p>
+    ${rows ? `<div class="scroll-x"><table><tr><th>Slot</th><th>Time</th><th>Power</th><th>Energy</th></tr>${rows}</table></div>` : `<p class="quiet small">No slots: self-consumption all day.</p>`}
+  </div></details>`;
 }
 
 function configureLink(s) {

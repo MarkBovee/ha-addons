@@ -32,6 +32,27 @@ class HemsSensorDescription(SensorEntityDescription):
     attributes: Callable[[HemsSnapshot], dict[str, Any]] | None = None
 
 
+def _schedule_value(snap: HemsSnapshot) -> str | None:
+    """The SAJ slots HEMS would write, in a few words ('2 charge · 1 sell slots'); None without a plan."""
+    advice = snap.saj
+    if advice is None:
+        return None
+    c, d = len(advice.schedule.charge), len(advice.schedule.discharge)
+    return f"{c} charge · {d} sell slots" if c or d else "no slots"
+
+
+def _schedule_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """The slots, what differs from the inverter now, the cost of merged gaps, and missing entities (advisory: nothing is written)."""
+    advice = snap.saj
+    if advice is None:
+        return {}
+    slot = lambda s: {"start": s.start, "end": s.end, "power_pct": s.power_pct, "kwh": s.kwh}
+    return {"charge": [slot(s) for s in advice.schedule.charge], "discharge": [slot(s) for s in advice.schedule.discharge],
+            "merge_cost_eur": advice.schedule.merge_cost_eur, "merges": len(advice.schedule.merges), "dropped": list(advice.schedule.dropped),
+            "differs_from_inverter": list(advice.pending)[:14], "writes": advice.writes, "missing_entities": list(advice.missing)[:10],
+            "mode_would_be": "time_of_use" if advice.target.mode else "self_consumption"}
+
+
 def _heating_start(snap: HemsSnapshot):
     """Start of the next planned water heater run (a run that is going on counts); None when the module is off or no day has a complete price curve."""
     runs = snap.output.heating_runs
@@ -277,6 +298,7 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
     HemsSensorDescription(key="plan", translation_key="plan", value=lambda s: s.plan_text or None, attributes=_plan_preview),
     HemsSensorDescription(key="plan_diff", translation_key="plan_diff", state_class=SensorStateClass.MEASUREMENT, native_unit_of_measurement="quarters",
                           value=_plan_diff_value, attributes=_plan_diff_attrs),
+    HemsSensorDescription(key="battery_schedule", translation_key="battery_schedule", value=_schedule_value, attributes=_schedule_attrs),
     HemsSensorDescription(key="last_cycle", translation_key="last_cycle", device_class=SensorDeviceClass.TIMESTAMP, entity_category=EntityCategory.DIAGNOSTIC,
                           value=lambda s: s.cycle_at),
 )

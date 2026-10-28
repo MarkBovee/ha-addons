@@ -17,6 +17,7 @@ from typing import Any
 MODULES = ("battery", "ev", "water_heater")
 MODE_DRY_RUN = "dry_run"
 MODE_ADVISORY = "advisory"
+MODE_AUTO = "auto"                 # writes to the device; not in MODES, so it cannot be chosen until phase 4 opens it
 MODES = (MODE_DRY_RUN, MODE_ADVISORY)
 QUARTER = timedelta(minutes=15)
 EVENT_APPLIED = "hems_recommendation_applied"

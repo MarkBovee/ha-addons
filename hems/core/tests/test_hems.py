@@ -312,3 +312,20 @@ def test_the_sell_floor_follows_the_expected_use_until_the_battery_can_refill():
     assert winter[0] > winter[2] > winter[8] == winter[-1] == 0.30, "the floor falls as the refill comes closer, down to the minimum"
     assert usage_floor([Slot(0.40, 0.40, 2.0, 0.0)] * 40 + [Slot(0.1, 0.1, 0, 0)], cfg)[0] == 0.60, "capped at the maximum"
     assert usage_floor(evening, BatteryConfig())[0] == 0.30, "maximum equal to the minimum: a fixed floor"
+
+
+
+def test_no_quarter_runs_against_its_label_on_random_horizons():
+    """Review 28 Oct 2026: a hold (house imports while the battery could cover it) or curtailed PV was labelled charge or discharge with the
+    battery flowing the other way, and the slot builder would write it as a backwards slot. Neither is possible on the inverter, so the
+    planner may not choose it: a charge always charges, a sale always discharges, idle is self-consumption."""
+    import random
+    rng = random.Random(7)
+    cfg = BatteryConfig(reserve_max_soc=0.60)
+    for _ in range(40):
+        slots = [Slot(rng.uniform(0.2, 0.6), rng.uniform(0.15, 0.6), rng.uniform(0.05, 0.8), rng.uniform(0, 1.2) if 30 < t < 70 else 0.0)
+                 for t in range(96)]
+        result = plan(slots, rng.uniform(0.1, 0.9) * cfg.capacity_kwh, cfg)
+        for s in result.slots:
+            assert not (s.action == "charge" and s.battery_kwh <= 0) and not (s.action == "discharge" and s.battery_kwh >= 0), s
+            assert s.action != "idle" or abs(s.battery_kwh - s.own_kwh) < 1e-9

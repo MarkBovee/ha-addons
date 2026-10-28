@@ -33,6 +33,11 @@ CONF_LEGIONELLA_LAST = "legionella_last_entity"
 CONF_COMPARE_ACTION = "compare_action_entity"
 LEGIONELLA_OVERDUE = timedelta(days=8)        # the run is weekly; a day of slack before the alert
 
+# Phase 3 (docs/hems/phase3-saj-writer-plan.md): the SAJ write layer is built and tested, but nothing is written to the inverter.
+# Phase 4 opens this lock, after Mark's yes; until then auto cannot be chosen and no write round or grid-follow step runs.
+WRITE_UNLOCKED = False
+SAJ_PREFIX = "saj"                    # entity prefix of the saj_h2_modbus integration (battery-api's default names)
+
 # Settings (options flow) and their defaults. Price components mirror the energy-prices add-on.
 DEFAULT_OPTIONS = {
     "capacity_kwh": 25.0,

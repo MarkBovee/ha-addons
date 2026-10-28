@@ -152,6 +152,16 @@ Gate: Marks ja per stap. Rollback: BM weer starten en HEMS op dry-run; het schem
 
 **Fase 6, afbouwen.** battery-manager en energy-prices verwijderen (na een rustige periode), repository-docs bijwerken (AGENTS.md, install.md, README van de add-ons), HEMS-versie vastzetten en een releaseproces voor de integratie.
 
+### Voortgang fase 3 (28 okt 2026)
+
+Plan en beslissingen: `phase3-saj-writer-plan.md`. Branch `feature/hems-saj-writer`.
+- Planner: de reserve is een verkoopgrens; daaronder en buiten vensters zelfverbruik tot `hard_min` (geen vasthouden). Replay 17–25 okt +€ 9,77 tegen +€ 8,21.
+- Verkoopgrens uit het verwachte verbruik (`hems.reserve`, 30–60 %, factor 1,3). Kost in de replay met orakel € 0,45 over 9 dagen.
+- Slotbouwer (`saj_slots`), protocol van battery-api (`saj_protocol`), HA-schrijver met terugmelding en de eigen regelaar op de P1-meter (`saj.py`), getest met een nepdienst. Advisory: `sensor.hems_battery_schedule` en "Would write" in het paneel.
+- Watchdog: `hems/watchdog/hems_saj_watchdog.yaml`, nog niet geïnstalleerd; werkt alleen als de batterijmodus `auto` is.
+- **Schrijven staat op slot** (`WRITE_UNLOCKED = False`, `auto` niet kiesbaar).
+- Nog open vóór fase 4: `Apply failed` van battery-api verklaren, en bevestigen dat battery-api niet zelf schrijft als BM gestopt is (hoofdstuk 8).
+
 ### Voortgang fase 1 (27 okt 2026)
 
 Gedaan, met Marks akkoord:

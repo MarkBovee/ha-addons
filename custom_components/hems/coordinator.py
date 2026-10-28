@@ -40,8 +40,11 @@ from .engine.rolling import Decision
 from .engine.trace import TraceWriter
 from .engine.windows import UNSOLD
 from .dashboard import build_payload
-from .advice import EVENT_APPLIED, MODES, MODULES, Control
+from .advice import EVENT_APPLIED, MODE_AUTO, MODES, MODULES, Control
 from .realised import Ledger, PlannedQuarter, QuarterPrice, quarter_start
+from .saj import SajAdvice, advise, async_apply, read_inputs
+from .engine.saj_protocol import entity_names, plan_writes
+from .const import SAJ_PREFIX, WRITE_UNLOCKED
 from .engine.weather import OPEN_METEO_URL, Weather, open_meteo_params, parse_open_meteo
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,6 +68,7 @@ class HemsSnapshot:
     ev_allowed_a: float | None = None      # what the live per-phase meter leaves for the car (None = no per-phase data)
     cycle_at: datetime | None = None       # when this cycle ran (UTC)
     previous_decision: Decision | None = None   # the plan of the cycle before, for the dashboard's plan diff
+    saj: SajAdvice | None = None           # the SAJ slots HEMS would write now and how they differ from the inverter (advisory)
 
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -167,6 +171,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._quarter_info: dict[datetime, QuarterPrice] = {}
         self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.force_charge = False                  # the owner's override on the EV module; a restart clears it on purpose
+        self.saj_names = entity_names(SAJ_PREFIX)
+        self._cycles = 0                           # cycles since start: the first one never writes (no old schedule is repeated)
 
     def _on(self, role: str) -> bool | None:
         """A binary role as a flag: True, False, or None when the role is not set or its entity has no usable state."""
@@ -466,8 +472,30 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         known = set(self._market.starts if self._market else ()) | {t for t, _ in inputs.import_curve}
         prices_until = max(known) + timedelta(minutes=15) if known else None
         text, windows, table = self._plan_for_users(output)
+        self._cycles += 1
+        saj = await self._saj_round(output)
         return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table,
-                            self._weather, car, allowed, cycle_at=now, previous_decision=previous)
+                            self._weather, car, allowed, cycle_at=now, previous_decision=previous, saj=saj)
+
+    def may_write(self, output: EngineOutput) -> bool:
+        """True only when every condition for a write round holds: the phase lock open, the battery in auto, the master switch on,
+        a healthy cycle with a plan, and not the first cycle after a start."""
+        return (WRITE_UNLOCKED and self.control.modes.get("battery") == MODE_AUTO and self.control.armed and output.status == "ok"
+                and output.decision is not None and self._cycles > 1)
+
+    async def _saj_round(self, output: EngineOutput) -> SajAdvice | None:
+        """Work out the SAJ slots for this plan (always, for advisory), and write them when may_write allows. Never breaks the cycle."""
+        try:
+            advice = advise(self.hass, output, self.saj_names, dt_util.get_default_time_zone())
+        except Exception as err:  # noqa: BLE001 - the advisory view must not stop planning
+            _LOGGER.warning("HEMS could not work out the SAJ slots: %s", err)
+            return None
+        if advice is None or not self.may_write(output) or advice.missing or not advice.writes:
+            return advice
+        plan = plan_writes(read_inputs(self.hass, self.saj_names), advice.target, self.saj_names)
+        result = await async_apply(self.hass, plan, self.saj_names)
+        await self._log_event("write", module="battery", writes=result.written, ok=result.ok, error=result.error, mismatches=list(result.mismatches)[:5])
+        return advice
 
     # ------------------------------------------------------------------ realised result, control, alerts (dashboard side)
 
@@ -619,6 +647,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             self._payload["control"] = {"modes": dict(self.control.modes), "armed": self.control.armed, "writers": [],
                                         "recommendations": self.recommendations()}
             self._payload["alerts"] = self.alerts()
+            self._payload["saj"] = _saj_payload(snap.saj)
             if ledger:
                 self._payload["realised"] = {"today": ledger.result_today(), "gain_total": ledger.gain_total(), "since": ledger.total.get("since"),
                                              "daily": ledger.daily(), "quarters": ledger.quarters[-96:],
@@ -651,3 +680,12 @@ def _planned_quarters(output: EngineOutput) -> list[PlannedQuarter]:
         imp, exp = price_at[at]
         rows.append(PlannedQuarter(at, imp, exp, output.pv_kwh.get(at) or 0.0, output.load_kwh.get(at) or 0.0, slot.grid_kwh, slot.soc_kwh))
     return rows
+
+
+def _saj_payload(advice: SajAdvice | None) -> dict[str, Any] | None:
+    """The advisory SAJ schedule for the panel: slots, changes against the inverter, missing entities, the mode it would set."""
+    if advice is None:
+        return None
+    slot = lambda s: {"start": s.start, "end": s.end, "power_pct": s.power_pct, "kwh": s.kwh}
+    return {"charge": [slot(s) for s in advice.schedule.charge], "discharge": [slot(s) for s in advice.schedule.discharge],
+            "writes": advice.writes, "missing": list(advice.missing), "mode": advice.target.mode, "merge_cost_eur": advice.schedule.merge_cost_eur}

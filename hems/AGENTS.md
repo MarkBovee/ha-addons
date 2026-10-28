@@ -23,7 +23,7 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 ## Rules that are easy to break
 
 - Edit `hems/core`, then run `python3 scripts/sync_hems_core.py`. A core test fails when the engine copy is stale.
-- The integration only plans (dry-run). It must not call a device service. The one switch HEMS owns (`switch.hems_ev_force_charge`) changes the plan, not a device. Writing to a device is a separate, explicitly approved change.
+- The integration only plans (dry-run). It must not call a device service. The SAJ write layer (`saj.py`, engine `saj_slots`/`saj_protocol`) exists since phase 3 but is locked: `const.WRITE_UNLOCKED = False` and `auto` is not in `advice.MODES`. Opening either is phase 4 and needs Mark's explicit yes. The one switch HEMS owns (`switch.hems_ev_force_charge`) changes the plan, not a device. Writing to a device is a separate, explicitly approved change.
 - Every function gets a short intent docstring, tests included. Verify with an AST scan before finishing.
 - Prices: the percentage Zonnebonus applies only in daylight and for a positive price (both switchable); the energy-prices add-on code applies it always, do not copy that.
 - The minimum profit margin (`min_profit_margin`, default 0.10 EUR/kWh) is a planner threshold, never a cost. Replay and sensors report cash.
@@ -46,8 +46,8 @@ Instructions for AI agents working on HEMS v2. The repository-wide rules in `../
 cd hems/core && python3 -m pytest                 # core, replay, price/Nord Pool/forecast logic
 python3 -m pytest hems/tests                      # deploy script
 python3 scripts/sync_hems_core.py --check         # engine copy current?
-# integration tests: a venv with the plugin that pins the server's Home Assistant version (2026.10.2)
-python3 -m venv .venv-ha && .venv-ha/bin/pip install "pytest-homeassistant-custom-component==0.13.373"
+# integration tests: a venv with the plugin that pins the server's Home Assistant version (2026.10.4)
+python3 -m venv .venv-ha && .venv-ha/bin/pip install "pytest-homeassistant-custom-component==0.13.375"
 .venv-ha/bin/python -m pytest tests/hems_ha       # the recorder_mock fixture must be requested before hass
 python3 scripts/hems_replay.py                    # replay on the local recorded days (needs the gitignored data)
 ```

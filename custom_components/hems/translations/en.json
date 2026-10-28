@@ -286,6 +286,9 @@
       },
       "recommendations": {
         "name": "Recommendations"
+      },
+      "battery_schedule": {
+        "name": "Battery schedule"
       }
     },
     "binary_sensor": {
