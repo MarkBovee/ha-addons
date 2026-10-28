@@ -1,8 +1,10 @@
 # HEMS SAJ watchdog: an automation outside HEMS that takes the inverter back to plain self-consumption when HEMS stops working
 # while it controls the battery. SAJ time slots repeat every day and never expire, so a schedule HEMS wrote must not outlive HEMS.
 #
-# Fires when, for 30 minutes, HEMS reports a status other than ok (unavailable included) or its last cycle is older than 30 minutes.
-# Acts only while the HEMS battery mode is auto: before that (dry run, advisory, phase 3) the slots belong to battery-manager.
+# Fires when, for 30 minutes, HEMS reports a status other than ok (unavailable included: a crashed or unloaded HEMS) or its last cycle
+# is older than 30 minutes. There is no condition on a HEMS entity on purpose: when HEMS is down all its entities are unavailable.
+# Install only at the handover (phase 4), once battery-manager is stopped: before that the slots are battery-manager's and this
+# automation would clear them whenever HEMS has a bad half hour. Battery-manager is retired after the handover (Mark, 28 Oct 2026).
 # Install via Settings > Automations > Create > Edit in YAML, after Mark's yes (docs/hems/phase3-saj-writer-plan.md).
 alias: HEMS SAJ watchdog
 description: >-
@@ -19,10 +21,7 @@ triggers:
       {{ last is none or (now() - last).total_seconds() > 1800 }}
     for: "00:01:00"
     id: stale
-conditions:
-  - condition: state
-    entity_id: select.hems_battery_mode
-    state: auto
+conditions: []
 actions:
   # the enable masks first: with no slot enabled the inverter ignores every slot, whatever its times
   - action: number.set_value

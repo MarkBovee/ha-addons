@@ -158,9 +158,11 @@ Plan en beslissingen: `phase3-saj-writer-plan.md`. Branch `feature/hems-saj-writ
 - Planner: de reserve is een verkoopgrens; daaronder en buiten vensters zelfverbruik tot `hard_min` (geen vasthouden). Replay 17–25 okt +€ 9,77 tegen +€ 8,21.
 - Verkoopgrens uit het verwachte verbruik (`hems.reserve`, 30–60 %, factor 1,3). Kost in de replay met orakel € 0,45 over 9 dagen.
 - Slotbouwer (`saj_slots`), protocol van battery-api (`saj_protocol`), HA-schrijver met terugmelding en de eigen regelaar op de P1-meter (`saj.py`), getest met een nepdienst. Advisory: `sensor.hems_battery_schedule` en "Would write" in het paneel.
-- Watchdog: `hems/watchdog/hems_saj_watchdog.yaml`, nog niet geïnstalleerd; werkt alleen als de batterijmodus `auto` is.
+- Watchdog: `hems/watchdog/hems_saj_watchdog.yaml`, nog niet geïnstalleerd; installeren bij de overdracht, zodra BM gestopt is.
 - **Schrijven staat op slot** (`WRITE_UNLOCKED = False`, `auto` niet kiesbaar).
-- Nog open vóór fase 4: `Apply failed` van battery-api verklaren, en bevestigen dat battery-api niet zelf schrijft als BM gestopt is (hoofdstuk 8).
+- Onafhankelijke review en audit gedaan (28 okt): P1 "label tegen de stroomrichting in" opgelost (geen vasthouden of afgeknepen PV meer in de planner, vangnet in de slotbouwer); P1 "watchdog ziet HEMS-uitval niet" opgelost door de voorwaarde weg te halen.
+- `Apply failed` van battery-api hoeft niet uitgezocht (Mark, 28 okt): HEMS heeft een eigen schrijver met terugmelding en retry. Bij de overdracht gaan battery-manager én battery-api uit (of battery-api in `simulation_mode`), zodat er één schrijver is.
+- Open voor fase 4 (P2 uit de audit): sloten wissen bij het verlaten van auto of uitschakelen van de hoofdschakelaar; de schrijftak van `_saj_round` in try/except.
 
 ### Voortgang fase 1 (27 okt 2026)
 
