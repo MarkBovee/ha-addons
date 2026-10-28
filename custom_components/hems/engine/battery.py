@@ -19,7 +19,9 @@ class BatteryConfig:
     capacity_kwh: float = 25.0
     max_power_kw: float = 8.0
     hard_min_soc: float = 0.05       # absolute battery minimum (fraction); never discharged below
-    reserve_soc: float = 0.30        # conservative reserve floor; a setting, later dynamic via Slot.reserve_soc
+    reserve_soc: float = 0.30        # sell floor: export stops here; below it the battery only covers the house, down to hard_min_soc
+    reserve_max_soc: float = 0.30    # upper bound of the usage-based sell floor (hems.reserve); equal to reserve_soc = a fixed floor
+    reserve_load_factor: float = 1.3  # safety factor on the load forecast when sizing the usage-based floor (about its P90)
     max_soc: float = 1.00
     round_trip_eff: float = 0.82     # measured 3-12 Oct 2026 (docs/hems/intake-decisions.md); a setting
     min_profit_margin: float = 0.10  # EUR per kWh discharged: a cycle must earn at least this, net of round-trip losses
@@ -32,6 +34,8 @@ class BatteryConfig:
         """Fail fast on an inconsistent floor: the reserve cannot sit below the hard minimum."""
         if not 0.0 <= self.hard_min_soc <= self.reserve_soc <= self.max_soc <= 1.0:
             raise ValueError("need 0 <= hard_min_soc <= reserve_soc <= max_soc <= 1")
+        if not self.reserve_soc <= self.reserve_max_soc <= self.max_soc:
+            raise ValueError("need reserve_soc <= reserve_max_soc <= max_soc")
 
 
 @dataclass
@@ -59,6 +63,17 @@ class PlanSlot:
     buy_cost: float | None = None    # EUR per stored kWh when charging in this slot, net of loss
     at_floor: bool = False           # SoC at the end of the slot sits on the floor
     at_full: bool = False            # SoC at the end of the slot sits at the maximum
+    own_kwh: float = 0.0             # AC flow of plain self-consumption in this slot; a charge or sale is what the plan adds to it
+
+    @property
+    def sold_kwh(self) -> float:
+        """AC energy discharged beyond self-consumption: the sale (0 outside a sale)."""
+        return max(0.0, self.own_kwh - self.battery_kwh)
+
+    @property
+    def bought_kwh(self) -> float:
+        """AC energy charged beyond self-consumption: the grid charge (0 outside a charge window)."""
+        return max(0.0, self.battery_kwh - self.own_kwh)
 
 
 @dataclass
@@ -71,6 +86,11 @@ class Plan:
     def saving(self) -> float:
         """Cost avoided versus the same horizon without a battery (EUR)."""
         return self.baseline_cost - self.total_cost
+
+
+def _ac(d: int, step: float, eff: float) -> float:
+    """AC-side energy of a SoC change of `d` steps: charging loses energy before the cells, discharging after."""
+    return d * step / eff if d > 0 else d * step * eff
 
 
 def _grid_cost(net_kwh: float, s: Slot) -> float:
@@ -152,8 +172,29 @@ def floor_fraction(slot: Slot | None, cfg: BatteryConfig) -> float:
 
 
 def _floor_levels(slots: list[Slot], cfg: BatteryConfig) -> list[int]:
-    """SoC floor per slot in grid steps."""
+    """Sell floor per slot in grid steps."""
     return [round(floor_fraction(s, cfg) * cfg.capacity_kwh / cfg.step_kwh) for s in slots]
+
+
+@dataclass(frozen=True)
+class _Steps:
+    """Grid-step limits of one planning run: hard minimum, maximum, and the most charge or discharge steps per slot."""
+    lo: int
+    hi: int
+    max_charge: int
+    max_discharge: int
+
+
+def self_consumption_step(net_kwh: float, k: int, eff: float, step: float, limits: _Steps) -> int:
+    """SoC steps of plain self-consumption in one slot: cover the house (net > 0) down to the hard minimum, or store the PV
+    surplus (net < 0) up to the maximum, within the inverter limit.
+
+    This is what the battery does outside a charge or sell window (the own grid-follow keeps the meter at 0 W). The step is
+    rounded to the nearest grid step: rounding down would leave a house load under one step per quarter (1 kW at 0.25 kWh)
+    uncovered all evening; the rest of a step shows as a small import or export in the plan, the grid-follow takes it out live."""
+    if net_kwh > 0:
+        return -min(round(net_kwh / eff / step), k - min(limits.lo, k), limits.max_discharge)
+    return min(round(-net_kwh * eff / step), limits.hi - k, limits.max_charge)
 
 
 def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
@@ -161,17 +202,21 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
     """Optimal battery schedule. terminal_value: EUR/kWh credit for energy left at
     the end of the horizon (default: cheapest import price in horizon * eff, i.e.
     what it would cost to refill). The floor may differ per slot (Slot.reserve_soc);
-    a SoC already below the floor can only hold or charge, never discharge."""
+    The floor is a sell floor: below it the battery still covers the house (self-consumption) down to hard_min_soc, it only
+    stops exporting. Every slot is self-consumption unless the plan charges more (a charge window) or discharges more (a sale);
+    there is no 'hold' while the house imports, the battery always keeps the meter at 0 W outside a window."""
     n = len(slots)
     eff = cfg.round_trip_eff ** 0.5
     step = cfg.step_kwh
     floors = _floor_levels(slots, cfg)
     hi = round(cfg.max_soc * cfg.capacity_kwh / step)
+    hard_lo = round(cfg.hard_min_soc * cfg.capacity_kwh / step)
     start = min(max(round(soc_kwh / step), 0), hi)
     # The inverter limit is on the AC side: charging loses energy before it reaches the cells, discharging after.
     hold = cfg.hold_cost_kwh_h * SLOT_H * step    # per grid step of SoC held through one slot
     max_charge = int(cfg.max_power_kw * SLOT_H * eff / step)
     max_discharge = int(cfg.max_power_kw * SLOT_H / eff / step)
+    limits = _Steps(hard_lo, hi, max_charge, max_discharge)
     if terminal_value is None:
         terminal_value = min(s.import_price for s in slots) * eff if slots else 0.0
 
@@ -187,19 +232,24 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
         lo = floors[t]
         for k in range(hi + 1):
             best, best_d = INF, 0
+            own = self_consumption_step(net, k, eff, step, limits)
+            own_ac = _ac(own, step, eff)
             for d in range(-max_discharge, max_charge + 1):      # d>0 charge steps (SoC side)
                 k2 = k + d
-                if k2 < min(lo, k) or k2 > hi:               # never discharge below the floor
+                if k2 > hi:
+                    continue
+                if d < own and k2 < min(lo, k):              # discharging past self-consumption is a sale: never below the sell floor
                     continue
                 dsoc = d * step
-                ac = dsoc / eff if d > 0 else dsoc * eff     # AC-side energy
+                ac = _ac(d, step, eff)                       # AC-side energy
                 if d > 0 and not cfg.allow_grid_charge and net + ac > 0 and net >= 0:
                     # only allow charging from surplus PV
                     if ac > max(0.0, -net) + 1e-9:
                         continue
                 if d > 0 and s.import_cap_kwh is not None and net + ac > s.import_cap_kwh + 1e-9:
                     continue                                  # a physical limit of the connection (3x25 A), not a price: holding or discharging stays possible
-                c = _grid_cost(net + ac, s) + (cfg.min_profit_margin * -ac if ac < 0 else 0.0) + hold * k2
+                # the margin is on what a sale adds beyond self-consumption: covering the house needs no margin
+                c = _grid_cost(net + ac, s) + (cfg.min_profit_margin * (own_ac - ac) if d < own else 0.0) + hold * k2
                 c += value[t + 1][k2]
                 if c < best:
                     best, best_d = c, d
@@ -211,16 +261,17 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
     for t in range(n):
         s = slots[t]
         net = s.load_kwh - s.pv_kwh
-        d = choice[t][k] if value[t][k] < INF else 0
-        dsoc = d * step
-        ac = dsoc / eff if d > 0 else dsoc * eff
+        own = self_consumption_step(net, k, eff, step, limits)
+        d = choice[t][k] if value[t][k] < INF else own
+        ac = _ac(d, step, eff)
         grid = net + ac
         k += d
-        action = "charge" if d > 0 else "discharge" if d < 0 else "idle"
+        action = "charge" if d > own else "discharge" if d < own else "idle"
         keep = _stored_value(value[t + 1], k, hi, step)
         at_floor, at_full = k <= floors[t], k >= hi
         why = _reason(action, s, grid, keep, eff, cfg, at_floor=at_floor, at_full=at_full)
-        out.slots.append(PlanSlot(t, action, ac, k * step, grid, _grid_cost(grid, s), why.text, keep, why.code, why.sell, why.buy, at_floor, at_full))
+        out.slots.append(PlanSlot(t, action, ac, k * step, grid, _grid_cost(grid, s), why.text, keep, why.code, why.sell, why.buy, at_floor, at_full,
+                                  _ac(own, step, eff)))
         out.total_cost += _grid_cost(grid, s)    # cash only: the margin shapes decisions, it is not money
         out.baseline_cost += _grid_cost(net, s)
     return out

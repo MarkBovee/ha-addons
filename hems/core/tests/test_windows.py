@@ -1,3 +1,4 @@
+from dataclasses import replace
 import csv
 import json
 from datetime import datetime, timedelta, timezone
@@ -200,12 +201,14 @@ def earlier_prices(starts: list[datetime]) -> list[float]:
 
 def test_the_evening_sale_of_stock_bought_at_noon_is_still_a_window_when_noon_is_behind_the_horizon():
     """15 Oct 16:45 (logged): 98% in the battery, charged at 14:00 for 0.23. Without the earlier prices that charge is out of sight, and the sale
-    (about 10 kWh in its own window) is a window only on the stock basis; with them the window is found on the fresh charge and the sale is 'planned'."""
+    is a window only on the stock basis; with them the window is found on the fresh charge and the sale is 'planned'. Since the floor is a sell floor
+    (below it the battery covers the house) the plan sells about 4.75 kWh and keeps the rest for the house tonight: covering the house saves the
+    import price without the sale margin."""
     starts, slots, soc, result = logged_cycle("15_1645")
     blind = analyse(starts, slots, result, soc, CFG)
     seen = analyse(starts, slots, result, soc, CFG, earlier_prices(starts))
     assert blind.outside_kwh == 0, "without the earlier prices the sale still has a window: the stock basis"
-    assert sum(r.sold_kwh for r in blind.reports if r.window.viable == "stock") > 9.5
+    assert sum(r.sold_kwh for r in blind.reports if r.window.viable == "stock") > 4.5
     assert seen.outside_kwh == 0
     evening = next(r for r in seen.reports if hhmm(r.window.start) == "17:45" or hhmm(r.window.peak_at) == "18:30")
     assert evening.status == PLANNED and evening.window.fresh.threshold < 0.42 and hhmm(evening.window.fresh.at) in ("14:00", "14:15", "14:30", "13:45")
@@ -250,22 +253,26 @@ def cycle_with_past(name: str, margin: float):
 
 
 def test_the_sale_of_17_oct_06_30_from_a_battery_the_night_charged_is_a_stock_window():
-    """17 Oct 06:30 (logged, margin 0.12): 50.6 % in the battery after a night charge, the plan sells 4.75 kWh at 0.431 in the evening. The price
-    bases need 0.452 (fresh) and 0.499 (replace), so the monitor saw 4.75 kWh outside every window. On the stock basis the sale beats the plan's own
-    keep value and is a window of its own; nothing is outside."""
+    """17 Oct 06:30 (logged, margin 0.12): 50.6 % in the battery after a night charge. The price bases need 0.452 (fresh) and 0.499 (replace), so the
+    monitor saw the evening sale outside every window. On the stock basis the sale beats the plan's own keep value and is a window of its own; nothing
+    is outside. With self-consumption the battery covers the morning from that stock and stores the day's PV (6.11 kWh), so the evening sells
+    10.87 kWh: 2.26 from the night's stock and the rest from PV."""
     starts, slots, soc, past, result, cfg = cycle_with_past("17_0630", 0.12)
     analysis = analyse(starts, slots, result, soc, cfg, past)
     assert analysis.outside_kwh == 0
     window, = analysis.reports
     assert window.window.viable == "stock" and window.window.fresh is None and window.window.replace is None
-    assert window.status == PLANNED and window.sold_kwh == pytest.approx(4.75, abs=0.05) and window.from_stock_kwh == pytest.approx(4.75, abs=0.05)
+    assert window.status == PLANNED and window.sold_kwh == pytest.approx(10.87, abs=0.05) and window.from_stock_kwh == pytest.approx(2.26, abs=0.05)
+    assert sum(c.kwh for c in window.charges) == pytest.approx(10.87 - 2.26, abs=0.1)
     assert window.window.stock.headroom >= 0 and window.window.stock.threshold < window.window.peak_price
 
 
 def test_without_stock_there_is_no_stock_window():
-    """A battery on the floor has nothing to sell, so the stock basis offers no window even where the plan's keep value is low."""
+    """A battery on the floor with no PV to store has nothing to sell, so the stock basis offers no window even where the plan's keep value is low.
+    (With PV, self-consumption stores the surplus and that is stock again.)"""
     starts, slots, soc, past, result, cfg = cycle_with_past("17_0630", 0.12)
-    empty = analyse(starts, slots, plan(slots, 0.3 * CFG.capacity_kwh, cfg), 0.3 * CFG.capacity_kwh, cfg, past)
+    dark = [replace(s, pv_kwh=0.0) for s in slots]
+    empty = analyse(starts, dark, plan(dark, 0.3 * CFG.capacity_kwh, cfg), 0.3 * CFG.capacity_kwh, cfg, past)
     assert all(r.window.viable != "stock" for r in empty.reports)
 
 
@@ -275,4 +282,4 @@ def test_a_stock_window_record_carries_its_basis_and_leaves_the_charge_fields_em
     rec = record(analyse(starts, slots, result, soc, cfg, past).reports[0])
     json.dumps(rec)
     assert rec["viable"] == "stock" and rec["need_fresh"] is None and rec["need_replace"] is None
-    assert rec["room_stock"] >= 0 and rec["need_stock"] > rec["keep_value"] and rec["from_stock_kwh"] > 4
+    assert rec["room_stock"] >= 0 and rec["need_stock"] > rec["keep_value"] and rec["from_stock_kwh"] > 2

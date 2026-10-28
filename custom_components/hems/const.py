@@ -38,7 +38,9 @@ DEFAULT_OPTIONS = {
     "capacity_kwh": 25.0,
     "max_power_kw": 8.0,
     "hard_min_soc_pct": 5.0,
-    "reserve_soc_pct": 30.0,
+    "reserve_soc_pct": 30.0,                   # sell floor minimum: a sale stops here, below it the battery only covers the house
+    "reserve_max_soc_pct": 60.0,               # sell floor maximum: the floor follows the expected use until a refill (hems.reserve); = minimum turns that off
+    "reserve_load_factor": 1.3,                # safety factor on the load forecast for that floor
     "round_trip_eff": 0.82,
     "min_profit_margin": 0.10,
     "hold_cost_kwh_h": 0.002,                  # EUR per kWh per hour of waiting; 0 = off (charge as early as equal prices allow)

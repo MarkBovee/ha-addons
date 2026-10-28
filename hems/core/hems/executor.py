@@ -79,6 +79,13 @@ def _apply(check: _Check, guard: _Guard) -> Execution:
     return Execution(power, planned_w, guard.limited, f"{check.label}: SoC {soc_pct:.1f}%, {abs(planned_w)} W slowed to {abs(power)} W", soc_pct)
 
 
+def _discharge_floor(decision: Decision, cfg: BatteryConfig) -> float:
+    """The floor a discharge may run to: the sell floor for a sale, the hard minimum when the battery only covers the house."""
+    slot = decision.slots[0] if decision.slots else None
+    planned = decision.plan.slots[0] if decision.plan.slots else None
+    return floor_fraction(slot, cfg) if planned is None or planned.action == "discharge" else cfg.hard_min_soc
+
+
 def execute(decision: Decision | None, now: datetime, soc: Reading | None, cfg: BatteryConfig,
             max_soc_age: timedelta = timedelta(minutes=15)) -> Execution:
     """Check the planner's command for this quarter against the live SoC and return what may be sent.
@@ -104,7 +111,7 @@ def execute(decision: Decision | None, now: datetime, soc: Reading | None, cfg: 
     remaining_h = max((command.end - reference).total_seconds() / 3600, MIN_REMAINING_H)
     eff = cfg.round_trip_eff ** 0.5
     if planned_w < 0:
-        floor_pct = floor_fraction(decision.slots[0] if decision.slots else None, cfg) * 100
+        floor_pct = _discharge_floor(decision, cfg) * 100
         above_kwh = max(0.0, (soc.value - floor_pct) / 100 * cfg.capacity_kwh)
         return _apply(_Check(planned_w, above_kwh * eff / remaining_h * 1000, soc.value, f"floor {floor_pct:.0f}%"), FLOOR_GUARD)
     room_kwh = max(0.0, (cfg.max_soc * 100 - soc.value) / 100 * cfg.capacity_kwh)

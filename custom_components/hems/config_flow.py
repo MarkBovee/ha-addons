@@ -69,7 +69,7 @@ def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelec
 # (prices, forecasts). Each part is a collapsible section in this order on screen; a module with an on/off switch has it as its first setting.
 # The battery is open, the rest is folded away.
 SECTIONS: dict[str, tuple[str, ...]] = {
-    "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
+    "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "reserve_load_factor", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
     "module_water_heater": ("water_heater_enabled", "water_heater_energy_kwh", "water_heater_hours", "water_heater_night_energy_kwh",
                      "water_heater_legionella_energy_kwh", "water_heater_legionella_hours", "water_heater_legionella_weekday"),
     "module_ev": ("ev_enabled", "ev_capacity_kwh", "ev_charge_efficiency", "ev_target_required_pct", "ev_target_max_pct", "ev_max_price", "ev_solar_only",
@@ -82,7 +82,7 @@ SECTIONS: dict[str, tuple[str, ...]] = {
     "logging": ("trace_full_plan",),
 }
 OPEN_SECTIONS = ("module_battery",)
-NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1),
+NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1), "reserve_max_soc_pct": (0, 100, 1), "reserve_load_factor": (1, 3, 0.05),
            "round_trip_eff": (0.5, 1.0, 0.01), "min_profit_margin": (0, 1, 0.01), "hold_cost_kwh_h": (0, 0.05, 0.0005), "pv_gain_w_per_wm2": (0, 30, 0.1),
            "pv_max_ac_w": (0, 30000, 100), "import_vat_multiplier": (1, 2, 0.01), "import_markup": (-0.5, 0.5, 0.0001), "import_energy_tax": (0, 1, 0.00001),
            "export_vat_multiplier": (1, 2, 0.01), "export_bonus_pct": (0, 1, 0.01), "export_fixed_bonus": (-0.5, 0.5, 0.0001),

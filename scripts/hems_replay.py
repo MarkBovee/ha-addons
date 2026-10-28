@@ -149,6 +149,7 @@ def main() -> int:
     variants = [
         ("reserve 30 %, bonus switches on (default)", base_cfg, PriceModel()),
         ("reserve 5 % (as the system ran)", replace(base_cfg, reserve_soc=0.05), PriceModel()),
+        ("sell floor 30-60 % from the expected use", replace(base_cfg, reserve_max_soc=0.60), PriceModel()),
         ("reserve 30 %, bonus always (as energy-prices code)", base_cfg, PriceModel(bonus_only_daylight=False, bonus_only_positive_price=False)),
         ("reserve 30 %, round trip 0.90", replace(base_cfg, round_trip_eff=0.90), PriceModel()),
         ("reserve 30 %, minimum profit margin 0.05", replace(base_cfg, min_profit_margin=0.05), PriceModel()),

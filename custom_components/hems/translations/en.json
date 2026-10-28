@@ -64,7 +64,9 @@
               "capacity_kwh": "Usable battery capacity (kWh)",
               "max_power_kw": "Maximum charge/discharge power (kW)",
               "hard_min_soc_pct": "Hard minimum SoC (%)",
-              "reserve_soc_pct": "Reserve SoC (%)",
+              "reserve_soc_pct": "Sell floor, minimum (%)",
+              "reserve_max_soc_pct": "Sell floor, maximum (%)",
+              "reserve_load_factor": "Sell floor: load forecast factor",
               "round_trip_eff": "Round-trip efficiency (0-1)",
               "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
               "hold_cost_kwh_h": "Waiting cost (EUR per stored kWh per hour; 0 = off, higher charges later before a sale)"

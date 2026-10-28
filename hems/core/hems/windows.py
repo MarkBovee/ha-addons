@@ -269,19 +269,23 @@ def analyse(starts: Sequence[datetime], slots: Sequence[Slot], result: Plan, soc
     serves: dict[datetime, set[datetime]] = {}
     outside = 0.0
     for t, planned in enumerate(result.slots):
-        if planned.action == "charge":
+        if planned.battery_kwh > 0:          # a charge, or PV surplus stored by self-consumption
             price = slots[t].import_price if planned.grid_kwh > 0 else slots[t].export_price     # PV surplus costs the export price it forgoes
             lots.append(["charge", planned.battery_kwh * eff, starts[t], price])
-        elif planned.action == "discharge":
-            ac = -planned.battery_kwh
-            k = where[t]
+        elif planned.battery_kwh < 0:
+            k = where[t] if planned.action == "discharge" else None
+            sale = planned.sold_kwh
+            covered = -planned.battery_kwh - sale            # the house's share: drawn from the lots, never a sale
+            _consume(lots, covered / eff)
+            if planned.action != "discharge" or sale <= 0:
+                continue
             if k is None:
-                outside += ac
+                outside += sale
             else:
-                sold[k] += ac
+                sold[k] += sale
                 sold_q[k] += 1
                 span[k].append(starts[t])
-            for lot, stored in _consume(lots, ac / eff):
+            for lot, stored in _consume(lots, sale / eff):
                 if k is None:
                     continue
                 if lot[0] == "charge":

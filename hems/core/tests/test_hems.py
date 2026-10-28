@@ -283,3 +283,32 @@ def test_phase_balancer_serves_the_single_phase_boiler_first_and_keeps_a_running
     assert allocate_phases(tight, [ev], previous={"ev": 6.0})["ev"] == 6.0           # running: kept alive by the hysteresis
     fixed = PhaseLoad("oven", 10.0, priority=0, controllable=False)
     assert allocate_phases((5.0, 5.0, 5.0), [fixed, ev])["ev"] == pytest.approx(9.0)
+
+
+def test_below_the_sell_floor_the_battery_still_covers_the_house_down_to_the_hard_minimum():
+    """The reserve is a sell floor (Mark, 28 Oct 2026): an evening sale stops there, after it the battery keeps the meter at 0 W
+    by covering the house, down to hard_min_soc. It never exports below the reserve and never holds while the house imports."""
+    cfg = BatteryConfig(min_profit_margin=0.0)
+    evening = [Slot(0.30, 0.60, 0.25, 0.0)] * 4 + [Slot(0.30, 0.30, 0.5, 0.0)] * 24     # a short peak, then a long cheap night
+    result = plan(evening, 0.40 * cfg.capacity_kwh, cfg)
+    after_sale = result.slots[4:]
+    assert all(s.grid_kwh >= -1e-9 for s in after_sale), "no export below the sell floor"
+    assert all(s.action == "idle" and s.battery_kwh < 0 for s in after_sale[:10]), "self-consumption covers the house"
+    assert result.slots[-1].soc_kwh < 0.30 * cfg.capacity_kwh
+    assert min(s.soc_kwh for s in result.slots) >= cfg.hard_min_soc * cfg.capacity_kwh - 1e-9
+    assert all(s.sold_kwh == 0 for s in after_sale) and result.slots[0].sold_kwh > 0
+
+
+def test_the_sell_floor_follows_the_expected_use_until_the_battery_can_refill():
+    """Mark, 28 Oct 2026: the reserve rises in winter. The floor of a quarter is the house's expected draw until the next refill moment
+    (PV above the load, or a cheap import quarter), with the load factor, plus the hard minimum; it stays between the minimum and maximum."""
+    from hems.reserve import usage_floor
+    cfg = BatteryConfig(reserve_max_soc=0.60, reserve_load_factor=1.0, round_trip_eff=1.0)
+    evening = [Slot(0.40, 0.40, 0.5, 0.0)] * 16                    # 16 quarters of 2 kW house use, then a cheap quarter to charge in
+    summer = usage_floor(evening[:4] + [Slot(0.10, 0.10, 0.5, 0.0)], cfg)
+    winter = usage_floor(evening + [Slot(0.10, 0.10, 0.5, 0.0)], cfg)
+    assert summer[0] == 0.30, "2 kWh until the refill is under the minimum"
+    assert winter[0] == round(0.05 + 16 * 0.5 / 25, 3), "8 kWh until the refill: 37 %"
+    assert winter[0] > winter[2] > winter[8] == winter[-1] == 0.30, "the floor falls as the refill comes closer, down to the minimum"
+    assert usage_floor([Slot(0.40, 0.40, 2.0, 0.0)] * 40 + [Slot(0.1, 0.1, 0, 0)], cfg)[0] == 0.60, "capped at the maximum"
+    assert usage_floor(evening, BatteryConfig())[0] == 0.30, "maximum equal to the minimum: a fixed floor"

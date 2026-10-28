@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Mapping
 
-from .battery import BatteryConfig, Plan, Slot, plan
+from .battery import BatteryConfig, Plan, Slot, floor_fraction, plan
+from .reserve import with_usage_floor
 from .contracts import BatteryCommand
 from .decision_log import best_later, plan_segments
 from .prices import PriceSeries
@@ -72,6 +73,7 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
     slots, missing = _build_slots(inputs, start)
     if not slots:
         return None
+    slots = with_usage_floor(slots, cfg)
     default = min(s.import_price for s in slots) * cfg.round_trip_eff ** 0.5
     terminal = inputs.terminal_value
     if terminal is None and inputs.history_peak is not None:
@@ -83,6 +85,7 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
         "slot_start": start.isoformat(), "soc_kwh": round(inputs.soc_kwh, 2),
         "soc_pct": round(inputs.soc_kwh / cfg.capacity_kwh * 100, 1), "horizon_slots": len(slots),
         "missing_forecast_slots": missing, "import_price": round(slots[0].import_price, 4),
+        "sell_floor_pct": round(floor_fraction(slots[0], cfg) * 100, 1),
         "export_price": round(slots[0].export_price, 4), "power_w": command.power_w,
         **explain(result, [s.import_price for s in slots], [s.export_price for s in slots]),
         "compare": {"code": first.reason_code, "sell": _r(first.sell_value), "buy": _r(first.buy_cost), "keep": _r(first.stored_value),

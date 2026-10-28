@@ -115,7 +115,8 @@ def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -
     """Engine settings from the options (defaults fill gaps) and the Home Assistant location."""
     o = {**DEFAULT_OPTIONS, **entry.options}
     battery = BatteryConfig(capacity_kwh=o["capacity_kwh"], max_power_kw=o["max_power_kw"], hard_min_soc=o["hard_min_soc_pct"] / 100,
-                            reserve_soc=o["reserve_soc_pct"] / 100, round_trip_eff=o["round_trip_eff"], min_profit_margin=o["min_profit_margin"],
+                            reserve_soc=o["reserve_soc_pct"] / 100, reserve_max_soc=max(o["reserve_soc_pct"], o["reserve_max_soc_pct"]) / 100,
+                            reserve_load_factor=o["reserve_load_factor"], round_trip_eff=o["round_trip_eff"], min_profit_margin=o["min_profit_margin"],
                             hold_cost_kwh_h=o["hold_cost_kwh_h"])
     prices = PriceModel(import_vat_multiplier=o["import_vat_multiplier"], import_markup=o["import_markup"],
                         import_energy_tax=o["import_energy_tax"], export_vat_multiplier=o["export_vat_multiplier"],
