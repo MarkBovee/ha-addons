@@ -15,6 +15,8 @@ from typing import Any
 QUARTER = timedelta(minutes=15)
 MAX_GAP_S = 120.0            # a longer gap between samples is not integrated (HA restart, sensor outage): the quarter shows less coverage
 KEEP_DAYS = 8                # quarter records kept for error statistics and the history view
+KEEP_DAY_TOTALS = 400        # closed days kept for the week, month and year views (a few hundred bytes each)
+DAY_SUMS = ("cost", "baseline_cost", "import_kwh", "export_kwh", "pv_kwh", "load_kwh", "ev_kwh", "import_price_sum")
 MIN_COVERAGE = 0.6           # a quarter with less measured time is kept but left out of the money totals and error statistics
 DEFAULT_BANDS = {"pv": (0.55, 1.35), "load": (0.7, 1.4)}      # P10/P90 ratio actual/forecast until there are enough own records
 MIN_BAND_SAMPLES = 96
@@ -50,6 +52,18 @@ class QuarterPrice:
 
 
 @dataclass
+class PlannedQuarter:
+    """One coming quarter of the plan, as the rest-of-day forecast needs it."""
+    start: datetime
+    import_eur_kwh: float
+    export_eur_kwh: float
+    pv_kwh: float
+    load_kwh: float
+    grid_kwh: float              # the plan's grid exchange: + import / - export
+    soc_kwh: float               # the plan's SoC at the end of the quarter
+
+
+@dataclass
 class Ledger:
     """See the module docstring."""
     capacity_kwh: float
@@ -58,9 +72,9 @@ class Ledger:
     round_trip_eff: float
     baseline_soc_kwh: float | None = None
     day: str | None = None                                  # local date of the 'today' totals
-    today: dict[str, float] = field(default_factory=lambda: {"cost": 0.0, "baseline_cost": 0.0, "quarters": 0})
-    total: dict[str, Any] = field(default_factory=lambda: {"cost": 0.0, "baseline_cost": 0.0, "since": None})
-    days: list[dict[str, Any]] = field(default_factory=list)       # closed days: date, cost, baseline_cost
+    today: dict[str, Any] = field(default_factory=lambda: _empty_day())
+    total: dict[str, Any] = field(default_factory=lambda: {"cost": 0.0, "baseline_cost": 0.0, "stock_value": 0.0, "since": None})
+    days: list[dict[str, Any]] = field(default_factory=list)       # closed days, see _day_row
     quarters: list[dict[str, Any]] = field(default_factory=list)
     _acc: _Acc | None = None
     _last: tuple[datetime, float, float, float] | None = None
@@ -69,7 +83,7 @@ class Ledger:
 
     def state(self) -> dict[str, Any]:
         """Everything worth keeping over a restart (the open quarter is not: it is incomplete anyway)."""
-        return {"baseline_soc_kwh": self.baseline_soc_kwh, "day": self.day, "today": self.today, "total": self.total, "days": self.days[-60:],
+        return {"baseline_soc_kwh": self.baseline_soc_kwh, "day": self.day, "today": self.today, "total": self.total, "days": self.days[-KEEP_DAY_TOTALS:],
                 "quarters": self.quarters}
 
     def restore(self, data: dict[str, Any] | None) -> None:
@@ -80,7 +94,7 @@ class Ledger:
         self.day = data.get("day")
         self.today = {**self.today, **(data.get("today") or {})}
         self.total = {**self.total, **(data.get("total") or {})}
-        self.days = list(data.get("days") or [])
+        self.days = [_upgrade_day(d) for d in data.get("days") or [] if isinstance(d, dict) and d.get("date")]
         self.quarters = list(data.get("quarters") or [])
 
     # ------------------------------------------------------------------ sampling
@@ -160,26 +174,42 @@ class Ledger:
                         "baseline_cost": round(base_cost, 5), "fc_pv_kwh": price.pv_kwh, "fc_load_kwh": price.load_kwh, "planned": price.action,
                         "other": price.other_action})
             if coverage >= MIN_COVERAGE:
-                self.today["cost"] += cost
-                self.today["baseline_cost"] += base_cost
-                self.today["quarters"] += 1
-                self.total["cost"] += cost
-                self.total["baseline_cost"] += base_cost
-                self.total["since"] = self.total["since"] or acc.start.isoformat()
+                self._add_to_today(rec, cost, base_cost, price.import_eur_kwh)
+        if soc_kwh is not None:
+            gap = soc_kwh - base_soc                                    # energy the real battery holds above the baseline's
+            if self.today.get("stock_gap_start") is None:
+                self.today["stock_gap_start"] = gap
+            self.today["stock_gap_end"] = gap
         self.quarters.append(rec)
         cutoff = (acc.start - timedelta(days=KEEP_DAYS)).isoformat()
         self.quarters = [q for q in self.quarters if q["t"] >= cutoff]
         return rec
+
+    def _add_to_today(self, rec: dict[str, Any], cost: float, base_cost: float, import_price: float) -> None:
+        """Count one fully enough measured quarter in today's and the running totals."""
+        for key in ("import_kwh", "export_kwh", "pv_kwh", "load_kwh", "ev_kwh"):
+            self.today[key] = self.today.get(key, 0.0) + rec[key]
+        self.today["cost"] += cost
+        self.today["baseline_cost"] += base_cost
+        self.today["import_price_sum"] = self.today.get("import_price_sum", 0.0) + import_price
+        self.today["priced_quarters"] = self.today.get("priced_quarters", 0) + 1     # its own count: a day restored from before this field has fewer
+        self.today["quarters"] += 1
+        self.total["cost"] += cost
+        self.total["baseline_cost"] += base_cost
+        self.total["since"] = self.total["since"] or rec["t"]
 
     def _roll_day(self, local_day: str) -> None:
         """Start new 'today' totals on a new local day and keep the closed day."""
         if self.day == local_day:
             return
         if self.day is not None and self.today.get("quarters"):
-            self.days.append({"date": self.day, "cost": round(self.today["cost"], 4), "baseline_cost": round(self.today["baseline_cost"], 4),
-                              "quarters": self.today["quarters"]})
+            row = _day_row(self.day, self.today)
+            self.days.append(row)
+            self.total["stock_value"] = self.total.get("stock_value", 0.0) + row["stock_value"]
+        carried = self.today.get("stock_gap_end")                       # a day starts with the stock difference the last one ended with
         self.day = local_day
-        self.today = {"cost": 0.0, "baseline_cost": 0.0, "quarters": 0}
+        self.today = _empty_day()
+        self.today["stock_gap_start"] = carried
 
     # ------------------------------------------------------------------ what the sensors show
 
@@ -189,8 +219,9 @@ class Ledger:
                 "gain": round(self.today["baseline_cost"] - self.today["cost"], 2), "quarters": self.today["quarters"]}
 
     def gain_total(self) -> float:
-        """Gain over self-consumption since the ledger started."""
-        return round(self.total["baseline_cost"] - self.total["cost"], 2)
+        """Gain over self-consumption since the ledger started, with the stored-energy difference valued (see _day_row)."""
+        today_stock = _day_row(self.day, self.today)["stock_value"] if self.day else 0.0
+        return round(self.total["baseline_cost"] - self.total["cost"] + self.total.get("stock_value", 0.0) + today_stock, 2)
 
     def forecast_error(self, key: str, days: int = 7) -> dict[str, Any] | None:
         """Mean absolute error and bias (forecast minus actual) of the PV or load forecast in kWh per day, over the last `days` days."""
@@ -215,13 +246,70 @@ class Ledger:
         pick = lambda f: ratios[min(len(ratios) - 1, int(f * (len(ratios) - 1)))]
         return {"p10": round(pick(0.1), 3), "p90": round(pick(0.9), 3), "source": "measured", "samples": len(ratios)}
 
+    def rest_of_day(self, planned: list[PlannedQuarter], tz: tzinfo) -> dict[str, float] | None:
+        """What today should still bring if the plan runs: the plan's grid cost of the remaining quarters of today against the same
+        self-consumption baseline the ledger measures with, and the change in stored-energy difference, valued as in _day_row.
+
+        `end_of_day` adds this to today's measured gain. None without a plan for today or before the first measured quarter."""
+        if not self.day or self.baseline_soc_kwh is None:
+            return None
+        rest = [q for q in planned if local_date(q.start, tz).isoformat() == self.day]
+        if not rest:
+            return None
+        cost = base_cost = 0.0
+        base_soc = self.baseline_soc_kwh
+        for q in rest:
+            base_grid, base_soc = self._baseline(q.pv_kwh, q.load_kwh, base_soc)
+            cost += _price(q.grid_kwh, q)
+            base_cost += _price(base_grid, q)
+        today = _day_row(self.day, self.today)
+        avg_import = today["avg_import"] or sum(q.import_eur_kwh for q in rest) / len(rest)
+        gap_now = self.today.get("stock_gap_end")
+        stock_value = (rest[-1].soc_kwh - base_soc - gap_now) * avg_import if gap_now is not None else 0.0
+        gain = base_cost - cost + stock_value
+        return {"cost": round(cost, 2), "baseline_cost": round(base_cost, 2), "stock_value": round(stock_value, 2), "gain": round(gain, 2),
+                "end_of_day": round(today["gain"] + gain, 2), "quarters": len(rest)}
+
     def daily(self) -> list[dict[str, Any]]:
-        """Closed days plus today: date, cost, baseline cost and gain."""
-        rows = [*self.days[-30:]]
+        """Closed days (up to KEEP_DAY_TOTALS) plus today, each as _day_row; the panel sums them into weeks, months and years."""
+        rows = list(self.days)
         if self.day:
-            rows.append({"date": self.day, "cost": round(self.today["cost"], 4), "baseline_cost": round(self.today["baseline_cost"], 4),
-                         "quarters": self.today["quarters"], "today": True})
-        return [{**r, "gain": round(r["baseline_cost"] - r["cost"], 4)} for r in rows]
+            rows.append({**_day_row(self.day, self.today), "today": True})
+        return rows
+
+
+def _price(grid_kwh: float, q: PlannedQuarter) -> float:
+    """Cost of a grid exchange: import at the import price, export at the export price."""
+    return grid_kwh * q.import_eur_kwh if grid_kwh > 0 else grid_kwh * q.export_eur_kwh
+
+
+def _upgrade_day(row: dict[str, Any]) -> dict[str, Any]:
+    """A stored day from before the energy fields: fill them with zero and add the gain, so every row has one shape."""
+    filled = {"quarters": 0, "avg_import": 0.0, "stock_kwh": 0.0, "stock_value": 0.0,
+              **{k: 0.0 for k in DAY_SUMS if k != "import_price_sum"}, **row}
+    return {**filled, "gain": round(filled["baseline_cost"] - filled["cost"] + filled["stock_value"], 4)}
+
+
+def _empty_day() -> dict[str, Any]:
+    """Fresh totals for one local day."""
+    return {**{k: 0.0 for k in DAY_SUMS}, "quarters": 0, "priced_quarters": 0, "stock_gap_start": None, "stock_gap_end": None}
+
+
+def _day_row(day: str, totals: dict[str, Any]) -> dict[str, Any]:
+    """One day as kept and shown: money, energy, and the gain over self-consumption.
+
+    The real battery and the baseline end a day with different amounts stored; without a value for that, a day that charges for an
+    evening sale (or ends full for tomorrow) looks like a loss. The change in that difference is valued at the day's average import
+    price, the price the stored energy replaces. Days kept before this field existed carry no stock value."""
+    quarters = totals.get("quarters") or 0
+    priced = totals.get("priced_quarters") or 0
+    avg_import = totals.get("import_price_sum", 0.0) / priced if priced else 0.0
+    start, end = totals.get("stock_gap_start"), totals.get("stock_gap_end")
+    stock_kwh = end - start if start is not None and end is not None else 0.0
+    row = {"date": day, "quarters": quarters, **{k: round(totals.get(k, 0.0), 4) for k in DAY_SUMS if k != "import_price_sum"},
+           "avg_import": round(avg_import, 4), "stock_kwh": round(stock_kwh, 3), "stock_value": round(stock_kwh * avg_import, 4)}
+    row["gain"] = round(row["baseline_cost"] - row["cost"] + row["stock_value"], 4)
+    return row
 
 
 def local_date(moment: datetime, tz: tzinfo) -> date:

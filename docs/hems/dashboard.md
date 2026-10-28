@@ -27,12 +27,14 @@ chain: true
 ```
 
 ## Resultaat en leren
-HEMS meet elke 10 s net, zon en batterij en prijst per kwartier (`sensor.hems_cost_today`). Tegelijk rekent het dezelfde zon en hetzelfde huis door met een batterij op alleen zelfverbruik (`sensor.hems_realised_vs_baseline_today`, `sensor.hems_realised_total`). Per kwartier bewaart het ook de eigen verwachting. Daaruit komen `sensor.hems_pv_forecast_error` en `sensor.hems_load_forecast_error` (MAE en bias in kWh/dag) en de P10–P90-banden in de tijdlijn. Die banden staan op een standaardwaarde tot er 96 bruikbare kwartieren zijn. De metingen staan in `.storage/hems.<entry_id>`; de laatste 8 dagen worden bewaard.
+HEMS meet elke 10 s net, zon en batterij en prijst per kwartier (`sensor.hems_cost_today`). Tegelijk rekent het dezelfde zon en hetzelfde huis door met een batterij op alleen zelfverbruik (`sensor.hems_realised_vs_baseline_today`, `sensor.hems_realised_total`). Per kwartier bewaart het ook de eigen verwachting. Daaruit komen `sensor.hems_pv_forecast_error` en `sensor.hems_load_forecast_error` (MAE en bias in kWh/dag) en de P10–P90-banden in de tijdlijn. Die banden staan op een standaardwaarde tot er 96 bruikbare kwartieren zijn. De metingen staan in `.storage/hems.<entry_id>`. Kwartieren worden 8 dagen bewaard, dagtotalen 400 dagen.
+
+Per dag bewaart HEMS kosten, baselinekosten, import, export, zon, huis en auto in kWh, en het verschil in opgeslagen energie tussen de echte batterij en de baseline. Dat verschil wordt gewaardeerd tegen de gemiddelde importprijs van de dag. Zonder die waardering lijkt een dag die laadt voor een avondverkoop een verlies. In **Insights** kies je Day, Week, Month of Year; het paneel telt de dagtotalen op. Een plus betekent beter dan een batterij op alleen zelfverbruik, een min slechter; wat je echt betaalt staat in `sensor.hems_cost_today`. Bij Day staat eronder wat de rest van vandaag nog oplevert als het plan van HEMS loopt, en het verwachte eindgetal van de dag. Dat wordt tot middernacht doorgerekend met dezelfde baseline en dezelfde waardering van de opgeslagen energie (`Ledger.rest_of_day`). In dry-run stuurt de oude battery manager de batterij, en het paneel zegt dan dat het getal zijn resultaat is, niet dat van HEMS.
 
 Wijs bij **Reconfigure** optioneel nog drie entiteiten toe:
 - `water_heater_entity`: de boiler of de tanktemperatuur
 - `legionella_last_entity`: tijdstip van de laatste legionella-run
-- `compare_action_entity`: de actiesensor van de oude battery manager, voor de vergelijking per kwartier in **Leren**
+- `compare_action_entity`: de actiesensor van de oude battery manager, voor de vergelijking per kwartier in **Insights**. Die gaat op netintentie: `Charging` is laden, `Discharging` en `Adaptive` vanaf 2000 W is verkopen, de rest (`Adaptive` dat het huis dekt, `Opportunistic`/`Passive Solar`) is idle, net als zelfverbruik in HEMS
 
 ## Sturen en advies
 - `switch.hems_master_arm`: de hoofdschakelaar. Na elke herstart staat hij uit. Er schrijft nog geen module, dus wapenen verandert nu niets; het wordt wel gelogd.

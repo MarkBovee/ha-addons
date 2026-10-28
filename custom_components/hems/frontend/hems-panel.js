@@ -97,6 +97,11 @@ function age(ms) {
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+const PERIODS = ["day", "week", "month", "year"];
+const PERIOD_LABEL = { day: "Day", week: "Week", month: "Month", year: "Year" };
+const PERIOD_NOW = { day: "today", week: "this week", month: "this month", year: "this year" };
+const PERIOD_KEEP = { day: 30, week: 26, month: 12, year: 10 };
+const OTHER_SELL_W = 2000;                 // the old manager's adaptive discharge at or above this is selling, below it covers the house
 const ACTION_LABEL = { charge: "Charge", discharge: "Discharge", idle: "Idle" };
 const EXEC_LABEL = {
   as_planned: "as planned", at_floor: "at the floor", limited_floor: "limited by the floor", at_full: "battery full",
@@ -771,6 +776,7 @@ class HemsPanel extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._view = viewOf(location.hash) || "today";
     this._hours = 24;
+    this._period = "day";                 // Insights: day, week, month or year
     this._sel = null;
     this._confirm = false;
     this._details = false;
@@ -850,6 +856,7 @@ class HemsPanel extends HTMLElement {
     if (menu) { menu.hass = this._hass; menu.narrow = this._narrow; }
     this.shadowRoot.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => this._go(b.dataset.view)));
     this.shadowRoot.querySelectorAll("[data-hours]").forEach((b) => b.addEventListener("click", () => { this._hours = Number(b.dataset.hours); this._sel = null; this._render(); }));
+    this.shadowRoot.querySelectorAll("[data-period]").forEach((b) => b.addEventListener("click", () => { this._period = b.dataset.period; this._render(); }));
     this._bindActions();
     this._drawCharts();
   }
@@ -860,7 +867,7 @@ class HemsPanel extends HTMLElement {
     const combined = this.shadowRoot.getElementById("combined");
     if (combined) drawCombined(this, combined, p, this._kiosk ? 24 : this._hours, this._kiosk);
     const hm = this.shadowRoot.getElementById("heat"); if (hm) drawHeatmap(this, hm, p);
-    const dz = this.shadowRoot.getElementById("days"); if (dz) drawDays(this, dz, p);
+    const dz = this.shadowRoot.getElementById("days"); if (dz) drawDays(this, dz, p, this._period);
     const svg = this.shadowRoot.getElementById("tl");
     if (!svg) return;
     drawTimeline(this, svg, p, {
@@ -1021,13 +1028,21 @@ class HemsPanel extends HTMLElement {
     const qs = ((r && r.quarters) || []).slice(-96);
     const withOther = qs.filter((q) => q.other && q.planned);
     const agree = withOther.filter((q) => otherAction(q.other) === q.planned).length;
+    const buckets = periodBuckets((r && r.daily) || [], this._period);
+    const current = buckets[buckets.length - 1];
+    const rest = r && r.rest_of_day;
+    const dryRun = !p || !p.control || (p.control.modes || {}).battery !== "advisory";
     const errRow = (e, label) => `<div><span>${label}</span><span class="mono">${e ? num(e.mae_kwh_day, 2) + " kWh/day" : "—"}</span></div>`;
     return `
       <section class="hero">
         <div class="say">
-          <span class="quiet">Saved since ${r && r.since ? esc(dayShort(r.since)) : "the first measured day"}</span>
-          <h1 class="money" style="color:var(${r && r.gain_total >= 0 ? "--ok" : "--fault"})">${r && r.daily && r.daily.length ? signed(r.gain_total) : "—"}</h1>
-          <p class="why">Compared with the battery on self-consumption only.</p>
+          <div class="row"><span class="quiet">${dryRun ? "Battery as it ran" : "HEMS"} vs self-consumption, ${PERIOD_NOW[this._period]}</span><span class="sp"></span>${this._periodSeg()}</div>
+          <h1 class="money" style="color:var(${current && current.gain >= 0 ? "--ok" : "--fault"})">${current ? signed(current.gain) : "—"}</h1>
+          ${current ? `<p class="small">${current.gain >= 0 ? "Better" : "Worse"} than a battery on self-consumption only${current.today ? " so far" : ""}.</p>` : ""}
+          ${this._period === "day" && rest ? `<p class="small">Rest of today, if the HEMS plan runs: <b class="mono">${signed(rest.gain)}</b> · end of day <b class="mono" style="color:var(${rest.end_of_day >= 0 ? "--ok" : "--fault"})">${signed(rest.end_of_day)}</b></p>` : ""}
+          <p class="why">Compared with the battery on self-consumption only${r && r.since ? `; ${signed(r.gain_total)} since ${esc(dayShort(r.since))}` : ""}.
+            Energy stored above that is valued at the day's average import price.${dryRun ? " In dry run the old battery manager controls the battery, so this is its result, not HEMS's." : ""}</p>
+          ${current ? `<p class="quiet small">Imported ${num(current.import_kwh, 1)} kWh · exported ${num(current.export_kwh, 1)} kWh · solar ${num(current.pv_kwh, 1)} kWh · house ${num(current.load_kwh, 1)} kWh</p>` : ""}
         </div>
         <svg id="days" style="display:block;flex:1 1 420px;min-width:0"></svg>
       </section>
@@ -1045,6 +1060,10 @@ class HemsPanel extends HTMLElement {
       </section>
       <details class="block"><summary>Prices</summary><div class="scroll-x" style="margin-top:12px"><svg id="heat" style="display:block;min-width:620px;width:100%"></svg></div></details>
       <details class="block"><summary>Last 24 hours</summary><div style="margin-top:12px">${this._quarterTable(qs)}</div></details>`;
+  }
+
+  _periodSeg() {
+    return `<span class="seg small">${PERIODS.map((k) => `<button type="button" data-period="${k}" aria-pressed="${this._period === k}">${PERIOD_LABEL[k]}</button>`).join("")}</span>`;
   }
 
   _quarterTable(qs) {
@@ -1247,13 +1266,17 @@ h1.huge { font-size:58px; line-height:1.05; }
  * follow the house), 'Opportunistic Solar (1230W excess)' (charging on solar), 'Passive Solar (...)', 'Idle | Upcoming:
  * Charge ...' (the upcoming part must not count). A power of 0 W is idle.
  */
+/* The old battery manager's status in HEMS terms, by what it asks of the grid. Its "Adaptive" (cover the house, follow the grid) and
+   "Opportunistic/Passive Solar" (store surplus) are what HEMS calls idle: self-consumption. Only a forced charge, a scheduled discharge or
+   an adaptive discharge at selling power counts as charge or discharge. */
 function otherAction(v) {
   const x = String(v || "").trim().toLowerCase();
   if (!x || x === "unknown" || x === "unavailable") return null;
   const watts = x.replace(/\(.*?\)/g, "").match(/(\d+)\s*w\b/);       // a figure in brackets is a note, not the power
-  if (watts && Number(watts[1]) === 0 && !x.startsWith("opportunistic")) return "idle";
-  if (x.startsWith("charging") || x.startsWith("opportunistic solar")) return "charge";
-  if (x.startsWith("discharging") || x.startsWith("adaptive")) return "discharge";
+  const w = watts ? Number(watts[1]) : 0;
+  if (x.startsWith("charging")) return w > 0 ? "charge" : "idle";
+  if (x.startsWith("discharging")) return w > 0 ? "discharge" : "idle";
+  if (x.startsWith("adaptive") && w >= OTHER_SELL_W) return "discharge";
   return "idle";
 }
 
@@ -1338,25 +1361,58 @@ function drawHeatmap(host, svg, payload) {
   for (let h = 0; h <= 24; h += 3) { const t = el("text", { x: L + h * 4 * cw, y: H - 4, fill: C("--fg-3"), "font-size": 10, "text-anchor": "middle" }); t.textContent = String(h).padStart(2, "0"); }
 }
 
-function drawDays(host, svg, payload) {
+/* Day rows summed into the chosen period: one bucket per day (last 30), ISO week (last 26), month (last 12) or year. */
+function periodBuckets(days, period) {
+  const keyOf = {
+    day: (d) => d.date,
+    week: (d) => isoWeek(d.date),
+    month: (d) => d.date.slice(0, 7),
+    year: (d) => d.date.slice(0, 4),
+  }[period] || ((d) => d.date);
+  const map = new Map();
+  for (const d of days) {
+    const k = keyOf(d);
+    const b = map.get(k) || { key: k, gain: 0, cost: 0, baseline_cost: 0, stock_value: 0, import_kwh: 0, export_kwh: 0, pv_kwh: 0, load_kwh: 0, days: 0, today: false };
+    for (const f of ["gain", "cost", "baseline_cost", "stock_value", "import_kwh", "export_kwh", "pv_kwh", "load_kwh"]) b[f] += Number(d[f] || 0);
+    b.days += 1; b.today = b.today || !!d.today;
+    map.set(k, b);
+  }
+  return [...map.values()].slice(-PERIOD_KEEP[period]);
+}
+
+/* ISO week label of a local date, e.g. "2026-W44". */
+function isoWeek(iso) {
+  const d = new Date(iso + "T12:00:00Z");
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day + 3);                          // the Thursday of this week decides the year
+  const first = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(((d - first) / 864e5 - 3 + ((first.getUTCDay() + 6) % 7)) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/* Bars of the gain per day, week, month or year; the running bucket is drawn lighter. */
+function drawDays(host, svg, payload, period = "day") {
   while (svg.firstChild) svg.removeChild(svg.firstChild);
-  const days = ((payload.realised && payload.realised.daily) || []).slice(-30);
+  const rows = periodBuckets((payload.realised && payload.realised.daily) || [], period);
   const C = (v) => cssVar(host, v);
   const W = Math.max(320, svg.getBoundingClientRect().width || 600), H = 160, L = 46, top = 10, bot = H - 22;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H);
   const el = (tag, a) => { const e = document.createElementNS(SVGNS, tag); for (const k in a) e.setAttribute(k, a[k]); svg.appendChild(e); return e; };
   const t = (txt, a) => { const e = el("text", { fill: C("--fg-3"), "font-size": 10, ...a }); e.textContent = txt; };
-  if (!days.length) { t("No full day measured yet", { x: W / 2, y: H / 2, "text-anchor": "middle" }); return; }
-  const mx = Math.max(0.1, ...days.map((d) => Math.abs(d.gain)));
+  if (!rows.length) { t("No full day measured yet", { x: W / 2, y: H / 2, "text-anchor": "middle" }); return; }
+  const mx = Math.max(0.1, ...rows.map((d) => Math.abs(d.gain)));
   const zero = top + (bot - top) / 2, sy = (v) => zero - v / mx * (bot - top) / 2;
   el("line", { x1: L, x2: W - 4, y1: zero, y2: zero, stroke: C("--line") });
   t("+€ " + num(mx, 2), { x: L - 4, y: top + 8, "text-anchor": "end" }); t("−€ " + num(mx, 2), { x: L - 4, y: bot, "text-anchor": "end" });
-  const bw = (W - L - 4) / days.length;
-  days.forEach((d, i) => {
+  const bw = (W - L - 4) / rows.length;
+  const label = (k) => period === "day" ? k.slice(5) : period === "week" ? k.slice(5) : period === "month" ? k.slice(2) : k;
+  rows.forEach((d, i) => {
     const y = sy(d.gain);
     const r = el("rect", { x: L + i * bw + 1, y: Math.min(y, zero), width: Math.max(1, bw - 2), height: Math.abs(zero - y), fill: C(d.gain >= 0 ? "--ok" : "--fault"), "fill-opacity": d.today ? .5 : .85 });
-    const tt = document.createElementNS(SVGNS, "title"); tt.textContent = `${d.date}: ${num(d.gain, 2)} € (cost ${num(d.cost, 2)}, self-consumption ${num(d.baseline_cost, 2)})`; r.appendChild(tt);
-    if (days.length <= 14 || i % 3 === 0) t(d.date.slice(5), { x: L + i * bw + bw / 2, y: H - 6, "text-anchor": "middle" });
+    const tt = document.createElementNS(SVGNS, "title");
+    tt.textContent = `${d.key}: ${num(d.gain, 2)} € (cost ${num(d.cost, 2)}, self-consumption ${num(d.baseline_cost, 2)}, stored ${num(d.stock_value, 2)}; ${d.days} day${d.days === 1 ? "" : "s"})`;
+    r.appendChild(tt);
+    if (rows.length <= 14 || i % 3 === 0) t(label(d.key), { x: L + i * bw + bw / 2, y: H - 6, "text-anchor": "middle" });
   });
 }
 

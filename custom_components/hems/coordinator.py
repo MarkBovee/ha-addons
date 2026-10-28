@@ -41,7 +41,7 @@ from .engine.trace import TraceWriter
 from .engine.windows import UNSOLD
 from .dashboard import build_payload
 from .advice import EVENT_APPLIED, MODES, MODULES, Control
-from .realised import Ledger, QuarterPrice, quarter_start
+from .realised import Ledger, PlannedQuarter, QuarterPrice, quarter_start
 from .engine.weather import OPEN_METEO_URL, Weather, open_meteo_params, parse_open_meteo
 
 _LOGGER = logging.getLogger(__name__)
@@ -621,6 +621,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             if ledger:
                 self._payload["realised"] = {"today": ledger.result_today(), "gain_total": ledger.gain_total(), "since": ledger.total.get("since"),
                                              "daily": ledger.daily(), "quarters": ledger.quarters[-96:],
+                                             "rest_of_day": ledger.rest_of_day(_planned_quarters(snap.output), dt_util.get_default_time_zone()),
                                              "errors": {k: ledger.forecast_error(k) for k in ("pv", "load")}, "bands": bands}
             self._payload_key = key
         return self._payload
@@ -633,3 +634,19 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         # always English, whatever the language of Home Assistant: Mark wants no Dutch in HEMS
         tz, start, words = dt_util.get_default_time_zone(), datetime.fromisoformat(slot_start), plan_words("en")
         return plan_summary(segments, start, tz, words), tuple(plan_windows(segments, tz)), plan_table(segments, start, tz, words, output.decision.analysis if output.decision else None)
+
+
+def _planned_quarters(output: EngineOutput) -> list[PlannedQuarter]:
+    """The plan's coming quarters with the prices and forecast it was made on, for the rest-of-day forecast; empty without a plan."""
+    decision, prices = output.decision, output.prices
+    if decision is None or not prices:
+        return []
+    price_at = {at: (imp, exp) for at, imp, exp in zip(prices.starts, prices.import_eur_kwh, prices.export_eur_kwh)}
+    rows = []
+    for i, slot in enumerate(decision.plan.slots):
+        at = decision.slot_start + i * timedelta(minutes=15)
+        if at not in price_at:
+            continue
+        imp, exp = price_at[at]
+        rows.append(PlannedQuarter(at, imp, exp, output.pv_kwh.get(at) or 0.0, output.load_kwh.get(at) or 0.0, slot.grid_kwh, slot.soc_kwh))
+    return rows
