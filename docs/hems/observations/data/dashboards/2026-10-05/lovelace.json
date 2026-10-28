@@ -1,0 +1,1328 @@
+{
+  "kiosk_mode": {
+    "user_settings": [
+      {
+        "hide_header": true,
+        "hide_sidebar": true,
+        "users": [
+          "dashboard"
+        ]
+      }
+    ]
+  },
+  "title": "Thuis",
+  "views": [
+    {
+      "cards": [
+        {
+          "heading": "Energy",
+          "heading_style": "title",
+          "icon": "mdi:power-plug",
+          "type": "heading"
+        }
+      ],
+      "column_span": 1,
+      "icon": "mdi:home-lightning-bolt-outline",
+      "max_columns": 3,
+      "sections": [
+        {
+          "cards": [
+            {
+              "heading": "Controls",
+              "heading_style": "title",
+              "type": "heading"
+            },
+            {
+              "double_tap_action": {
+                "action": "toggle"
+              },
+              "entity": "switch.tv_en_media",
+              "fill_container": false,
+              "icon": "mdi:power-standby",
+              "icon_color": "deep-orange",
+              "name": "Living Room",
+              "tap_action": {
+                "action": "more-info"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "entity": "switch.audio",
+              "fill_container": false,
+              "icon": "mdi:audio-video",
+              "icon_color": "indigo",
+              "name": "Audio",
+              "tap_action": {
+                "action": "toggle"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "double_tap_action": {
+                "action": "toggle"
+              },
+              "entity": "switch.wasmachine",
+              "fill_container": false,
+              "icon": "mdi:washing-machine",
+              "icon_color": "cyan",
+              "tap_action": {
+                "action": "more-info"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "entity": "sensor.vaatwasser_status",
+              "icon": "mdi:dishwasher",
+              "icon_color": "teal",
+              "primary": "Dishwasher\n",
+              "secondary": "{% if states('sensor.vaatwasser_status') == 'running' %}\n  Ready in {{ states('sensor.vaatwasser_programma_eindtijd') }}\n{% else %}\n  Standby\n{% endif %}\n",
+              "type": "custom:mushroom-template-card"
+            },
+            {
+              "entity": "switch.droger_en_vriezer",
+              "fill_container": false,
+              "icon": "mdi:tumble-dryer",
+              "icon_color": "green",
+              "name": "Dryer & Fridge",
+              "tap_action": {
+                "action": "toggle"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "color": "blue",
+              "entity": "climate.gree_climate",
+              "features_position": "bottom",
+              "name": "Airco",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "entity": "light.dinnertable",
+              "features_position": "bottom",
+              "icon": "mdi:ceiling-light-multiple-outline",
+              "type": "tile",
+              "vertical": false,
+              "visibility": [
+                {
+                  "condition": "state",
+                  "entity": "light.eettafel_l",
+                  "state_not": "unavailable"
+                }
+              ]
+            },
+            {
+              "entity": "light.moodlights",
+              "features_position": "bottom",
+              "icon": "mdi:light-flood-up",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "entity": "switch.spotjes_verlichting",
+              "features_position": "bottom",
+              "icon": "mdi:lightbulb-spot",
+              "name": "Spots",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "entity": "light.lamp_kantoor",
+              "features_position": "bottom",
+              "icon": "mdi:floor-lamp",
+              "name": "Kantoor",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "heading": "Climate",
+              "heading_style": "title",
+              "type": "heading"
+            },
+            {
+              "color": "lime",
+              "entity": "sensor.home_woonkamer_z1_room_temperature",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "name": "Living room",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "pink",
+              "entity": "sensor.hobeian_zg_106z",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "name": "Lumen",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "blue",
+              "entity": "sensor.home_vaillant_ctlv2_heating_control_room_humidity",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "icon": "",
+              "name": "Humidity",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "deep-orange",
+              "entity": "sensor.home_vaillant_ctlv2_heating_control_displayed_outside_temp",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "icon": "mdi:sun-thermometer",
+              "name": "Outdoor",
+              "type": "tile",
+              "vertical": false
+            }
+          ],
+          "type": "grid"
+        },
+        {
+          "cards": [
+            {
+              "heading": "Energy",
+              "heading_style": "title",
+              "type": "heading"
+            },
+            {
+              "entity": "sensor.battery_api_battery_soc",
+              "features": [
+                {
+                  "type": "bar-gauge"
+                }
+              ],
+              "features_position": "bottom",
+              "grid_options": {
+                "columns": 6,
+                "rows": 2
+              },
+              "name": "Status",
+              "show_entity_picture": false,
+              "state_content": [
+                "state",
+                "battery_direction"
+              ],
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "yellow",
+              "entity": "sensor.battery_api_pv_power",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "icon": "mdi:solar-power-variant",
+              "primary": "Solar Production",
+              "secondary": "{{states('sensor.battery_api_pv_power')}}W - ({{states('sensor.energy_production_today_remaining')}}W)",
+              "type": "custom:mushroom-template-card"
+            },
+            {
+              "color": "{% set power = states('sensor.battery_api_battery_power') | float(0) %} {% if power < 0 %}\n  green\n{% elif power > 0 %}\n  teal\n{% else %}\n  grey\n{% endif %}\n",
+              "entity": "sensor.battery_api_battery_power",
+              "features_position": "bottom",
+              "icon": "{% set power = states('sensor.battery_api_battery_power') | float(0) %} {% if power < 0 %}\n  mdi:flash\n{% elif power > 0 %}\n  mdi:battery-arrow-down\n{% else %}\n  mdi:battery\n{% endif %}\n",
+              "primary": "{% set power = states('sensor.battery_api_battery_power') | float(0) %} {% if power < 0 %}\n  Battery charging\n{% elif power > 0 %}\n  Battery discharging\n{% else %}\n  Battery idle\n{% endif %}\n",
+              "secondary": "{% set power = states('sensor.battery_api_battery_power') | float(0) %} {% if power > 1000 or power < -1000 %}\n  {{ (power / 1000) | round(2) }} kW\n{% else %}\n  {{ power | round(0) }} W\n{% endif %}\n",
+              "tap_action": {
+                "action": "more-info"
+              },
+              "type": "custom:mushroom-template-card"
+            },
+            {
+              "color": "{% set charging = is_state('binary_sensor.charge_amps_monitor_charger_charging', 'on') %} {% set soc = states('sensor.ev4_ev_battery_level') | int(0) %}\n{% if charging %}\n  yellow\n{% elif soc >= 80 %}\n  green\n{% elif soc >= 40 %}\n  blue\n{% elif soc >= 20 %}\n  orange\n{% else %}\n  red\n{% endif %}\n",
+              "entity": "sensor.charge_amps_monitor_charger_current_power",
+              "features_position": "bottom",
+              "icon": "{% set soc = states('sensor.ev4_ev_battery_level') | int(0) %}\n{% if soc >= 90 %}\n  mdi:battery\n{% elif soc >= 70 %}\n  mdi:battery-80\n{% elif soc >= 50 %}\n  mdi:battery-60\n{% elif soc >= 30 %}\n  mdi:battery-40\n{% elif soc >= 10 %}\n  mdi:battery-20\n{% else %}\n  mdi:battery-alert\n{% endif %}\n",
+              "primary": "{% if is_state('binary_sensor.charge_amps_monitor_charger_charging', 'on') %}\n  Kia EV4 (charging)\n{% else %}\n  Kia EV4\n{% endif %}\n",
+              "secondary": "{% set charging = is_state('binary_sensor.charge_amps_monitor_charger_charging', 'on') %} {% set power = states('sensor.charge_amps_monitor_charger_current_power') | int(0) %} {% set soc = states('sensor.ev4_ev_battery_level') %}\n{% if charging %}\n  {% if soc not in ['unknown', 'unavailable', 'none', ''] %}\n    Power: {{ power }}W • SOC: {{ soc | int }}%\n  {% else %}\n    Power: {{ power }}W\n  {% endif %}\n{% else %}\n  {% if soc not in ['unknown', 'unavailable', 'none', ''] %}\n    SOC: {{ soc | int }}%\n  {% else %}\n    Not connected\n  {% endif %}\n{% endif %}\n",
+              "type": "custom:mushroom-template-card"
+            },
+            {
+              "color": "pink",
+              "entity": "sensor.battery_manager_current_action",
+              "features_position": "bottom",
+              "grid_options": {
+                "columns": 12,
+                "rows": 1
+              },
+              "icon_tap_action": {
+                "action": "more-info"
+              },
+              "name": "Battery management",
+              "tap_action": {
+                "action": "navigate",
+                "navigation_path": "/battery-management"
+              },
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "light-green",
+              "entity": "sensor.power_usage",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "grid_options": {
+                "rows": 1
+              },
+              "icon": "mdi:home-lightning-bolt",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "indigo",
+              "entity": "sensor.average_power_usage",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "heading": "Water",
+              "heading_style": "title",
+              "type": "heading"
+            },
+            {
+              "color": "cyan",
+              "entity": "sensor.home_woonkamer_z1_flow_temperature_hc1",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "name": "Flow",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "red",
+              "entity": "water_heater.home_boiler_dhw_domestic_hot_water",
+              "features": [
+                {
+                  "type": "target-temperature"
+                }
+              ],
+              "features_position": "bottom",
+              "hide_state": false,
+              "name": "Boiler",
+              "show_entity_picture": false,
+              "state_content": "current_temperature",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "light-blue",
+              "entity": "input_text.heating_schedule_status",
+              "features_position": "bottom",
+              "grid_options": {
+                "columns": "full"
+              },
+              "hide_state": false,
+              "icon": "mdi:water-boiler",
+              "name": "Heating management",
+              "show_entity_picture": false,
+              "type": "tile",
+              "vertical": false
+            }
+          ],
+          "type": "grid"
+        },
+        {
+          "cards": [
+            {
+              "heading": "Prices",
+              "heading_style": "title",
+              "type": "heading"
+            },
+            {
+              "color": "purple",
+              "entity": "sensor.current_price",
+              "features_position": "bottom",
+              "name": "Current price",
+              "state_content": "current_price",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "yellow",
+              "entity": "sensor.energy_prices_average_price_today",
+              "features_position": "bottom",
+              "name": "Average price",
+              "show_entity_picture": true,
+              "state_content": "average",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "light-green",
+              "entity": "sensor.energy_prices_max_profit_today",
+              "features_position": "bottom",
+              "name": {
+                "type": "entity"
+              },
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "red",
+              "entity": "sensor.energy_prices_maximum_price_today",
+              "features_position": "bottom",
+              "name": {
+                "type": "entity"
+              },
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "auto_hide_pagination": 0,
+              "cards": [
+                {
+                  "apex_config": {
+                    "chart": {
+                      "height": "256px"
+                    },
+                    "legend": {
+                      "show": false
+                    }
+                  },
+                  "experimental": {
+                    "color_threshold": true
+                  },
+                  "graph_span": "24h",
+                  "header": {
+                    "show": true,
+                    "title": "Today"
+                  },
+                  "now": {
+                    "show": true
+                  },
+                  "series": [
+                    {
+                      "color_threshold": [
+                        {
+                          "color": "#4FB06D",
+                          "value": 0.2
+                        },
+                        {
+                          "color": "#43A5BE",
+                          "value": 0.25
+                        },
+                        {
+                          "color": "#F5C26B",
+                          "value": 0.28
+                        },
+                        {
+                          "color": "#F07857",
+                          "value": 0.35
+                        },
+                        {
+                          "color": "#BF2C34",
+                          "value": 0.4
+                        }
+                      ],
+                      "data_generator": "const curve = entity.attributes.price_curve;\nif (!curve) return [];\nreturn curve.map(i => [new Date(i.start).getTime(), i.price]);\n",
+                      "entity": "sensor.energy_prices_electricity_import_price",
+                      "float_precision": 3,
+                      "name": "Import",
+                      "opacity": 1,
+                      "show": {
+                        "legend_value": true
+                      },
+                      "stroke_width": 0,
+                      "type": "column"
+                    },
+                    {
+                      "color": "grey",
+                      "data_generator": "const exportCurve = entity.attributes.price_curve;\nconst importCurve =\n  hass.states['sensor.energy_prices_electricity_import_price']\n  ?.attributes?.price_curve;\n\nif (!exportCurve || !importCurve) return [];\n\nreturn exportCurve.map((e, idx) => {\n  const imp = importCurve[idx]?.price ?? 0;\n  const delta = Math.max(e.price - imp, 0);\n  return [new Date(e.start).getTime(), delta];\n});\n",
+                      "entity": "sensor.energy_prices_electricity_export_price",
+                      "float_precision": 3,
+                      "name": "Export bonus",
+                      "opacity": 0.9,
+                      "show": {
+                        "legend_value": false
+                      },
+                      "stroke_width": 1,
+                      "type": "column"
+                    }
+                  ],
+                  "span": {
+                    "start": "day"
+                  },
+                  "stacked": true,
+                  "type": "custom:apexcharts-card",
+                  "update_interval": "1h"
+                },
+                {
+                  "apex_config": {
+                    "chart": {
+                      "height": "256px"
+                    },
+                    "legend": {
+                      "show": false
+                    },
+                    "noData": {
+                      "text": "Prices available after 14:00"
+                    }
+                  },
+                  "cache": false,
+                  "experimental": {
+                    "color_threshold": true
+                  },
+                  "graph_span": "24h",
+                  "header": {
+                    "colorize_states": true,
+                    "show": true,
+                    "show_states": false,
+                    "title": "Tomorrow"
+                  },
+                  "now": {
+                    "show": false
+                  },
+                  "series": [
+                    {
+                      "color_threshold": [
+                        {
+                          "color": "#4FB06D",
+                          "value": 0.2
+                        },
+                        {
+                          "color": "#43A5BE",
+                          "value": 0.25
+                        },
+                        {
+                          "color": "#F5C26B",
+                          "value": 0.28
+                        },
+                        {
+                          "color": "#F07857",
+                          "value": 0.35
+                        },
+                        {
+                          "color": "#BF2C34",
+                          "value": 0.4
+                        }
+                      ],
+                      "data_generator": "const curve = entity.attributes.price_curve;\nif (!curve) return [];\nreturn curve.map(i => [new Date(i.start).getTime(), i.price]);\n",
+                      "entity": "sensor.energy_prices_electricity_import_price",
+                      "float_precision": 3,
+                      "name": "Import",
+                      "opacity": 1,
+                      "show": {
+                        "legend_value": true
+                      },
+                      "stroke_width": 0,
+                      "type": "column"
+                    },
+                    {
+                      "color": "grey",
+                      "data_generator": "const exportCurve = entity.attributes.price_curve;\nconst importCurve =\n  hass.states['sensor.energy_prices_electricity_import_price']\n  ?.attributes?.price_curve;\n\nif (!exportCurve || !importCurve) return [];\n\nreturn exportCurve.map((e, idx) => {\n  const imp = importCurve[idx]?.price ?? 0;\n  const delta = Math.max(e.price - imp, 0);\n  return [new Date(e.start).getTime(), delta];\n});\n",
+                      "entity": "sensor.energy_prices_electricity_export_price",
+                      "float_precision": 3,
+                      "name": "Export bonus",
+                      "opacity": 0.9,
+                      "show": {
+                        "legend_value": true
+                      },
+                      "stroke_width": 0,
+                      "type": "column"
+                    }
+                  ],
+                  "span": {
+                    "offset": "+1d",
+                    "start": "day"
+                  },
+                  "stacked": true,
+                  "type": "custom:apexcharts-card",
+                  "update_delay": "2s",
+                  "update_interval": "1h"
+                }
+              ],
+              "type": "custom:simple-swipe-card"
+            },
+            {
+              "heading": "Other",
+              "heading_style": "title",
+              "type": "heading"
+            },
+            {
+              "entity": "alarm_control_panel.emmeloord_alarm",
+              "name": "Alarm",
+              "states": [
+                "armed_home",
+                "armed_away",
+                "armed_night"
+              ],
+              "type": "custom:mushroom-alarm-control-panel-card"
+            },
+            {
+              "entity": "vacuum.q7_max",
+              "features": [
+                {
+                  "commands": [
+                    "start_pause",
+                    "stop",
+                    "clean_spot"
+                  ],
+                  "type": "vacuum-commands"
+                }
+              ],
+              "features_position": "bottom",
+              "grid_options": {
+                "columns": 6,
+                "rows": 2
+              },
+              "type": "tile",
+              "vertical": false
+            }
+          ],
+          "type": "grid"
+        }
+      ],
+      "title": "Home",
+      "type": "sections"
+    },
+    {
+      "cards": [],
+      "icon": "mdi:knob",
+      "max_columns": 3,
+      "path": "controls",
+      "sections": [
+        {
+          "cards": [
+            {
+              "heading": "Controls",
+              "heading_style": "title",
+              "icon": "",
+              "type": "heading"
+            },
+            {
+              "entity": "switch.kerstverlichting",
+              "type": "tile"
+            },
+            {
+              "entity": "switch.computer",
+              "fill_container": false,
+              "icon": "mdi:desktop-classic",
+              "icon_color": "deep-purple",
+              "tap_action": {
+                "action": "toggle"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "entity": "switch.garage",
+              "icon": "mdi:garage",
+              "icon_color": "red",
+              "name": "Garage",
+              "tap_action": {
+                "action": "toggle"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "entity": "switch.wasmachine",
+              "fill_container": false,
+              "icon": "mdi:washing-machine",
+              "icon_color": "cyan",
+              "tap_action": {
+                "action": "toggle"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "double_tap_action": {
+                "action": "toggle"
+              },
+              "entity": "switch.ems",
+              "fill_container": false,
+              "hold_action": {
+                "action": "more-info"
+              },
+              "icon": "mdi:home-lightning-bolt",
+              "icon_color": "lime",
+              "tap_action": {
+                "action": "more-info"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "color": "pink",
+              "entity": "input_boolean.bath",
+              "name": "Bad",
+              "type": "tile"
+            },
+            {
+              "entity": "switch.home_woonkamer_z1_away_mode",
+              "features_position": "bottom",
+              "name": {
+                "type": "entity"
+              },
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "entity": "sensor.wh_last_legionella",
+              "type": "tile"
+            },
+            {
+              "entity": "climate.home_woonkamer_z1_home",
+              "features": [
+                {
+                  "type": "climate-hvac-modes"
+                }
+              ],
+              "type": "tile"
+            }
+          ],
+          "type": "grid"
+        },
+        {
+          "cards": [
+            {
+              "heading": "Media",
+              "heading_style": "title",
+              "type": "heading"
+            },
+            {
+              "entity": "media_player.cinema",
+              "fill_container": false,
+              "icon": "mdi:audio-video",
+              "media_controls": [
+                "shuffle",
+                "play_pause_stop",
+                "previous",
+                "on_off",
+                "next",
+                "repeat"
+              ],
+              "show_volume_level": false,
+              "type": "custom:mushroom-media-player-card",
+              "use_media_info": true,
+              "volume_controls": [
+                "volume_buttons",
+                "volume_set",
+                "volume_mute"
+              ]
+            },
+            {
+              "entity": "media_player.lg_webos_tv_oled65c16la",
+              "features": [
+                {
+                  "type": "media-player-playback"
+                }
+              ],
+              "features_position": "bottom",
+              "name": "TV",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "double_tap_action": {
+                "action": "toggle"
+              },
+              "entity": "switch.tv_en_media",
+              "fill_container": false,
+              "icon": "mdi:power-standby",
+              "icon_color": "deep-orange",
+              "name": "Living Room",
+              "tap_action": {
+                "action": "more-info"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "entity": "switch.audio",
+              "fill_container": false,
+              "icon": "mdi:audio-video",
+              "icon_color": "indigo",
+              "name": "Audio",
+              "tap_action": {
+                "action": "toggle"
+              },
+              "type": "custom:mushroom-entity-card"
+            },
+            {
+              "entity": "media_player.wiim_ultra_7a1e_2",
+              "type": "media-control"
+            }
+          ],
+          "type": "grid"
+        },
+        {
+          "cards": [
+            {
+              "heading": "Lights",
+              "heading_style": "title",
+              "type": "heading"
+            },
+            {
+              "entity": "light.dinnertable",
+              "features_position": "bottom",
+              "icon": "mdi:ceiling-light-multiple-outline",
+              "name": "Eettafel",
+              "type": "tile",
+              "vertical": false,
+              "visibility": [
+                {
+                  "condition": "state",
+                  "entity": "light.eettafel_l",
+                  "state_not": "unavailable"
+                }
+              ]
+            },
+            {
+              "entity": "light.moodlights",
+              "icon": "mdi:light-flood-up",
+              "type": "tile"
+            },
+            {
+              "entity": "light.badkamer",
+              "hide_state": false,
+              "icon": "mdi:bathtub-outline",
+              "type": "tile",
+              "vertical": false,
+              "visibility": [
+                {
+                  "condition": "state",
+                  "entity": "light.badkamer",
+                  "state": "on"
+                }
+              ]
+            },
+            {
+              "entity": "switch.spotjes_verlichting",
+              "icon": "mdi:lightbulb-spot",
+              "name": "Spots",
+              "type": "tile"
+            },
+            {
+              "entity": "light.lamp_kantoor",
+              "icon": "mdi:floor-lamp",
+              "name": "Kantoor",
+              "type": "tile"
+            },
+            {
+              "entity": "switch.tuinhuis_verlichting",
+              "icon": "mdi:home",
+              "icon_color": "red",
+              "name": "Tuinhuis",
+              "tap_action": {
+                "action": "toggle"
+              },
+              "type": "custom:mushroom-entity-card"
+            }
+          ],
+          "type": "grid"
+        }
+      ],
+      "title": "Controls",
+      "type": "sections"
+    },
+    {
+      "badges": [],
+      "cards": [],
+      "icon": "mdi:home-lightning-bolt",
+      "layout": {},
+      "max_columns": 3,
+      "sections": [
+        {
+          "cards": [
+            {
+              "heading": "Power usage",
+              "heading_style": "title",
+              "icon": "mdi:home-battery",
+              "type": "heading"
+            },
+            {
+              "graph_span": "12h",
+              "header": {
+                "colorize_states": true,
+                "show": true,
+                "show_states": true,
+                "title": "Grid"
+              },
+              "series": [
+                {
+                  "color": "#4FB06D",
+                  "entity": "sensor.electricity_meter_power_production",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "name": "Production",
+                  "opacity": 0.2,
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2,
+                  "type": "area"
+                },
+                {
+                  "color": "Teal",
+                  "entity": "sensor.electricity_meter_power_consumption",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "invert": true,
+                  "name": "Consumption",
+                  "opacity": 0.2,
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2,
+                  "type": "area"
+                }
+              ],
+              "type": "custom:apexcharts-card",
+              "update_interval": "10s",
+              "yaxis": [
+                {
+                  "max": "~1",
+                  "min": "~-1"
+                }
+              ]
+            }
+          ],
+          "column_span": 1,
+          "type": "grid"
+        },
+        {
+          "cards": [
+            {
+              "grid_options": {
+                "columns": "full",
+                "rows": 1
+              },
+              "heading": "Power usage details",
+              "heading_style": "title",
+              "icon": "mdi:home-battery",
+              "type": "heading"
+            },
+            {
+              "graph_span": "12h",
+              "header": {
+                "colorize_states": true,
+                "show": true,
+                "show_states": true
+              },
+              "series": [
+                {
+                  "color": "#F07857",
+                  "entity": "sensor.tv_en_media_huidig_gebruik",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "name": "Tv & Media",
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                },
+                {
+                  "color": "#4FB06D",
+                  "entity": "sensor.ems_huidig_gebruik",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "name": "Tuinhuis",
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                },
+                {
+                  "color": "#43A5BE",
+                  "entity": "sensor.computer_huidig_gebruik",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "name": "Computer",
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                },
+                {
+                  "color": "#5C62D6",
+                  "entity": "sensor.garage_huidig_gebruik",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "name": "Audio",
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                },
+                {
+                  "color": "#BE398D",
+                  "entity": "sensor.audio_huidig_gebruik",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "name": "Audio",
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                },
+                {
+                  "color": "Teal",
+                  "entity": "sensor.wasmachine_huidig_gebruik",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "name": "Wasmachine",
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                },
+                {
+                  "color": "#4FB06D",
+                  "entity": "sensor.droger_en_vriezer_huidig_gebruik",
+                  "group_by": {
+                    "duration": "1min",
+                    "func": "avg"
+                  },
+                  "name": "Vriezer",
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                }
+              ],
+              "type": "custom:apexcharts-card",
+              "update_interval": "30s"
+            }
+          ],
+          "type": "grid"
+        },
+        {
+          "cards": [
+            {
+              "heading": "New section",
+              "type": "heading"
+            },
+            {
+              "graph_span": "12h",
+              "header": {
+                "colorize_states": true,
+                "show": true,
+                "show_states": true,
+                "title": "Phase Load"
+              },
+              "series": [
+                {
+                  "entity": "sensor.electricity_meter_voltage_phase_l1",
+                  "group_by": {
+                    "duration": "5min",
+                    "func": "max"
+                  },
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                },
+                {
+                  "entity": "sensor.electricity_meter_voltage_phase_l2",
+                  "group_by": {
+                    "duration": "5min",
+                    "func": "max"
+                  },
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                },
+                {
+                  "entity": "sensor.electricity_meter_voltage_phase_l3",
+                  "group_by": {
+                    "duration": "5min",
+                    "func": "max"
+                  },
+                  "show": {
+                    "legend_value": false
+                  },
+                  "stroke_width": 2
+                }
+              ],
+              "type": "custom:apexcharts-card",
+              "update_interval": "10s"
+            }
+          ],
+          "type": "grid"
+        },
+        {
+          "cards": [
+            {
+              "heading": "New section",
+              "type": "heading"
+            },
+            {
+              "chart_type": "line",
+              "days_to_show": 30,
+              "entities": [
+                "sensor.saj_pv1_power"
+              ],
+              "period": "day",
+              "stat_types": [
+                "mean",
+                "min",
+                "max"
+              ],
+              "type": "statistics-graph"
+            },
+            {
+              "chart_type": "line",
+              "days_to_show": 30,
+              "entities": [
+                "sensor.saj_pv2_power"
+              ],
+              "period": "day",
+              "stat_types": [
+                "mean",
+                "min",
+                "max"
+              ],
+              "type": "statistics-graph"
+            }
+          ],
+          "type": "grid"
+        }
+      ],
+      "subview": false,
+      "title": "Energy",
+      "type": "sections"
+    },
+    {
+      "icon": "mdi:weather-lightning-rainy",
+      "max_columns": 3,
+      "path": "weather",
+      "sections": [
+        {
+          "cards": [
+            {
+              "heading": "Weather",
+              "heading_style": "title",
+              "icon": "mdi:weather-lightning",
+              "type": "heading"
+            },
+            {
+              "color": "amber",
+              "entity": "sensor.temperature",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "color": "amber",
+              "entity": "sensor.vaillant_arotherm_heat_pump_outside_temperature",
+              "features": [
+                {
+                  "type": "trend-graph"
+                }
+              ],
+              "features_position": "bottom",
+              "name": "Outside Temperature",
+              "type": "tile",
+              "vertical": false
+            },
+            {
+              "entity": "weather.buienradar",
+              "forecast_slots": 12,
+              "forecast_type": "daily",
+              "secondary_info_attribute": "humidity",
+              "show_current": false,
+              "show_forecast": true,
+              "type": "weather-forecast"
+            },
+            {
+              "autozoom": true,
+              "entities": [
+                "sensor.neerslag_buienalarm_regen_data"
+              ],
+              "entity": "sensor.neerslag_buienalarm_regen_data",
+              "type": "custom:neerslag-card"
+            }
+          ],
+          "type": "grid"
+        },
+        {
+          "cards": [
+            {
+              "heading": "Radar",
+              "heading_style": "title",
+              "icon": "mdi:radar",
+              "type": "heading"
+            },
+            {
+              "camera_image": "camera.buienradar",
+              "camera_view": "auto",
+              "entity": "camera.buienradar",
+              "show_name": false,
+              "show_state": false,
+              "type": "picture-entity"
+            }
+          ],
+          "type": "grid"
+        }
+      ],
+      "title": "Weather",
+      "type": "sections"
+    },
+    {
+      "cards": [
+        {
+          "entities": [
+            "sensor.achterdeur_contact_sensor_battery",
+            "sensor.emmeloord_range_extender_battery",
+            "sensor.keuken_motion_sensor_battery",
+            "sensor.toetsenpaneel_ingang_battery",
+            "sensor.voordeur_contact_sensor_battery",
+            "sensor.voordeur_motion_sensor_battery_2",
+            "sensor.home_woonkamer_batterij"
+          ],
+          "state_color": true,
+          "type": "entities"
+        },
+        {
+          "camera_image": "camera.home_woonkamer_camera_snapshot",
+          "camera_view": "auto",
+          "entities": [
+            {
+              "entity": "camera.woonkamer"
+            },
+            {
+              "entity": "binary_sensor.home_woonkamer_beweging"
+            }
+          ],
+          "image": "https://demo.home-assistant.io/stub_config/kitchen.png",
+          "title": "Woonkamer",
+          "type": "picture-glance"
+        },
+        {
+          "camera_image": "camera.deurbel_snapshot",
+          "camera_view": "auto",
+          "entities": [
+            {
+              "entity": "camera.voordeur"
+            },
+            {
+              "entity": "binary_sensor.voordeur_beweging"
+            }
+          ],
+          "image": "https://demo.home-assistant.io/stub_config/kitchen.png",
+          "title": "Voordeur",
+          "type": "picture-glance"
+        },
+        {
+          "camera_image": "camera.tuin_camera_snapshot",
+          "camera_view": "auto",
+          "entities": [
+            {
+              "entity": "camera.tuin"
+            },
+            {
+              "entity": "binary_sensor.tuin_beweging"
+            }
+          ],
+          "image": "https://demo.home-assistant.io/stub_config/kitchen.png",
+          "title": "Tuin",
+          "type": "picture-glance"
+        }
+      ],
+      "icon": "mdi:webcam",
+      "path": "camera-s",
+      "title": "Camera's",
+      "type": "masonry"
+    },
+    {
+      "badges": [],
+      "cards": [
+        {
+          "content": "https://github.com/kalkih/mini-graph-card#example-usage\n\nhttps://github.com/RomRider/apexcharts-card",
+          "title": "Cards documentation",
+          "type": "markdown"
+        }
+      ],
+      "icon": "mdi:help",
+      "path": "help",
+      "title": "Help"
+    },
+    {
+      "cards": [],
+      "header": {
+        "badges_position": "top",
+        "badges_wrap": "scroll",
+        "layout": "center"
+      },
+      "icon": "mdi:disc-player",
+      "max_columns": 1,
+      "sections": [
+        {
+          "cards": [
+            {
+              "artwork": "full-cover-fit",
+              "entity": "media_player.cinema",
+              "group": false,
+              "info": "scroll",
+              "replace_mute": "play_pause",
+              "sound_mode": "icon",
+              "source": "icon",
+              "toggle_power": true,
+              "type": "custom:mini-media-player",
+              "volume_stateless": true
+            }
+          ],
+          "column_span": 1,
+          "type": "grid"
+        }
+      ],
+      "title": "Now Playing",
+      "type": "sections"
+    }
+  ]
+}

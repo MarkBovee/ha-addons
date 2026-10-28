@@ -1,0 +1,390 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HEMS: choose your entities",
+        "description": "HEMS only talks to Home Assistant entities. Pick one sensor per role. This version plans in dry-run and never switches a device.",
+        "data": {
+          "soc_entity": "Battery state of charge (%)",
+          "battery_power_entity": "Battery power (W)",
+          "battery_power_positive_is_discharging": "Battery power is positive while discharging",
+          "pv_entity": "PV power (W)",
+          "grid_entity": "Grid power at the meter (W, positive = import)",
+          "inverter_output_entity": "Inverter AC output (W, optional; improves the house-load estimate)",
+          "ev_power_entity": "EV charger power (W, optional; excluded from the base load)",
+          "price_curve_entity": "Import price sensor with a price_curve attribute (optional; fallback and cross-check)"
+        }
+      },
+      "reconfigure": {
+        "title": "HEMS: change the optional entities",
+        "description": "Only the optional roles can change here; the battery, PV and grid entities stay as set up. Clear a field to stop using that role.",
+        "data": {
+          "inverter_output_entity": "Inverter AC output (W, optional; improves the house-load estimate)",
+          "ev_power_entity": "EV charger power (W, optional; excluded from the base load)",
+          "price_curve_entity": "Import price sensor with a price_curve attribute (optional; fallback and cross-check)",
+          "pv_extra_entities": "More PV power sensors (added to the PV sensor; several arrays or inverters)",
+          "ev_plugged_entity": "EV: car connected (binary sensor)",
+          "ev_charging_entity": "EV: car charging (binary sensor)",
+          "ev_problem_entity": "EV: socket problem (binary sensor)",
+          "ev_soc_entity": "EV: car state of charge (%)",
+          "ev_limit_entity": "EV: charge limit number (only its maximum is read)",
+          "ev_current_l1_entity": "EV: charger current L1 (A)",
+          "ev_current_l2_entity": "EV: charger current L2 (A)",
+          "ev_current_l3_entity": "EV: charger current L3 (A)",
+          "meter_current_l1_entity": "Grid meter: current L1 (A)",
+          "meter_current_l2_entity": "Grid meter: current L2 (A)",
+          "meter_current_l3_entity": "Grid meter: current L3 (A)",
+          "meter_export_l1_entity": "Grid meter: feed-in power L1 (above 0 = exporting)",
+          "meter_export_l2_entity": "Grid meter: feed-in power L2",
+          "meter_export_l3_entity": "Grid meter: feed-in power L3",
+          "water_heater_entity": "Dashboard: water heater or tank temperature",
+          "legionella_last_entity": "Dashboard: time of the last legionella run (sensor)",
+          "compare_action_entity": "Dashboard: action sensor of the old battery manager (transition comparison)"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "One of the chosen entities does not exist."
+    },
+    "abort": {
+      "already_configured": "HEMS is already set up.",
+      "reconfigure_successful": "The entities were changed and HEMS was reloaded."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HEMS settings",
+        "description": "Settings in the parts of the HEMS plan: modules first, then the base components they share. Fold a part open to change it, then save once.",
+        "sections": {
+          "module_battery": {
+            "name": "Module: battery",
+            "description": "The battery planner: capacity, power limits and the profit margin it needs.",
+            "data": {
+              "capacity_kwh": "Usable battery capacity (kWh)",
+              "max_power_kw": "Maximum charge/discharge power (kW)",
+              "hard_min_soc_pct": "Hard minimum SoC (%)",
+              "reserve_soc_pct": "Sell floor, minimum (%)",
+              "reserve_max_soc_pct": "Sell floor, maximum (%)",
+              "reserve_load_factor": "Sell floor: load forecast factor",
+              "round_trip_eff": "Round-trip efficiency (0-1)",
+              "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
+              "hold_cost_kwh_h": "Waiting cost (EUR per stored kWh per hour; 0 = off, higher charges later before a sale)"
+            }
+          },
+          "module_water_heater": {
+            "name": "Module: water heater",
+            "description": "Plans the daily heating run for the load forecast. HEMS does not control the heating.",
+            "data": {
+              "water_heater_enabled": "Water heater module on (plans the daily heating run for the load forecast; HEMS does not control the heating)",
+              "water_heater_energy_kwh": "Water heater: energy of a normal heating run (kWh)",
+              "water_heater_hours": "Water heater: length of a normal heating run (hours)",
+              "water_heater_night_energy_kwh": "Water heater: energy of the night run (kWh, 0 = no night run)",
+              "water_heater_legionella_energy_kwh": "Water heater: energy of the legionella run (kWh)",
+              "water_heater_legionella_hours": "Water heater: length of the legionella run (hours)",
+              "water_heater_legionella_weekday": "Water heater: legionella day"
+            }
+          },
+          "module_ev": {
+            "name": "Module: EV",
+            "description": "Plans when and how hard to charge the car (dry-run: nothing is written to the charger). Deadlines are local times per weekday.",
+            "data": {
+              "ev_enabled": "EV module on (plans the charge of the car; HEMS does not control the charger)",
+              "ev_capacity_kwh": "Car battery capacity (kWh)",
+              "ev_charge_efficiency": "Charging efficiency, grid to battery (0-1)",
+              "ev_target_required_pct": "Required target SoC at every deadline (%)",
+              "ev_target_max_pct": "Maximum target SoC, only through cheap quarters (%)",
+              "ev_max_price": "Price threshold for the extra energy (EUR/kWh, effective price; surplus counts at the export price)",
+              "ev_solar_only": "Extra energy only where PV surplus covers the minimum current",
+              "ev_min_current_a": "Minimum charging current per phase (A)",
+              "ev_max_current_a": "Maximum charging current per phase (A)",
+              "ev_min_on_minutes": "Minimum minutes on",
+              "ev_min_off_minutes": "Minimum minutes off",
+              "ev_deadline_monday": "Deadline Monday (HH:MM, empty = none)",
+              "ev_deadline_tuesday": "Deadline Tuesday (HH:MM, empty = none)",
+              "ev_deadline_wednesday": "Deadline Wednesday (HH:MM, empty = none)",
+              "ev_deadline_thursday": "Deadline Thursday (HH:MM, empty = none)",
+              "ev_deadline_friday": "Deadline Friday (HH:MM, empty = none)",
+              "ev_deadline_saturday": "Deadline Saturday (HH:MM, empty = none)",
+              "ev_deadline_sunday": "Deadline Sunday (HH:MM, empty = none)"
+            }
+          },
+          "base_prices": {
+            "name": "Base: prices",
+            "description": "Day-ahead prices and the price components every module uses; they mirror the energy-prices add-on.",
+            "data": {
+              "nordpool_enabled": "Fetch day-ahead prices from Nord Pool",
+              "delivery_area": "Nord Pool delivery area",
+              "import_vat_multiplier": "Import VAT multiplier",
+              "import_markup": "Import markup (EUR/kWh)",
+              "import_energy_tax": "Import energy tax (EUR/kWh)",
+              "export_vat_multiplier": "Export VAT multiplier (netting only)",
+              "export_bonus_pct": "Solar bonus percentage (0.10 = 10%)",
+              "export_fixed_bonus": "Solar bonus fixed (EUR/kWh)",
+              "export_energy_tax": "Export energy tax refund (EUR/kWh, netting only)",
+              "salderen": "Netting (salderen) applies",
+              "salderen_until": "Netting ends on (first day without netting, empty = only the switch)",
+              "bonus_only_daylight": "Percentage bonus only between sunrise and sunset",
+              "bonus_only_positive_price": "Percentage bonus only for a positive market price"
+            }
+          },
+          "base_forecast": {
+            "name": "Base: forecasts (PV and weather)",
+            "description": "Weather source and the PV forecast every module uses.",
+            "data": {
+              "weather_enabled": "Fetch weather from Open-Meteo",
+              "pv_gain_w_per_wm2": "PV gain (W per W/m2, 0 = calibrate automatically)",
+              "pv_max_ac_w": "Peak PV output (W): the PV forecast is clipped here; use what the panels peak at, or the inverter AC limit if that is lower"
+            }
+          },
+          "base_grid": {
+            "name": "Base: grid connection",
+            "description": "The limit of the connection per phase, shared by every load.",
+            "data": {
+              "grid_limit_a": "Connection limit per phase (A)",
+              "grid_margin_a": "Margin kept free below the limit (A)"
+            }
+          },
+          "logging": {
+            "name": "Logging",
+            "description": "What HEMS writes to its decision logs.",
+            "data": {
+              "trace_full_plan": "Log the full plan every cycle (plans.jsonl, about 1 MB per day)"
+            }
+          }
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_action": {
+        "name": "Battery action",
+        "state": {
+          "charge": "Charge",
+          "discharge": "Discharge",
+          "idle": "Idle"
+        }
+      },
+      "battery_setpoint": {
+        "name": "Battery setpoint"
+      },
+      "expected_saving": {
+        "name": "Expected revenue"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "ok": "OK",
+          "no_soc": "No battery SoC",
+          "stale_soc": "Battery SoC is stale",
+          "no_prices": "No prices",
+          "no_price_for_now": "No price for the current quarter"
+        }
+      },
+      "import_price": {
+        "name": "Import price"
+      },
+      "export_price": {
+        "name": "Export price"
+      },
+      "pv_forecast_24h": {
+        "name": "PV forecast next 24 h"
+      },
+      "plan": {
+        "name": "Plan"
+      },
+      "executor": {
+        "name": "Executor",
+        "state": {
+          "as_planned": "As planned",
+          "no_plan": "No plan",
+          "expired": "Plan expired",
+          "no_soc": "No battery SoC",
+          "stale_soc": "Battery SoC is stale",
+          "at_floor": "Held at the SoC floor",
+          "limited_floor": "Slowed above the SoC floor",
+          "at_full": "Held, battery full",
+          "limited_full": "Slowed, battery nearly full"
+        }
+      },
+      "pv_forecast_next_hour": {
+        "name": "PV forecast next hour"
+      },
+      "load_forecast_next_hour": {
+        "name": "House load forecast next hour"
+      },
+      "irradiance_forecast": {
+        "name": "Solar irradiance forecast next hour"
+      },
+      "temperature_forecast": {
+        "name": "Temperature forecast next hour"
+      },
+      "charge_window": {
+        "name": "Charge window"
+      },
+      "discharge_window": {
+        "name": "Discharge window"
+      },
+      "sell_window": {
+        "name": "Next sell window"
+      },
+      "water_heater_plan": {
+        "name": "Water heater plan"
+      },
+      "ev_plan": {
+        "name": "EV plan"
+      },
+      "ev_status": {
+        "name": "EV status",
+        "state": {
+          "off": "Off",
+          "not_plugged": "Not plugged in",
+          "no_soc": "No car SoC",
+          "problem": "Problem",
+          "idle": "Idle",
+          "planned": "Planned",
+          "deadline_at_risk": "Deadline at risk",
+          "forced": "Forced"
+        }
+      },
+      "ev_setpoint": {
+        "name": "EV setpoint"
+      },
+      "price_average_today": {
+        "name": "Average price today"
+      },
+      "price_min_today": {
+        "name": "Minimum price today"
+      },
+      "price_max_today": {
+        "name": "Maximum price today"
+      },
+      "max_profit_today": {
+        "name": "Max profit today"
+      },
+      "plan_diff": {
+        "name": "Plan changes"
+      },
+      "last_cycle": {
+        "name": "Last cycle"
+      },
+      "cost_today": {
+        "name": "Cost today"
+      },
+      "realised_vs_baseline_today": {
+        "name": "Result vs self-consumption today"
+      },
+      "realised_total": {
+        "name": "Result vs self-consumption total"
+      },
+      "pv_forecast_error": {
+        "name": "PV forecast error 7d"
+      },
+      "load_forecast_error": {
+        "name": "Load forecast error 7d"
+      },
+      "recommendations": {
+        "name": "Recommendations"
+      },
+      "battery_schedule": {
+        "name": "Battery schedule"
+      }
+    },
+    "binary_sensor": {
+      "tomorrow_prices_available": {
+        "name": "Tomorrow prices available"
+      },
+      "alert_data": {
+        "name": "Alert data"
+      },
+      "alert_deadline": {
+        "name": "Alert EV deadline"
+      },
+      "alert_not_executed": {
+        "name": "Alert plan not executed"
+      },
+      "alert_legionella": {
+        "name": "Alert legionella overdue"
+      }
+    },
+    "switch": {
+      "ev_force_charge": {
+        "name": "EV force charge"
+      },
+      "master_arm": {
+        "name": "Master control"
+      }
+    },
+    "select": {
+      "battery_mode": {
+        "name": "Battery mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advisory"
+        }
+      },
+      "ev_mode": {
+        "name": "EV mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advisory"
+        }
+      },
+      "water_heater_mode": {
+        "name": "Water heater mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advisory"
+        }
+      }
+    }
+  },
+  "selector": {
+    "weekday": {
+      "options": {
+        "monday": "Monday",
+        "tuesday": "Tuesday",
+        "wednesday": "Wednesday",
+        "thursday": "Thursday",
+        "friday": "Friday",
+        "saturday": "Saturday",
+        "sunday": "Sunday"
+      }
+    }
+  },
+  "services": {
+    "apply_recommendation": {
+      "name": "Apply recommendation",
+      "description": "Mark an open HEMS recommendation as applied and fire the hems_recommendation_applied event with what to do.",
+      "fields": {
+        "id": {
+          "name": "Recommendation id",
+          "description": "The id from sensor.hems_recommendations."
+        }
+      }
+    },
+    "dismiss_recommendation": {
+      "name": "Dismiss recommendation",
+      "description": "Hide a recommendation until the plan asks something else.",
+      "fields": {
+        "id": {
+          "name": "Recommendation id",
+          "description": "The id from sensor.hems_recommendations."
+        }
+      }
+    },
+    "disarm_all": {
+      "name": "Everything to dry-run",
+      "description": "Switch the master off and put every module back in dry-run."
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "HEMS is not loaded"
+    },
+    "unknown_recommendation": {
+      "message": "No open recommendation with this id (the plan may have changed)"
+    }
+  }
+}

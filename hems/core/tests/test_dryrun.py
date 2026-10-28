@@ -1,0 +1,130 @@
+import csv
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from hems.contracts import Reading
+from hems.dryrun import (STATUS_NO_PRICE_NOW, STATUS_NO_PRICES, STATUS_NO_SOC, STATUS_OK, STATUS_STALE_SOC, EngineInputs,
+                         EngineSettings, step)
+from hems.forecast import LOCAL_TZ
+from hems.weather import Weather, open_meteo_params, parse_open_meteo
+
+FIXTURES = Path(__file__).parent / "fixtures"
+SETTINGS = EngineSettings()
+NOW = datetime(2026, 10, 6, 11, 7, tzinfo=LOCAL_TZ)
+
+
+def day_curve(local_day="2026-10-06"):
+    """The recorded import curve of one local day, as the energy-prices sensor would publish it."""
+    first = datetime.fromisoformat(local_day).replace(tzinfo=LOCAL_TZ)
+    with open(FIXTURES / "quarter_import_prices.csv", newline="") as f:
+        rows = [(datetime.fromisoformat(r["quarter_utc"]), float(r["import_price_eur_kwh"])) for r in csv.DictReader(f)]
+    return [(t, p) for t, p in rows if first <= t < first + timedelta(days=1)]
+
+
+def inputs(**changes):
+    """Engine inputs for 6 Oct 11:07 local with sensible defaults; override single fields per test."""
+    base = dict(now=NOW, soc_pct=Reading(40.0, NOW - timedelta(minutes=1)), import_curve=day_curve(), load_history_w=[], ghi_w_m2=None)
+    return EngineInputs(**{**base, **changes})
+
+
+def test_a_normal_quarter_gives_a_decision_with_a_reason_and_notes_missing_inputs():
+    """A normal quarter yields a command for the right slot, a reason, and flags the default load and missing weather."""
+    out = step(inputs(), SETTINGS)
+    assert out.status == STATUS_OK and out.decision.command.start == datetime(2026, 10, 6, 11, 0, tzinfo=LOCAL_TZ)
+    assert out.trace["reason"] and out.trace["load_source"] == "default" and out.trace["weather"] is False
+
+
+def test_no_decision_without_a_fresh_soc():
+    """A missing or hour-old SoC gives no decision and a status that says why."""
+    assert step(inputs(soc_pct=None), SETTINGS).status == STATUS_NO_SOC
+    stale = step(inputs(soc_pct=Reading(40.0, NOW - timedelta(hours=1))), SETTINGS)
+    assert stale.status == STATUS_STALE_SOC and stale.decision is None and stale.trace["soc_age_s"] == 3600
+
+
+def test_no_decision_without_prices_for_the_current_quarter():
+    """No curve, or only yesterday's curve, gives no decision with the right status."""
+    assert step(inputs(import_curve=[]), SETTINGS).status == STATUS_NO_PRICES
+    old = step(inputs(import_curve=day_curve("2026-10-05")), SETTINGS)       # yesterday's curve only
+    assert old.status == STATUS_NO_PRICE_NOW and old.trace["prices_end"]
+
+
+def test_history_and_weather_feed_the_forecasts():
+    """Recorded load history and irradiance replace the default load and the zero PV forecast."""
+    history = [(NOW.replace(hour=h, minute=0) - timedelta(days=d), 600.0) for d in range(1, 4) for h in range(24)]
+    ghi = {t: 300.0 for t, _ in day_curve()}
+    out = step(inputs(load_history_w=history, ghi_w_m2=ghi), SETTINGS)
+    assert out.trace["load_source"] == "history" and out.trace["weather"] is True
+    noon = datetime(2026, 10, 6, 12, 0, tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+    assert out.load_kwh[noon] == 0.6 * 0.25 and out.pv_kwh[noon] == 300.0 * 7.0 / 1000 * 0.25
+
+
+def test_open_meteo_payload_is_rekeyed_to_quarter_starts():
+    """Open-Meteo interval-end labels become quarter starts and null values are skipped."""
+    payload = {"minutely_15": {"time": ["2026-10-13T12:15", "2026-10-13T12:30", "2026-10-13T12:45"],
+                               "shortwave_radiation": [400.0, None, 410.0], "temperature_2m": [11.0, 11.1, 11.2]}}
+    weather = parse_open_meteo(payload, datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc))
+    assert isinstance(weather, Weather)
+    assert weather.ghi_w_m2 == {datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc): 400.0,
+                                datetime(2026, 10, 13, 12, 30, tzinfo=timezone.utc): 410.0}     # the null quarter is skipped
+    assert open_meteo_params(52.0, 5.0)["timezone"] == "UTC"
+
+
+def test_weather_request_does_not_leak_the_exact_home_location():
+    """The weather request carries coordinates rounded to about one kilometre."""
+    params = open_meteo_params(52.090731, 5.121398)
+    assert (params["latitude"], params["longitude"]) == (52.09, 5.12)
+
+
+def market_for(local_day="2026-10-06"):
+    """The recorded import curve turned back into market prices, as the Nord Pool source would deliver them."""
+    from hems.contracts import MarketPrices
+    from hems.prices import PriceModel
+    curve = day_curve(local_day)
+    return MarketPrices(tuple(t for t, _ in curve), tuple(PriceModel().market_from_import(p) for _, p in curve), NOW)
+
+
+def test_the_market_source_wins_and_is_cross_checked_against_the_curve():
+    """With a market series and a curve the market is used and the import-price difference is traced."""
+    out = step(inputs(market=market_for()), SETTINGS)
+    assert out.status == STATUS_OK and out.trace["price_source"] == "market" and out.trace["price_check_max_diff"] < 1e-9
+
+
+def test_a_market_without_the_current_quarter_falls_back_to_the_curve():
+    """A stale market series (yesterday) does not block planning on the price curve."""
+    out = step(inputs(market=market_for("2026-10-05")), SETTINGS)
+    assert out.status == STATUS_OK and out.trace["price_source"] == "curve"
+
+
+def test_a_market_alone_is_enough_and_no_prices_anywhere_is_reported():
+    """The market alone suffices; with neither source the status is no_prices."""
+    assert step(inputs(import_curve=[], market=market_for()), SETTINGS).trace["price_source"] == "market"
+    assert step(inputs(import_curve=[], market=None), SETTINGS).status == STATUS_NO_PRICES
+
+
+def test_the_ev_module_adds_its_plan_to_the_load_the_battery_plans_around():
+    """Intent: with the EV module on and a car plugged in, the planned charge appears in the load forecast and in the trace; with it off, neither does.
+    Why: the battery must see the car as a load, and a module that is off must not change today's plans."""
+    from dataclasses import replace
+    from hems.ev import EvConfig, EvState
+    cfg = EvConfig(enabled=True, max_price_eur_kwh=0.60, target_required_pct=40.0)
+    settings = replace(SETTINGS, ev=cfg)
+    car = EvState(True, Reading(40.0, NOW - timedelta(minutes=1)))
+    off = step(inputs(), SETTINGS)
+    on = step(inputs(ev=car), settings)
+    assert "ev" not in off.trace and off.ev_plan is None
+    assert on.ev_plan.quarters and on.trace["ev"]["planned_kwh"] > 0
+    extra = sum(on.load_kwh.values()) - sum(off.load_kwh.values())
+    assert abs(extra - on.ev_plan.planned_kwh()) < 1e-6
+
+
+def test_the_connection_limit_caps_grid_charging_when_the_ev_module_is_on():
+    """Intent: with a low grid limit the battery plan never imports more than the connection allows in a quarter.
+    Why: a battery charging at 8 kW next to a car at 11 kW is more than 3x25 A; the limit is physical, not a price."""
+    from dataclasses import replace
+    from hems.ev import EvConfig, EvState
+    settings = replace(SETTINGS, ev=EvConfig(enabled=True), grid_limit_a=9.0, grid_margin_a=1.0)
+    out = step(inputs(ev=EvState(False, None)), settings)
+    cap = 3 * 230 * 8 / 1000 * 0.25
+    assert max(slot.grid_kwh for slot in out.decision.plan.slots) <= cap + 1e-6
+    uncapped = step(inputs(), SETTINGS)
+    assert max(slot.grid_kwh for slot in uncapped.decision.plan.slots) > cap

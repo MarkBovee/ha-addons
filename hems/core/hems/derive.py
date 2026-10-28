@@ -1,0 +1,17 @@
+"""Vendor-free derivations from contract readings."""
+from hems.contracts import Reading
+
+
+def derive_house_load(grid_w: Reading | None, pv_w: Reading | None, battery_w: Reading | None,
+                      ev_w: Reading | None = None) -> Reading | None:
+    """Base house load from the energy balance: grid + PV - battery (+charging) - EV.
+
+    Returns None when grid, PV or battery is unavailable (a partial balance would be wrong), and takes the
+    oldest observation time of the inputs so freshness checks stay honest. A vendor module may replace this
+    with a direct reading when its inverter measures the house side better."""
+    parts = [grid_w, pv_w, battery_w]
+    if any(p is None for p in parts):
+        return None
+    inputs = parts + ([ev_w] if ev_w is not None else [])
+    watts = grid_w.value + pv_w.value - battery_w.value - (ev_w.value if ev_w is not None else 0.0)
+    return Reading(max(watts, 0.0), min(p.observed_at for p in inputs))
