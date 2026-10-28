@@ -56,6 +56,7 @@ class EngineInputs:
     ghi_w_m2: Mapping[datetime, float] | None         # irradiance by quarter start; None = no weather data
     market: MarketPrices | None = None                # preferred price source: market prices, priced by the model
     ev: EvState | None = None                         # the car and its socket; None = unknown (the EV module then says so)
+    legionella_last: datetime | None = None           # the water heater's last legionella run; None = unknown (the run is planned as due)
 
 
 @dataclass(frozen=True)
@@ -152,7 +153,7 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
     prices, source, price_check = _prices(inputs, settings, start)
     if prices is None:
         return _failure(STATUS_NO_PRICES, inputs)
-    runs = tuple(plan_runs(prices, inputs.now, settings.water_heater, settings.tz))
+    runs = tuple(plan_runs(prices, inputs.now, settings.water_heater, settings.tz, inputs.legionella_last))
     load, load_source = _load_forecast(inputs, settings, start, settings.max_slots, runs)
     pv = pv_kwh_per_quarter(inputs.ghi_w_m2 or {}, settings.pv_gain_w_per_wm2, settings.pv_max_ac_w)
     ev_plan = _ev_plan(inputs, settings, prices, load, pv)

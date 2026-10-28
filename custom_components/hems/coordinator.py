@@ -24,8 +24,9 @@ from .adapters import base_load_history, parse_price_curve, reading_from_state, 
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT, CONF_EV_PLUGGED,
                     CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_PRICE_CURVE,
                     CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
-                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, LEGIONELLA_OVERDUE, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
+                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
+from .engine.heater import legionella_overdue
 from .engine.contracts import MarketPrices
 from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot, window_tree
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
@@ -451,7 +452,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             now=now, soc_pct=reading_from_state(self.hass.states.get(self._entity(CONF_SOC) or "")),
             import_curve=parse_price_curve(price_state.attributes.get("price_curve") if price_state else None),
             load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market,
-            ev=self.ev_state(settings) if settings.ev.enabled else None)
+            ev=self.ev_state(settings) if settings.ev.enabled else None, legionella_last=self.legionella_last())
         previous = self._previous
         output = await self.hass.async_add_executor_job(step, inputs, settings, previous)
         if output.decision:
@@ -619,18 +620,25 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         risk = bool(ev and ev.status == "deadline_at_risk")
         out["deadline"] = {"on": risk, "reason": f"{ev.shortfall_kwh:.1f} kWh short before {ev.deadline.isoformat() if ev.deadline else '?'}" if risk else ""}
         out["not_executed"] = {"on": bool(snap.execution.overridden), "reason": snap.execution.reason if snap.execution.overridden else ""}
-        last = self.hass.states.get(self._entity(CONF_LEGIONELLA_LAST) or "")
-        when = None
-        if last and last.state not in ("unknown", "unavailable", ""):
-            when = dt_util.parse_datetime(last.state)
-            if when is None and (day := dt_util.parse_date(last.state)) is not None:
-                when = datetime.combine(day, time(0), tzinfo=dt_util.get_default_time_zone())
-        if when is not None and when.tzinfo is None:
-            when = when.replace(tzinfo=dt_util.get_default_time_zone())
-        overdue = bool(when and dt_util.utcnow() - when > LEGIONELLA_OVERDUE)
+        when = self.legionella_last()
+        tz = dt_util.get_default_time_zone()
+        overdue = legionella_overdue(when, dt_util.now().date(), tz)
         out["legionella"] = {"on": overdue, "reason": f"last run {when.isoformat()}" if overdue else "", "last": when.isoformat() if when else None,
                              "configured": bool(self._entity(CONF_LEGIONELLA_LAST))}
         return out
+
+    def legionella_last(self) -> datetime | None:
+        """The last legionella run from its role (the add-on's `sensor.wh_last_legionella`, 'YYYY-MM-DD HH:MM' local); None when unknown."""
+        last = self.hass.states.get(self._entity(CONF_LEGIONELLA_LAST) or "")
+        if not last or last.state in ("unknown", "unavailable", "", "Never"):
+            return None
+        tz = dt_util.get_default_time_zone()
+        when = dt_util.parse_datetime(last.state)
+        if when is None and (day := dt_util.parse_date(last.state)) is not None:
+            when = datetime.combine(day, time(0))
+        if when is not None and when.tzinfo is None:
+            when = when.replace(tzinfo=tz)
+        return when
 
     def dashboard_payload(self) -> dict[str, Any] | None:
         """The panel's data for the latest snapshot (hems.dashboard), cached until the snapshot changes; None before the first cycle."""
