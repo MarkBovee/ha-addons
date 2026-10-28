@@ -9,10 +9,10 @@
  * live power comes straight from the entities of the roles in the settings. Nothing here writes to a device: the only
  * action is the EV override switch, behind an inline confirmation.
  *
- * URL options: ?kiosk (no header, for the wall tablet), ?theme=dark|light (force a theme), #now|plan|prices|battery|ev|water-heater|grid|learn|control (old Dutch hashes still work).
+ * URL options: ?kiosk (one screen for the wall tablet), ?theme=dark|light (force a theme), #today|plan|devices|insights|settings (older hashes still land on the right view).
  */
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const Q_MS = 15 * 60 * 1000;
 
 /* ------------------------------------------------------------------ store */
@@ -119,7 +119,8 @@ const TIER_LABEL = { deadline: "deadline", cheap: "cheap", forced: "forced", sur
 
 const TOKENS = `
 :host {
-  --bg:#eef0f2; --panel:#ffffff; --panel-2:#f5f6f8; --line:#d5d9de; --line-2:#e4e7eb;
+  --bg:#f4f5f7; --panel:#ffffff; --panel-2:#eceef1; --line:#d9dde2; --line-2:#e7eaee;
+  --cheap-bar:#c9d8f2; --mid-bar:#dde1e6; --dear-bar:#f1d9c3;
   --fg:#1b2026; --fg-2:#4b5560; --fg-3:#6f7984;
   --charge:#2f6fd0; --charge-soft:rgba(47,111,208,.16);
   --discharge:#c0611a; --discharge-soft:rgba(201,102,26,.16);
@@ -132,7 +133,8 @@ const TOKENS = `
   --font-data:ui-monospace,"SFMono-Regular","Roboto Mono",Menlo,Consolas,monospace;
 }
 :host([dark]) {
-  --bg:#12161b; --panel:#1a1f26; --panel-2:#20262e; --line:#323a44; --line-2:#272e37;
+  --bg:#111418; --panel:#161a1f; --panel-2:#20262e; --line:#2a3038; --line-2:#1f242b;
+  --cheap-bar:#2b3a52; --mid-bar:#2a3038; --dear-bar:#4a3a2c;
   --fg:#e6e9ec; --fg-2:#a9b2bc; --fg-3:#8a95a2;
   --charge:#6ea2ef; --charge-soft:rgba(110,162,239,.20);
   --discharge:#f0a05a; --discharge-soft:rgba(240,160,90,.20);
@@ -251,7 +253,7 @@ function drawTimeline(host, svg, payload, opts) {
   while (svg.firstChild) svg.removeChild(svg.firstChild);
   const rows = (payload && payload.quarters) || [];
   const width = Math.max(320, Math.round(svg.getBoundingClientRect().width || svg.parentNode.clientWidth || 600));
-  const font = opts.compact ? 10 : 11;
+  const font = opts.compact ? 11 : 12;
   const L = 44, R = 8;
   const n = Math.min(rows.length, Math.round(opts.hours * 4));
   const view = rows.slice(0, n);
@@ -259,7 +261,8 @@ function drawTimeline(host, svg, payload, opts) {
   const el = (tag, attrs, parent = svg) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
   const txt = (t, x, y, a = {}) => { const e = el("text", { x, y, fill: C("--fg-3"), "font-size": font, ...a }); e.textContent = t; return e; };
 
-  const laneH = { price: opts.compact ? 54 : 84, plan: opts.compact ? 40 : 54, soc: opts.compact ? 54 : 80, pvload: opts.compact ? 46 : 64, devices: 34 };
+  // tall lanes: Mark wants to read details off the chart, not just see its shape
+  const laneH = { price: opts.compact ? 80 : 150, plan: opts.compact ? 52 : 84, soc: opts.compact ? 76 : 140, pvload: opts.compact ? 64 : 120, devices: 40 };
   const lanes = opts.lanes.filter((k) => k !== "devices" || view.some((r) => r.ev_a || r.heat));
   let H = 8; for (const k of lanes) H += laneH[k] + 12; H += 22;
   svg.setAttribute("viewBox", `0 0 ${width} ${H}`);
@@ -446,17 +449,6 @@ function healthHtml(p, store) {
   </span>`;
 }
 
-const MODE_LABEL = { dry_run: "DRY-RUN", advisory: "ADVISORY" };
-function modeStripHtml(p, settings) {
-  const o = (settings && settings.options) || {};
-  const c = (p && p.control) || { modes: {}, armed: false };
-  const tag = (label, enabled, mode) => enabled === false ? `<span class="tag off">${label} · OFF</span>`
-    : mode === "advisory" ? `<span class="tag warn">${label} · ADVISORY</span>` : `<span class="tag dry">${label} · DRY-RUN</span>`;
-  const anyAdvice = Object.values(c.modes || {}).some((m) => m === "advisory");
-  return `<span class="tag ${c.armed ? "fault" : "ok"}" title="No module writes to a device yet">${c.armed ? "ARMED · no module controls yet" : "SAFE · HEMS CONTROLS NOTHING"}</span>
-    ${tag("BATTERY", true, c.modes.battery)} ${tag("EV", o.ev_enabled, c.modes.ev)} ${tag("WATER HEATER", o.water_heater_enabled, c.modes.water_heater)}
-    ${c.armed || anyAdvice ? `<button class="btn danger" data-act="disarm" style="min-height:32px;padding:4px 10px">All to dry-run</button>` : ""}`;
-}
 
 function alertsHtml(p) {
   const a = (p && p.alerts) || {};
@@ -523,33 +515,6 @@ function chainHtml(p) {
   </div>${e.overridden ? `<div class="small" style="color:var(--discharge);margin-top:4px">Executor deviates: ${esc(e.reason)}</div>` : ""}`;
 }
 
-function liveTilesHtml(hass, p, settings) {
-  const r = (settings && settings.roles) || {};
-  // only a missing value is stale: a sensor that keeps the same value (PV at night, an idle charger) has an old last_updated,
-  // the frontend gets no last_reported, and a really stale SoC is caught by HEMS itself (status stale_soc)
-  const tile = (label, entity, valueFn, sub) => {
-    if (!entity) return `<div class="tile"><small>${label}</small><b class="muted">—</b><i>no entity</i></div>`;
-    const a = stateAge(hass, entity);
-    const v = stateNum(hass, entity);
-    const stale = v === null;
-    return `<div class="tile ${stale ? "stale" : ""}" title="${esc(entity)}"><small>${label}</small><b>${v === null ? "—" : valueFn(v)}</b><i>${stale ? "no value" : sub(v) + " · changed " + age(a) + " ago"}</i></div>`;
-  };
-  const pvIds = [r.pv_entity, ...(r.pv_extra_entities || [])].filter(Boolean);
-  const pv = pvIds.length ? pvIds.map((id) => stateNum(hass, id)).reduce((a, b) => (a === null || b === null) ? null : a + b, 0) : null;
-  const pvAge = pvIds.length ? Math.max(...pvIds.map((id) => stateAge(hass, id) ?? Infinity)) : null;
-  const pvStale = pv === null;
-  const battSign = r.battery_power_positive_is_discharging === false ? 1 : -1;     // contract: + charging
-  const dec = p && p.decision;
-  const imp = dec ? dec.import_price : null, exp = dec ? dec.export_price : null;
-  return `<div class="tiles">
-    <div class="tile ${pvStale ? "stale" : ""}"><small>Solar</small><b>${pv === null ? "—" : kw(pv)} kW</b><i>${pvStale ? "no value" : "changed " + age(pvAge) + " ago"}</i></div>
-    ${tile("Grid", r.grid_entity, (v) => `<span class="${v < 0 ? "c-charge" : ""}">${kw(v)}</span> kW`, (v) => v < 0 ? `export ${eur(exp)}` : `import ${eur(imp)}`)}
-    ${tile("Battery", r.battery_power_entity, (v) => { const x = v * battSign; return `<span class="${x > 0 ? "c-charge" : x < 0 ? "c-discharge" : ""}">${kw(x)}</span> kW`; }, (v) => { const x = v * battSign; return x > 0 ? "charging" : x < 0 ? "discharging" : "idle"; })}
-    ${tile("SoC", r.soc_entity, (v) => `${num(v, 0)} %`, (v) => `${num(v / 100 * ((p && p.battery.capacity_kwh) || 25), 1)} kWh`)}
-    ${tile("EV", r.ev_power_entity, (v) => `${kw(v)} kW`, () => (p && p.ev ? EV_LABEL[p.ev.status] || p.ev.status : "charger"))}
-    ${tile("EV SoC", r.ev_soc_entity, (v) => `${num(v, 0)} %`, () => "car")}
-  </div>`;
-}
 
 function whyHtml(p, i) {
   const rows = (p && p.quarters) || [];
@@ -587,19 +552,6 @@ function diffHtml(p) {
     ${d.runs.length > 6 ? `<div class="muted">… and ${d.runs.length - 6} more</div>` : ""}</div>`;
 }
 
-function moneyHtml(p) {
-  const d = p && p.decision;
-  const r = p && p.realised;
-  const t = r && r.today;
-  const signed = (v) => v === null || v === undefined ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + "€ " + num(Math.abs(v), 2);
-  return `<div class="kv">
-    <span>Expected (horizon)</span><span>${d ? "€ " + num(d.expected_saving, 2) : "—"}</span>
-    <span>Net cost today</span><span>${t ? "€ " + num(t.cost, 2) : "—"}</span>
-    <span>Self-consumption would cost</span><span>${t ? "€ " + num(t.baseline_cost, 2) : "—"}</span>
-    <span>Difference today</span><span style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t ? signed(t.gain) : "—"}</span>
-    <span>Total${r && r.since ? " since " + dayShort(r.since) : ""}</span><span>${r ? signed(r.gain_total) : "—"}</span>
-  </div><div class="small muted" style="margin-top:6px">Measured at the meter, priced per quarter; the baseline is the battery on self-consumption only, with the same sun and the same house.${t ? ` ${t.quarters} quarters today.` : ""}</div>`;
-}
 
 function phasesHtml(hass, settings) {
   const r = (settings && settings.roles) || {};
@@ -623,24 +575,199 @@ function upgradeProperty(el, prop) {
   if (Object.prototype.hasOwnProperty.call(el, prop)) { const v = el[prop]; delete el[prop]; el[prop] = v; }
 }
 
+/* ------------------------------------------------------------------ the calm layout: helpers */
+
+/** "today", "tomorrow" or a short weekday for a moment, relative to now, in the HA time zone. */
+function dayWord(d) {
+  const k = localDayKey(d), today = localDayKey(Date.now()), tomorrow = localDayKey(Date.now() + 864e5);
+  return k === today ? "today" : k === tomorrow ? "tomorrow" : fmt("wd", { weekday: "short" }).format(new Date(d));
+}
+
+/** A window as "tomorrow 11:30–15:15" (no day word for today). */
+function span(from, to) { const w = dayWord(from); return `${w === "today" ? "" : w + " "}${hhmm(from)}–${hhmm(to)}`; }
+
+/** The next battery window of one action that has not ended yet. */
+function nextWindow(p, action) {
+  const now = Date.now();
+  return ((p && p.windows) || []).find((w) => w.action === action && new Date(w.to).getTime() > now) || null;
+}
+
+/** What HEMS would do now as one sentence, plus the reason behind it in plain words. */
+function headline(p) {
+  const d = p && p.decision;
+  if (!d) return { lead: STATUS_LABEL[(p && p.meta.status)] || "HEMS plans nothing now", rest: "", why: "As soon as the missing data is back, HEMS plans again within a minute." };
+  const e = p.execution, act = d.action || "idle";
+  const w = e && e.code !== "no_plan" ? e.power_w : d.power_w;
+  const lead = act === "charge" ? `Charging the battery at ${kw(Math.abs(w))} kW.` : act === "discharge" ? `Selling from the battery at ${kw(Math.abs(w))} kW.` : "Holding the battery.";
+  const ch = nextWindow(p, "charge"), dis = nextWindow(p, "discharge");
+  const parts = [];
+  if (ch && act !== "charge") parts.push({ word: "Charging", text: span(ch.from, ch.to), cls: "c-charge" });
+  if (dis && act !== "discharge") parts.push({ word: parts.length ? "selling" : "Selling", text: span(dis.from, dis.to), cls: "c-discharge" });
+  const rest = parts.map((x) => `${x.word} <span class="${x.cls}">${esc(x.text)}</span>`).join(", ");
+  const c = d.compare || {};
+  const why = c.code === "hold" ? `Selling now pays ${eur(c.sell, 3)} €/kWh; keeping it for later is worth ${eur(c.keep, 3)}.`
+    : c.code === "sell" ? `Selling now pays ${eur(c.sell, 3)} €/kWh, more than keeping it (${eur(c.keep, 3)}).`
+    : c.code === "buy" ? `Buying now costs ${eur(c.buy, 3)} €/kWh, less than it is worth later (${eur(c.keep, 3)}).`
+    : esc(d.reason || "");
+  return { lead, rest: rest ? rest + "." : "", why };
+}
+
+/** Problems that deserve attention; an empty list means the status pill stays calm. */
+function problems(p) {
+  if (!p) return ["waiting for the first cycle"];
+  const m = p.meta, out = [];
+  if (m.status !== "ok") out.push(STATUS_LABEL[m.status] || m.status);
+  if (planStale(p)) out.push("plan is stale");
+  if (m.price_source !== "market") out.push("no market prices");
+  if (m.weather_age_min === null || m.weather_age_min > 90) out.push("weather forecast is old");
+  return out;
+}
+
+/** The status pill: calm when everything is fine, named problems otherwise. */
+function pillHtml(p) {
+  const bad = problems(p);
+  const armed = p && p.control && p.control.armed;
+  const mode = armed ? "Armed" : "Dry-run";
+  return `<button type="button" class="pill ${bad.length ? "bad" : ""}" data-act="details" aria-expanded="false">
+    <i class="dot" style="background:var(${bad.length ? "--warn" : "--ok"})"></i>${mode} · ${bad.length ? esc(bad.join(", ")) : "all data fresh"}</button>`;
+}
+
+/** Three live numbers: solar, grid and battery, refreshed with every state change. */
+function liveNumbersHtml(hass, p, s) {
+  const r = (s && s.roles) || {};
+  const pvIds = [r.pv_entity, ...(r.pv_extra_entities || [])].filter(Boolean);
+  const pv = pvIds.length ? pvIds.map((id) => stateNum(hass, id)).reduce((a, b) => (a === null || b === null) ? null : a + b, 0) : null;
+  const grid = stateNum(hass, r.grid_entity);
+  const soc = stateNum(hass, r.soc_entity);
+  const bp = stateNum(hass, r.battery_power_entity);
+  const battW = bp === null ? null : bp * (r.battery_power_positive_is_discharging === false ? 1 : -1);    // + charging
+  const cell = (label, value, unit, sub) => `<div><dt>${label}</dt><dd>${value}<small> ${unit}</small></dd><span class="sub">${sub}</span></div>`;
+  return `<dl class="live">
+    ${cell("Solar", pv === null ? "—" : kw(pv), "kW", "&nbsp;")}
+    ${cell("Grid", grid === null ? "—" : kw(grid), "kW", grid === null ? "&nbsp;" : grid < 0 ? "export" : "import")}
+    ${cell("Battery", soc === null ? "—" : num(soc, 0), "%", battW === null ? "&nbsp;" : Math.abs(battW) < 50 ? "idle" : `${battW > 0 ? "charging" : "discharging"} ${kw(Math.abs(battW))} kW`)}
+  </dl>`;
+}
+
+/** Everything that is planned from now on, for every device, as one time-ordered list. */
+function agenda(p) {
+  if (!p) return [];
+  const now = Date.now();
+  const items = [];
+  for (const w of p.windows || []) {
+    items.push({ from: w.from, to: w.to, cls: `c-${w.action}`, what: w.action === "charge" ? `Battery · charge to ${num(w.soc_to_pct, 0)} %, ${num(w.kwh, 1)} kWh` : `Battery · sell, down to ${num(w.soc_to_pct, 0)} %`, price: w.avg_price_eur_kwh });
+  }
+  for (const h of p.heating || []) items.push({ from: h.from, to: h.to, cls: "", what: `Water heater · ${HEAT_LABEL[h.kind] || h.kind} run, ${num(h.kwh, 1)} kWh`, price: h.avg_price });
+  for (const b of evBlocks((p.quarters || []).filter((r) => r.ev_a))) items.push({ from: b.from, to: b.to, cls: "c-charge", what: `EV · ${num(b.a, 0)} A, ${TIER_LABEL[b.tier] || b.tier}`, price: b.price });
+  return items.filter((x) => new Date(x.to).getTime() > now).sort((a, b) => new Date(a.from) - new Date(b.from));
+}
+
+/** The agenda as rows, or a calm line when nothing is planned. */
+function agendaHtml(p, limit = 6) {
+  const items = agenda(p).slice(0, limit);
+  if (!items.length) return `<p class="quiet">Nothing planned in the known prices.</p>`;
+  return `<div class="agenda">${items.map((x) => `<span class="mono ${x.cls}">${esc(span(x.from, x.to))}</span><span>${esc(x.what)}</span><span class="mono quiet">${eur(x.price, 3)}</span>`).join("")}</div>`;
+}
+
+/** One line on the EV for the Today view. */
+function evLine(p) {
+  const ev = p && p.ev;
+  if (!ev) return "";
+  const dl = ev.deadline ? ` · next deadline ${dayWord(ev.deadline)} ${hhmm(ev.deadline)}` : "";
+  return `EV ${esc(EV_LABEL[ev.status] || ev.status)}${dl}`;
+}
+
+/** A mode switch for one module: dry-run and advisory, auto shown but not offered yet. */
+function modeSegHtml(p, module) {
+  const c = (p && p.control) || { modes: {} };
+  const cur = (c.modes && c.modes[module]) || "dry_run";
+  return `<div class="seg" role="group" aria-label="Mode">${["dry_run", "advisory"].map((m) => `<button type="button" data-mode="${module}:${m}" aria-pressed="${cur === m}">${m === "dry_run" ? "Dry-run" : "Advisory"}</button>`).join("")}<button type="button" disabled title="Comes with the first module that controls a device">Auto</button></div>`;
+}
+
+/**
+ * The Today chart: import price as bars per quarter, the battery state of charge as a line on the same box, and the
+ * plan as a band underneath (charge, sell, EV, water heater). One axis of time, no separate lanes.
+ */
+function drawCombined(host, svg, payload, hours, big) {
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const rows = ((payload && payload.quarters) || []).slice(0, Math.round(hours * 4));
+  const width = Math.max(320, Math.round(svg.getBoundingClientRect().width || svg.parentNode.clientWidth || 800));
+  const C = (v) => cssVar(host, v);
+  const font = big ? 15 : 12;
+  const H = big ? 330 : 300, top = 18, base = H - (big ? 74 : 66), bandY = base + 12, axisY = H - 6;
+  svg.setAttribute("viewBox", `0 0 ${width} ${H}`); svg.setAttribute("height", H);
+  const el = (tag, a) => { const e = document.createElementNS(SVGNS, tag); for (const k in a) e.setAttribute(k, a[k]); svg.appendChild(e); return e; };
+  const txt = (t, a) => { const e = el("text", { fill: C("--fg-3"), "font-size": font, ...a }); e.textContent = t; return e; };
+  if (!rows.length) { txt("No plan to show", { x: width / 2, y: H / 2, "text-anchor": "middle" }); return; }
+  const n = rows.length, qw = width / n;
+  const imps = rows.map((r) => r.imp);
+  const lo = Math.min(0, Math.floor(Math.min(...imps) * 20) / 20), hi = Math.max(0.1, Math.ceil(Math.max(...imps) * 20) / 20);
+  const py = (v) => base - (v - lo) / (hi - lo) * (base - top);
+  const avg = imps.reduce((a, b) => a + b, 0) / n;
+  rows.forEach((r, i) => {
+    const fill = r.imp < avg - 0.03 ? "--cheap-bar" : r.imp > avg + 0.05 ? "--dear-bar" : "--mid-bar";
+    el("rect", { x: i * qw + .5, y: py(r.imp), width: Math.max(1, qw - 1), height: Math.max(0, base - py(r.imp)), fill: C(fill) });
+  });
+  // the cheapest and dearest quarter get their price written on them
+  const iMin = imps.indexOf(Math.min(...imps)), iMax = imps.indexOf(Math.max(...imps));
+  txt(eur(imps[iMax], 3), { x: (iMax + .5) * qw, y: py(imps[iMax]) - 6, "text-anchor": "middle", fill: C("--discharge") });
+  txt(eur(imps[iMin], 3), { x: (iMin + .5) * qw, y: py(imps[iMin]) - 6, "text-anchor": "middle", fill: C("--charge") });
+  // state of charge on the same box, 0-100 %
+  const cap = (payload.battery && payload.battery.capacity_kwh) || 25;
+  const sy = (kwh) => base - kwh / cap * (base - top);
+  let d = "", on = false;
+  rows.forEach((r, i) => { if (r.soc === null || r.soc === undefined) { on = false; return; } d += `${on ? "L" : "M"}${((i + .5) * qw).toFixed(1)},${sy(r.soc).toFixed(1)}`; on = true; });
+  el("path", { d, fill: "none", stroke: C("--fg"), "stroke-width": big ? 3 : 2.5, "stroke-linejoin": "round" });
+  // the plan band: runs of the same action become one rounded bar
+  const runs = (key) => { const out = []; rows.forEach((r, i) => { const k = key(r); const last = out[out.length - 1]; if (k && last && last.k === k && last.end === i) last.end = i + 1; else if (k) out.push({ k, start: i, end: i + 1 }); }); return out; };
+  const bh = big ? 14 : 10;
+  for (const r of runs((q) => q.act === "charge" || q.act === "discharge" ? q.act : null)) {
+    el("rect", { x: r.start * qw, y: bandY, width: (r.end - r.start) * qw, height: bh, rx: bh / 2, fill: C(r.k === "charge" ? "--charge" : "--discharge") });
+  }
+  for (const r of runs((q) => (q.ev_a ? "ev" : null))) el("rect", { x: r.start * qw, y: bandY + bh + 4, width: (r.end - r.start) * qw, height: 5, rx: 2.5, fill: C("--charge") });
+  for (const r of runs((q) => (q.heat ? "heat" : null))) el("rect", { x: r.start * qw, y: bandY + bh + 4, width: (r.end - r.start) * qw, height: 5, rx: 2.5, fill: C("--fg-3") });
+  // hour labels and the now line
+  const t0 = new Date(rows[0].t).getTime();
+  const step = hours > 30 ? 6 : 3;
+  rows.forEach((r, i) => {
+    const ms = new Date(r.t).getTime();
+    if (new Date(ms).getUTCMinutes() !== 0) return;
+    const h = localHour(ms);
+    if (h % step !== 0) return;
+    txt(String(h).padStart(2, "0"), { x: i * qw, y: axisY, "text-anchor": i ? "middle" : "start" });
+    if (h === 0) el("line", { x1: i * qw, x2: i * qw, y1: top, y2: base, stroke: C("--line"), "stroke-dasharray": "2 3" });
+  });
+  const nowX = (Date.now() - t0) / (n * Q_MS) * width;
+  if (nowX >= 0 && nowX <= width) el("line", { x1: nowX, x2: nowX, y1: 0, y2: bandY + bh, stroke: C("--fg"), "stroke-width": 1.5 });
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `Next ${hours} hours: price per quarter, battery level and the planned charge and sell windows.`);
+}
+
 /* ------------------------------------------------------------------ the panel */
 
-const VIEWS = [
-  ["now", "Now"], ["plan", "Plan"], ["prices", "Prices"], ["battery", "Battery"], ["ev", "EV"], ["water-heater", "Water heater"], ["grid", "Grid"], ["learn", "Learn"], ["control", "Control"],
-];
-// the first release used Dutch hashes; keep old bookmarks and the wall tablet URL working
-const VIEW_ALIAS = { nu: "now", prijzen: "prices", batterij: "battery", auto: "ev", boiler: "water-heater", net: "grid", leren: "learn", regie: "control" };
-/** The view key for a location hash: English key, old Dutch alias, or null. */
-function viewOf(hash) { const k = (hash || "").slice(1); const v = VIEW_ALIAS[k] || k; return VIEWS.some((x) => x[0] === v) ? v : null; }
+const VIEWS = [["today", "Today"], ["plan", "Plan"], ["devices", "Devices"], ["insights", "Insights"]];
+// earlier releases had more views and Dutch names; old bookmarks and the wall tablet URL land on the view that now holds them
+const VIEW_ALIAS = {
+  nu: "today", now: "today", prijzen: "insights", prices: "insights", leren: "insights", learn: "insights",
+  batterij: "devices", battery: "devices", auto: "devices", ev: "devices", boiler: "devices", "water-heater": "devices", net: "devices", grid: "devices",
+  regie: "settings", control: "settings",
+};
+/** The view key for a location hash: a current key, an old alias, or null. */
+function viewOf(hash) {
+  const k = (hash || "").slice(1);
+  const v = VIEW_ALIAS[k] || k;
+  return VIEWS.some((x) => x[0] === v) || v === "settings" ? v : null;
+}
 
 class HemsPanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._view = viewOf(location.hash) || "now";
+    this._view = viewOf(location.hash) || "today";
     this._hours = 24;
     this._sel = null;
     this._confirm = false;
+    this._details = false;
     const q = new URLSearchParams(location.search);
     this._kiosk = q.has("kiosk");
     this._forceTheme = q.get("theme") || (this._kiosk ? "dark" : null);
@@ -669,10 +796,7 @@ class HemsPanel extends HTMLElement {
     window.addEventListener("hashchange", this._onHash);
     window.addEventListener("resize", this._onResize);
     this._tick = setInterval(() => this._liveUpdate(), 15000);
-    this._ro = new ResizeObserver(() => {
-      const wide = this._isWide();
-      if (wide !== this._wide) this._render(); else this._drawCharts();
-    });
+    this._ro = new ResizeObserver(() => this._drawCharts());
     this._ro.observe(this);
   }
   disconnectedCallback() {
@@ -683,41 +807,39 @@ class HemsPanel extends HTMLElement {
     if (this._ro) this._ro.disconnect();
   }
 
-  _isWide() { return this.clientWidth >= (this._kiosk ? 800 : 900); }
-
   _go(view) { if (location.hash !== "#" + view) history.replaceState(null, "", "#" + view); this._view = view; this._sel = null; this._render(); }
 
   _liveUpdate() {
-    // live tiles and phase bars refresh with every state change; the rest only with a new payload
+    // live numbers and phase bars follow every state change; the rest only a new payload
     const root = this.shadowRoot;
     if (!root || !this._hass) return;
     const p = store.payload, s = store.settings;
-    const t = root.getElementById("live"); if (t) t.innerHTML = liveTilesHtml(this._hass, p, s);
+    const live = root.getElementById("live"); if (live) live.innerHTML = liveNumbersHtml(this._hass, p, s);
     const ph = root.getElementById("phases"); if (ph) ph.innerHTML = phasesHtml(this._hass, s);
-    const h = root.getElementById("health"); if (h) h.innerHTML = healthHtml(p, store);
+    const clock = root.getElementById("clock"); if (clock) clock.textContent = hhmm(Date.now());
   }
 
   _render() {
     if (!this._hass) return;
     if (this._armTimer) { clearTimeout(this._armTimer); this._armTimer = null; }      // a re-render ends a hold in progress
     const p = store.payload, s = store.settings;
-    const wide = this._isWide();
-    this._wide = wide;
+    let body;
+    if (store.error) body = `<section class="block"><b class="c-fault">No connection to HEMS</b><p class="quiet">${esc(store.error)}</p></section>`;
+    else if (store.loaded === false) body = `<section class="block"><b>HEMS is not loaded</b><p class="quiet">The integration is off or still starting. Check Settings → Devices &amp; services → HEMS.</p></section>`;
+    else if (this._kiosk) body = this._kioskView(p, s);
+    else body = this[`_view_${this._view}`](p, s);
     const header = this._kiosk ? "" : `<header class="top">
         <ha-menu-button></ha-menu-button>
         <span class="title">HEMS</span>
-        <nav class="tabs" role="tablist">${VIEWS.map(([k, label]) => `<button role="tab" data-view="${k}" aria-selected="${this._view === k}">${label}</button>`).join("")}</nav>
-      </header>`;
-    let body;
-    if (store.error) body = `<div class="panel pad" style="border-color:var(--fault)"><b style="color:var(--fault)">No connection to HEMS</b><div class="small">${esc(store.error)}</div></div>`;
-    else if (store.loaded === false) body = `<div class="panel pad"><b>HEMS is not loaded</b><div class="small muted">The integration is off or still starting. Check Settings → Devices &amp; services → HEMS.</div></div>`;
-    else body = this[`_view_${this._view.replace("-", "_")}`](p, s, wide);
-    this.shadowRoot.innerHTML = `<style>${BASE_CSS}${PANEL_CSS}</style>
-      ${header}
-      <div class="strip">${modeStripHtml(p, s)}<span class="sp"></span><span id="health">${healthHtml(p, store)}</span></div>
-      ${alertsHtml(p)}
-      <main class="${this._kiosk ? "kiosk" : ""}">${body}</main>
-      ${this._kiosk ? `<nav class="ktabs">${VIEWS.slice(0, 4).map(([k, label]) => `<button data-view="${k}" aria-pressed="${this._view === k}">${label}</button>`).join("")}</nav>` : ""}`;
+        <nav class="tabs">${VIEWS.map(([k, label]) => `<button type="button" data-view="${k}" aria-current="${this._view === k ? "page" : "false"}">${label}</button>`).join("")}</nav>
+        <span class="sp"></span>
+        ${pillHtml(p)}
+        <button type="button" class="gear" data-view="settings" aria-label="Control and settings" aria-current="${this._view === "settings" ? "page" : "false"}">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"></path></svg>
+        </button>
+      </header>
+      ${this._details ? `<div class="details">${healthHtml(p, store)}</div>` : ""}`;
+    this.shadowRoot.innerHTML = `<style>${BASE_CSS}${PANEL_CSS}</style>${header}${alertsHtml(p)}<main>${body}</main>`;
     const menu = this.shadowRoot.querySelector("ha-menu-button");
     if (menu) { menu.hass = this._hass; menu.narrow = this._narrow; }
     this.shadowRoot.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => this._go(b.dataset.view)));
@@ -728,15 +850,15 @@ class HemsPanel extends HTMLElement {
 
   _drawCharts() {
     if (!this.shadowRoot || !store.payload) return;
-    const hm = this.shadowRoot.getElementById("heat");
-    if (hm) drawHeatmap(this, hm, store.payload);
-    const dz = this.shadowRoot.getElementById("days");
-    if (dz) drawDays(this, dz, store.payload);
+    const p = store.payload;
+    const combined = this.shadowRoot.getElementById("combined");
+    if (combined) drawCombined(this, combined, p, this._kiosk ? 24 : this._hours, this._kiosk);
+    const hm = this.shadowRoot.getElementById("heat"); if (hm) drawHeatmap(this, hm, p);
+    const dz = this.shadowRoot.getElementById("days"); if (dz) drawDays(this, dz, p);
     const svg = this.shadowRoot.getElementById("tl");
     if (!svg) return;
-    const lanes = this._view === "now" && this.clientWidth < 600 ? ["price", "plan", "soc"] : ["price", "plan", "soc", "pvload", "devices"];
-    drawTimeline(this, svg, store.payload, {
-      hours: this._hours, lanes, compact: this.clientWidth < 600, selected: this._sel,
+    drawTimeline(this, svg, p, {
+      hours: this._hours, lanes: ["price", "plan", "soc", "pvload", "devices"], compact: this.clientWidth < 600, selected: this._sel,
       onSelect: (i) => {
         this._sel = i;
         const why = this.shadowRoot.getElementById("why");
@@ -744,243 +866,237 @@ class HemsPanel extends HTMLElement {
         this._drawCharts();
       },
     });
-    if (this._sel !== null && document.activeElement === this) svg.focus();
   }
 
-  _timelineBlock(p, opts = {}) {
-    const stale = p && planStale(p);
-    return `<section class="panel ${stale ? "stale-frame" : ""}">
-      <div class="row pad" style="justify-content:space-between;padding-bottom:4px">
-        <span class="eyebrow">${stale ? `Plan of ${hhmm(p.meta.cycle_at)} · stale` : "Timeline · now → " + this._hours + " h"}</span>
-        <span class="seg">${[8, 24, 48].map((h) => `<button data-hours="${h}" aria-pressed="${this._hours === h}">${h} h</button>`).join("")}</span>
+  _hoursSeg() {
+    return `<span class="seg small">${[8, 24, 48].map((h) => `<button type="button" data-hours="${h}" aria-pressed="${this._hours === h}">${h} h</button>`).join("")}</span>`;
+  }
+
+  /* ---------------- Today */
+  _view_today(p, s) {
+    const h = headline(p);
+    const d = p && p.decision;
+    return `
+      <section class="hero">
+        <div class="say">
+          <span class="quiet">Now · ${hhmm(Date.now())} · would do</span>
+          <h1>${esc(h.lead)} ${h.rest}</h1>
+          <p class="why">${h.why}</p>
+        </div>
+        <div id="live">${liveNumbersHtml(this._hass, p, s)}</div>
+      </section>
+      ${recsHtml(p, this._applyId)}
+      <section class="block chart">
+        <div class="chart-head">
+          <h2>Next ${this._hours} hours</h2>
+          <span class="key"><i class="sw" style="background:var(--mid-bar)"></i>price</span>
+          <span class="key"><i class="ln"></i>battery %</span>
+          <span class="key"><i class="sw" style="background:var(--charge)"></i>charge</span>
+          <span class="key"><i class="sw" style="background:var(--discharge)"></i>sell</span>
+          <span class="sp"></span>${this._hoursSeg()}
+        </div>
+        <svg id="combined" style="display:block;width:100%"></svg>
+      </section>
+      <section class="two">
+        <div>
+          <h2>Coming up</h2>
+          ${agendaHtml(p)}
+          <p class="quiet small">${evLine(p)}</p>
+        </div>
+        <div>
+          <h2>Today</h2>
+          ${this._moneyRows(p, d)}
+          <a href="#insights" data-view="insights" class="small">How this is measured →</a>
+        </div>
+      </section>`;
+  }
+
+  _moneyRows(p, d) {
+    const r = p && p.realised, t = r && r.today;
+    const signed = (v) => v === null || v === undefined ? "—" : (v > 0 ? "+ " : v < 0 ? "− " : "") + "€ " + num(Math.abs(v), 2);
+    return `<div class="rows">
+      <div><span>Expected gain (horizon)</span><span class="mono">${d ? "€ " + num(d.expected_saving, 2) : "—"}</span></div>
+      <div><span>Net cost so far</span><span class="mono">${t && t.quarters ? "€ " + num(t.cost, 2) : "—"}</span></div>
+      <div><span>vs self-consumption</span><span class="mono" style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t && t.quarters ? signed(t.gain) : "—"}</span></div>
+    </div>`;
+  }
+
+  /* ---------------- Plan */
+  _view_plan(p) {
+    return `
+      ${p && p.decision ? `<section class="say"><span class="quiet">Plan in words</span><h1 class="mid">${esc(p.decision.plan_text || "—")}</h1></section>` : ""}
+      <section class="block">
+        <div class="chart-head"><h2>Timeline</h2><span class="sp"></span>${this._hoursSeg()}</div>
+        <svg id="tl" style="display:block;width:100%"></svg>
+        <div class="why-box" id="why">${whyHtml(p, this._sel)}</div>
+      </section>
+      <section class="two">
+        <div><h2>Windows</h2><div class="scroll-x">${windowsTable(p)}</div></div>
+        <div><h2>Changed since the previous plan</h2>${diffHtml(p)}</div>
+      </section>`;
+  }
+
+  /* ---------------- Devices */
+  _view_devices(p, s) {
+    const o = (s && s.options) || {};
+    return `${this._batteryRow(p, s)}${o.ev_enabled ? this._evRow(p, s) : ""}${o.water_heater_enabled ? this._heaterRow(p, s) : ""}
+      <section class="device thin">
+        <div class="name"><h2>Grid connection</h2><span class="quiet small">${num(o.grid_limit_a, 0)} A per phase</span></div>
+        <div id="phases">${phasesHtml(this._hass, s)}</div>
+      </section>`;
+  }
+
+  _batteryRow(p, s) {
+    const b = (p && p.battery) || {};
+    const soc = stateNum(this._hass, s && s.roles && s.roles.soc_entity);
+    const h = headline(p);
+    return `<section class="device">
+      <div class="name"><h2>Battery</h2><span class="quiet small">${num(b.capacity_kwh, 0)} kWh · max ${num(b.max_power_kw, 0)} kW</span></div>
+      <div class="body">
+        <p>${esc(h.lead)} ${h.rest}</p>
+        <div class="meter"><i style="width:${soc ?? 0}%"></i><em style="left:${b.reserve_kwh / b.capacity_kwh * 100}%"></em></div>
+        <div class="mono quiet small spread"><span>${soc === null ? "—" : num(soc, 0) + " % · " + num(soc / 100 * b.capacity_kwh, 1) + " kWh"}</span><span>reserve ${num(b.reserve_kwh / b.capacity_kwh * 100, 0)} % · floor ${num(b.floor_kwh / b.capacity_kwh * 100, 0)} %</span></div>
+        <details><summary>Why, decision chain and sell windows</summary>
+          <div class="stack" style="margin-top:12px">${verdictHtml(p, 24)}${chainHtml(p)}<div class="scroll-x">${sellTable(p)}</div></div>
+        </details>
       </div>
-      <div style="padding:0 6px 6px"><svg id="tl" style="display:block;width:100%"></svg></div>
-      <div class="legend small mono">
-        <span><i style="background:var(--charge-soft);outline:1px dashed var(--charge)"></i>charge (dry-run)</span>
-        <span><i style="background:var(--discharge-soft);outline:1px dashed var(--discharge)"></i>discharge (dry-run)</span>
-        <span><i style="background:var(--fg);height:2px"></i>SoC</span>
-        <span><i style="border-top:2px dashed var(--fg-3);height:0;background:none"></i>previous plan</span>
-        <span><i style="background:var(--pv-soft);outline:1px solid var(--pv)"></i>solar</span>
-        <span><i style="background:var(--load-soft);outline:1px solid var(--load)"></i>house</span>
-      </div>
-      ${opts.why === false ? "" : `<div class="pad" id="why" style="border-top:1px solid var(--line)">${whyHtml(p, this._sel)}</div>`}
+      <div class="ctl"><span class="quiet small">Mode</span>${modeSegHtml(p, "battery")}</div>
     </section>`;
   }
 
-  _view_now(p, s, wide) {
-    const left = `<section class="panel pad">${verdictHtml(p, this._kiosk ? 44 : 32)}</section>
-      ${recsHtml(p, this._applyId)}
-      <section class="stack"><span class="eyebrow">Live</span><div id="live">${liveTilesHtml(this._hass, p, s)}</div></section>
-      <section class="stack"><span class="eyebrow">Battery decision chain</span>${chainHtml(p)}</section>`;
-    if (!wide) return `<div class="stack" style="gap:14px">${left}${this._timelineBlock(p)}</div>`;
-    return `<div class="grid-nu">
-      <div class="stack" style="gap:14px">${left}</div>
-      <div class="stack" style="gap:14px">${this._timelineBlock(p)}
-        <div class="grid2">
-          <section class="panel pad stack"><span class="eyebrow">Plan changed</span>${diffHtml(p)}</section>
-          <section class="panel pad stack"><span class="eyebrow">Money</span>${moneyHtml(p)}</section>
-        </div></div></div>`;
-  }
-
-  _view_plan(p) {
-    return `<div class="stack" style="gap:14px">
-      ${p && p.decision ? `<section class="panel pad"><span class="eyebrow">Plan in words</span><div style="font:600 16px var(--font-body);margin-top:4px">${esc(p.decision.plan_text || "—")}</div></section>` : ""}
-      ${this._timelineBlock(p)}
-      <div class="grid2">
-        <section class="panel pad stack"><span class="eyebrow">Plan changed</span>${diffHtml(p)}</section>
-        <section class="panel pad stack"><span class="eyebrow">Money</span>${moneyHtml(p)}</section>
-      </div>
-      <section class="panel"><div class="pad"><span class="eyebrow">Windows</span></div><div class="scroll-x">${windowsTable(p)}</div></section>
-    </div>`;
-  }
-
-  _view_prices(p) {
-    if (!p || !p.quarters.length) return `<div class="empty">No prices known.</div>`;
-    const st = priceStats(p.quarters);
-    const cheap = cheapestBlock(p.quarters, 12);
-    const sells = (p.sell_windows || []).slice(0, 6);
-    const netting = p.quarters.length ? p.quarters.reduce((a, r) => a + (r.imp - r.exp), 0) / p.quarters.length : null;
-    return `<div class="stack" style="gap:14px">
-      <div class="grid4">
-        <div class="tile"><small>Average today</small><b>${eur(st.avg)}</b><i>€/kWh import</i></div>
-        <div class="tile"><small>Lowest (horizon)</small><b class="c-charge">${eur(st.min)}</b><i>€/kWh</i></div>
-        <div class="tile"><small>Highest (horizon)</small><b class="c-discharge">${eur(st.max)}</b><i>€/kWh</i></div>
-        <div class="tile"><small>Import − export</small><b>${eur(netting)}</b><i>avg. difference €/kWh</i></div>
-      </div>
-      <section class="panel"><div class="pad row" style="justify-content:space-between"><span class="eyebrow">Prices per quarter (import)</span>
-        <span class="small muted mono">${p.meta.tomorrow_quarters ? "tomorrow published" : "tomorrow appears ±13:15"}</span></div>
-        <div class="scroll-x" style="padding:0 6px 10px"><svg id="heat" style="display:block;min-width:620px;width:100%"></svg></div></section>
-      <div class="grid2">
-        <section class="panel pad stack"><span class="eyebrow">Cheapest 3-hour block</span>
-          ${cheap ? `<div style="font:700 22px var(--font-display)" class="c-charge">${hhmm(cheap.from)}–${hhmm(cheap.to)}</div><div class="small mono">average ${eur(cheap.avg)} €/kWh · ${dayShort(cheap.from)}</div>` : `<div class="small muted">Too few prices known.</div>`}</section>
-        <section class="panel pad stack"><span class="eyebrow">Sell windows</span>
-          ${sells.length ? sells.map((w) => `<div class="row small mono" style="justify-content:space-between"><span>${hhmm(w.from)}–${hhmm(w.to)} · peak ${eur(w.peak)}</span><span class="tag ${w.status === "unsold" ? "fault" : w.status === "planned" ? "ok" : "off"}">${esc(WINDOW_LABEL[w.status] || w.status)}</span></div>`).join("") : `<div class="small muted">No sell windows in the horizon.</div>`}</section>
-      </div>
-      <div class="small muted">Net metering ends on ${esc((store.settings && store.settings.options && store.settings.options.salderen_until) || "2027-01-01")}; from that day HEMS already prices exports per date without the energy tax refund.</div>
-    </div>`;
-  }
-
-  _view_battery(p, s) {
-    if (!p) return `<div class="empty">Waiting for data…</div>`;
-    const b = p.battery;
-    const soc = stateNum(this._hass, s && s.roles && s.roles.soc_entity);
-    const kwh = soc === null ? null : soc / 100 * b.capacity_kwh;
-    const idleWhy = p.decision && p.decision.action === "idle" ? `<section class="panel pad stack"><span class="eyebrow">Why is nothing happening?</span><div>${esc(p.decision.reason || "")}</div></section>` : "";
-    return `<div class="stack" style="gap:14px">
-      <section class="panel pad stack"><span class="eyebrow">Stock</span>
-        <div class="row" style="align-items:baseline;gap:14px"><b style="font:700 40px var(--font-display)">${soc === null ? "—" : num(soc, 0) + " %"}</b><span class="mono">${kwh === null ? "" : num(kwh, 1) + " kWh of " + num(b.capacity_kwh, 0)}</span></div>
-        <div class="bar" style="height:16px"><i style="width:${soc ?? 0}%;background:var(--fg-2)"></i><em style="left:${b.reserve_kwh / b.capacity_kwh * 100}%;background:var(--warn)"></em><em style="left:${b.floor_kwh / b.capacity_kwh * 100}%;background:var(--fault)"></em></div>
-        <div class="small mono muted">reserve ${num(b.reserve_kwh, 1)} kWh · floor ${num(b.floor_kwh, 1)} kWh · max ${num(b.max_power_kw, 1)} kW · efficiency ${num(b.round_trip_eff, 2)} · margin € ${num(b.min_profit_margin, 2)}/kWh</div>
-      </section>
-      ${idleWhy}
-      <section class="panel pad">${verdictHtml(p)}<div style="margin-top:10px">${chainHtml(p)}</div></section>
-      ${this._timelineBlock(p)}
-      <section class="panel"><div class="pad"><span class="eyebrow">Sell windows</span></div><div class="scroll-x">${sellTable(p)}</div></section>
-    </div>`;
-  }
-
-  _view_ev(p, s) {
+  _evRow(p, s) {
     const ev = p && p.ev;
-    const on = s && s.options && s.options.ev_enabled;
-    if (!on) return `<section class="panel pad stack"><span class="eyebrow">EV</span><div>The EV module is off.</div>${configureLink(s)}</section>`;
-    if (!ev) return `<div class="empty">No EV plan yet.</div>`;
-    const quarters = (p.quarters || []).filter((r) => r.ev_a);
-    const risk = ev.status === "deadline_at_risk";
-    const sp = ev.setpoint;
+    const o = s.options;
+    const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], short = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const deadlines = days.map((d, i) => o["ev_deadline_" + d] ? `<span class="chip mono">${short[i]} ${esc(o["ev_deadline_" + d])}</span>` : "").join("");
+    const evSoc = stateNum(this._hass, s.roles && s.roles.ev_soc_entity);
     const forceOn = this._hass.states["switch.hems_ev_force_charge"] && this._hass.states["switch.hems_ev_force_charge"].state === "on";
-    const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-    const dnl = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    return `<div class="stack" style="gap:14px">
-      <section class="panel pad stack" style="${risk ? "border-color:var(--fault);box-shadow:inset 3px 0 0 var(--fault)" : ""}">
-        <span class="eyebrow">Status</span>
-        <div style="font:700 26px var(--font-display)" class="${risk ? "" : ""}">${esc(EV_LABEL[ev.status] || ev.status)}</div>
-        <div class="small" style="color:var(--fg-2)">${esc(ev.reason || "")}</div>
-        <div class="kv">
-          <span>Deadline</span><span>${ev.deadline ? dayShort(ev.deadline) + " " + hhmm(ev.deadline) : "none"}</span>
-          <span>Required / extra / planned</span><span>${num(ev.required_kwh, 1)} / ${num(ev.optional_kwh, 1)} / ${num(ev.planned_kwh, 1)} kWh</span>
-          ${ev.shortfall_kwh > 0 ? `<span style="color:var(--fault)">Shortfall</span><span style="color:var(--fault)">${num(ev.shortfall_kwh, 1)} kWh</span>` : ""}
-          <span>Setpoint (would send)</span><span>${sp ? num(sp.current_a, 0) + " A · " + esc(sp.code) : "—"}</span>
-          <span>Grid headroom</span><span>${ev.allowed_a === null || ev.allowed_a === undefined ? "unknown" : num(ev.allowed_a, 1) + " A per phase"}</span>
-        </div>
-        ${sp && sp.reason && sp.reason !== ev.reason ? `<div class="small muted">${esc(sp.reason)}</div>` : ""}
-      </section>
-      <section class="panel pad stack"><span class="eyebrow">Force charge</span>
-        <div class="small">Plans the required energy as early and as fast as possible, whatever the price. Stops by itself when the car leaves or the target is reached, and is always off after a restart.</div>
-        ${this._confirm ? `<div class="row"><span class="small">${forceOn ? "Stop force charging?" : "Start force charging? (dry-run: only the plan changes)"}</span>
-            <button class="btn pri" data-act="force-yes">${forceOn ? "Stop" : "Start"}</button><button class="btn" data-act="force-no">Cancel</button></div>`
-          : `<div class="row"><span class="tag ${forceOn ? "warn" : "off"}">${forceOn ? "ON" : "OFF"}</span><button class="btn" data-act="force">${forceOn ? "Stop…" : "Start…"}</button></div>`}
-      </section>
-      ${this._timelineBlock(p, { why: false })}
-      <section class="panel"><div class="pad"><span class="eyebrow">Planned charging quarters</span></div><div class="scroll-x">
-        ${quarters.length ? `<table><tr><th>Block</th><th>Current</th><th>Tier</th><th>Avg. price</th><th>Solar</th></tr>${evBlocks(quarters).map((b) => `<tr><td class="mono">${dayShort(b.from)} ${hhmm(b.from)}–${hhmm(b.to)}</td><td class="n">${num(b.a, 0)} A</td><td>${esc(TIER_LABEL[b.tier] || b.tier)}</td><td class="n">${eur(b.price)}</td><td class="n">${num(b.pv, 1)} kWh</td></tr>`).join("")}</table>` : `<div class="empty">No charging quarters planned.</div>`}
-      </div></section>
-      <section class="panel pad stack"><span class="eyebrow">Weekly deadline schedule</span>
-        <div class="row">${days.map((d, i) => { const t = s.options["ev_deadline_" + d]; return `<span class="tag ${t ? "ok" : "off"}">${dnl[i]} ${t || "—"}</span>`; }).join("")}</div>
-        <div class="small muted">Target ${num(s.options.ev_target_required_pct, 0)} % at every deadline, up to ${num(s.options.ev_target_max_pct, 0)} % below € ${num(s.options.ev_max_price, 2)}/kWh.</div>${configureLink(s)}</section>
-    </div>`;
+    const blocks = evBlocks(((p && p.quarters) || []).filter((r) => r.ev_a));
+    const status = ev ? `${(EV_LABEL[ev.status] || ev.status).replace(/^./, (c) => c.toUpperCase())}.` : "No EV plan yet.";
+    return `<section class="device ${ev && ev.status === "deadline_at_risk" ? "risk" : ""}">
+      <div class="name"><h2>EV</h2><span class="quiet small">${num(o.ev_capacity_kwh, 1)} kWh · ${num(o.ev_min_current_a, 0)}–${num(o.ev_max_current_a, 0)} A</span></div>
+      <div class="body">
+        <p>${esc(status)}${evSoc === null ? "" : ` Car at ${num(evSoc, 0)} %.`}${ev && ev.shortfall_kwh > 0 ? ` <span class="c-fault">${num(ev.shortfall_kwh, 1)} kWh short.</span>` : ""}</p>
+        <div class="row">${deadlines || `<span class="quiet small">No deadlines set.</span>`}<span class="quiet small">${num(o.ev_target_required_pct, 0)} % by a deadline · up to ${num(o.ev_target_max_pct, 0)} % below € ${num(o.ev_max_price, 2)}</span></div>
+        ${blocks.length ? `<details><summary>${blocks.length} planned charging block${blocks.length > 1 ? "s" : ""}</summary><div class="scroll-x" style="margin-top:12px"><table><tr><th>Block</th><th>Current</th><th>Tier</th><th>Avg. price</th></tr>${blocks.map((b) => `<tr><td class="mono">${esc(span(b.from, b.to))}</td><td class="n">${num(b.a, 0)} A</td><td>${esc(TIER_LABEL[b.tier] || b.tier)}</td><td class="n">${eur(b.price)}</td></tr>`).join("")}</table></div></details>` : ""}
+      </div>
+      <div class="ctl"><span class="quiet small">Mode</span>${modeSegHtml(p, "ev")}
+        ${this._confirm ? `<span class="small">${forceOn ? "Stop force charging?" : "Start force charging? Only the plan changes in dry-run."}</span>
+          <div class="row"><button type="button" class="btn pri" data-act="force-yes">${forceOn ? "Stop" : "Start"}</button><button type="button" class="btn" data-act="force-no">Cancel</button></div>`
+          : `<button type="button" class="btn" data-act="force">${forceOn ? "Force charging · stop…" : "Force charge…"}</button>`}
+      </div>
+    </section>`;
   }
 
-  _view_water_heater(p, s) {
-    const on = s && s.options && s.options.water_heater_enabled;
-    if (!on) return `<section class="panel pad stack"><span class="eyebrow">Water heater</span><div>The water heater module is off.</div>${configureLink(s)}</section>`;
-    const runs = (p && p.heating) || [];
+  _heaterRow(p, s) {
     const o = s.options;
+    const runs = (p && p.heating) || [];
     const wh = s.roles && s.roles.water_heater_entity && this._hass.states[s.roles.water_heater_entity];
     const temp = wh ? (wh.attributes.current_temperature ?? (Number.isFinite(Number(wh.state)) ? Number(wh.state) : null)) : null;
     const leg = p && p.alerts && p.alerts.legionella;
-    const legDays = leg && leg.last ? (Date.now() - new Date(leg.last).getTime()) / 864e5 : null;
-    return `<div class="stack" style="gap:14px">
-      <div class="grid4">
-        <div class="tile ${wh ? "" : "stale"}"><small>Tank</small><b>${temp === null ? "—" : num(temp, 0) + " °C"}</b><i>${wh ? esc(wh.state) + " · " + age(Date.now() - new Date(wh.last_updated).getTime()) : "no entity assigned"}</i></div>
-        <div class="tile ${leg && leg.on ? "stale" : ""}"><small>Legionella</small><b>${legDays === null ? "—" : num(legDays, 0) + " d ago"}</b><i>${leg && leg.configured ? (leg.on ? "overdue" : "on time") : "no entity assigned"}</i></div>
-        <div class="tile"><small>Next run</small><b>${runs.length ? hhmm(runs[0].from) : "—"}</b><i>${runs.length ? esc(HEAT_LABEL[runs[0].kind] || runs[0].kind) + " · " + eur(runs[0].avg_price) : ""}</i></div>
+    const next = runs[0];
+    return `<section class="device ${leg && leg.on ? "risk" : ""}">
+      <div class="name"><h2>Water heater</h2><span class="quiet small">${num(o.water_heater_energy_kwh, 1)} kWh daily · legionella ${esc(DAY_LABEL[o.water_heater_legionella_weekday] || o.water_heater_legionella_weekday)}</span></div>
+      <div class="body">
+        <p>${temp === null ? "" : `Tank ${num(temp, 0)} °C. `}${next ? `${HEAT_LABEL[next.kind] === "heating" ? "Daily" : (HEAT_LABEL[next.kind] || next.kind).replace(/^./, (c) => c.toUpperCase())} run ${esc(span(next.from, next.to))}.` : "No run planned yet."}</p>
+        <div class="row quiet small"><span>Last legionella run <b class="fg">${leg && leg.last ? esc(dayShort(leg.last)) : leg && leg.configured ? "unknown" : "no sensor assigned"}</b></span>${leg && leg.on ? `<span class="c-fault">overdue</span>` : ""}</div>
       </div>
-      <section class="panel"><div class="pad"><span class="eyebrow">Planned runs</span></div><div class="scroll-x">
-        ${runs.length ? `<table><tr><th>Kind</th><th>From</th><th>To</th><th>kWh</th><th>Avg. price</th></tr>${runs.map((r) => `<tr><td>${esc(HEAT_LABEL[r.kind] || r.kind)}</td><td class="mono">${dayShort(r.from)} ${hhmm(r.from)}</td><td class="mono">${hhmm(r.to)}</td><td class="n">${num(r.kwh, 1)}</td><td class="n">${eur(r.avg_price)}</td></tr>`).join("")}</table>` : `<div class="empty">No run planned: there is no full price day yet.</div>`}
-      </div></section>
-      <section class="panel pad stack"><span class="eyebrow">Settings</span>
-        <div class="small">Normal run ${num(o.water_heater_energy_kwh, 1)} kWh in ${o.water_heater_hours} h; night run ${o.water_heater_night_energy_kwh ? num(o.water_heater_night_energy_kwh, 1) + " kWh" : "none"};
-        legionella ${num(o.water_heater_legionella_energy_kwh, 1)} kWh in ${o.water_heater_legionella_hours} h on ${DAY_LABEL[o.water_heater_legionella_weekday] || esc(o.water_heater_legionella_weekday)}.</div>
-        <div class="small muted">HEMS only plans the water heater for now; the water heater add-on still heats on its own. Tank temperature and the last legionella run appear once those entities get a role.</div>${configureLink(s)}</section>
-    </div>`;
-  }
-
-  _view_grid(p, s) {
-    return `<div class="stack" style="gap:14px">
-      <section class="panel pad stack"><span class="eyebrow">Current per phase</span><div id="phases">${phasesHtml(this._hass, s)}</div></section>
-      <section class="panel pad stack"><span class="eyebrow">Headroom for the EV</span>
-        <div class="small">${p && p.ev && p.ev.allowed_a !== null && p.ev.allowed_a !== undefined ? `The tightest phase now leaves <b class="mono">${num(p.ev.allowed_a, 1)} A</b> for the EV.` : "Unknown: no EV module or no phase currents."}</div>
-        <div class="small muted">The load balancer does not record a history of limits yet; that comes with the move to live control.</div></section>
-    </div>`;
-  }
-
-  _view_control(p, s) {
-    if (!s) return `<div class="empty">Loading settings…</div>`;
-    const o = s.options, r = s.roles;
-    const words = settingsInWords(o);
-    return `<div class="stack" style="gap:14px">
-      ${this._controlBlock(p)}
-      <section class="panel pad stack"><div class="row" style="justify-content:space-between"><span class="eyebrow">Settings in words</span>${configureLink(s)}</div>
-        ${words.map(([h, t]) => `<div><b>${h}</b><div class="small" style="color:var(--fg-2)">${t}</div></div>`).join("")}</section>
-      <section class="panel"><div class="pad"><span class="eyebrow">Entity per role</span></div><div class="scroll-x"><table>
-        ${Object.entries(r).sort().map(([k, v]) => `<tr><td class="mono">${esc(k.replace(/_entity$|_entities$/, ""))}</td><td class="mono">${esc(Array.isArray(v) ? v.join(", ") : String(v))}</td><td class="mono small">${typeof v === "string" && v.includes(".") ? (this._hass.states[v] ? esc(this._hass.states[v].state) : `<span style="color:var(--fault)">missing</span>`) : ""}</td></tr>`).join("")}
-      </table></div></section>
-      <div class="small muted mono">panel ${VERSION} · HEMS build ${esc((p && p.meta.build) || "?")}</div>
-    </div>`;
-  }
-
-  _controlBlock(p) {
-    const c = (p && p.control) || { modes: {}, armed: false };
-    const mods = [["battery", "Battery"], ["ev", "EV"], ["water_heater", "Water heater"]];
-    return `<section class="panel pad stack"><span class="eyebrow">Control</span>
-      <div class="row"><span class="tag ${c.armed ? "fault" : "ok"}">${c.armed ? "ARMED" : "SAFE"}</span>
-        <button class="btn ${c.armed ? "" : "pri"} hold" data-act="arm">${c.armed ? "Disarm" : "Hold 1.5 s to arm"}</button>
-        <button class="btn danger" data-act="disarm">All to dry-run</button></div>
-      <div class="small muted">No module writes to a device yet; arming changes nothing now, but it is logged. After a restart the master switch is always off.</div>
-      ${mods.map(([k, label]) => `<div class="row" style="justify-content:space-between;max-width:560px"><b>${label}</b><span class="seg">
-        ${["dry_run", "advisory"].map((m) => `<button data-mode="${k}:${m}" aria-pressed="${(c.modes[k] || "dry_run") === m}">${MODE_LABEL[m]}</button>`).join("")}
-        <button disabled title="Comes with the first module that controls a device">AUTO</button></span></div>`).join("")}
-      <div class="small muted">Advisory: HEMS proposes the next action; Apply fires <span class="mono">hems_recommendation_applied</span> for your own automation.</div>
+      <div class="ctl"><span class="quiet small">Mode</span>${modeSegHtml(p, "water_heater")}</div>
     </section>`;
   }
 
-  _view_learn(p, s) {
+  /* ---------------- Insights */
+  _view_insights(p) {
     const r = p && p.realised;
-    if (!r) return `<div class="empty">No measurements yet.</div>`;
-    const days = r.daily || [];
-    const err = r.errors || {};
-    const errTxt = (e, label) => e ? `<div class="tile"><small>${label} · 7 d</small><b>${num(e.mae_kwh_day, 2)} kWh/d</b><i>bias ${e.bias_kwh_day > 0 ? "+" : ""}${num(e.bias_kwh_day, 2)} · ${e.relative === null ? "" : num(e.relative * 100, 0) + " %"}</i></div>`
-      : `<div class="tile"><small>${label}</small><b class="muted">—</b><i>too few measurements</i></div>`;
-    const qs = (r.quarters || []).slice(-96);
+    const err = (r && r.errors) || {};
+    const st = p ? priceStats(p.quarters || []) : {};
+    const cheap = p ? cheapestBlock(p.quarters || [], 12) : null;
+    const signed = (v) => v === null || v === undefined ? "—" : (v > 0 ? "+ " : v < 0 ? "− " : "") + "€ " + num(Math.abs(v), 2);
+    const qs = ((r && r.quarters) || []).slice(-96);
+    const withOther = qs.filter((q) => q.other && q.planned);
+    const agree = withOther.filter((q) => otherAction(q.other) === q.planned).length;
+    const errRow = (e, label) => `<div><span>${label}</span><span class="mono">${e ? num(e.mae_kwh_day, 2) + " kWh/day" : "—"}</span></div>`;
+    return `
+      <section class="hero">
+        <div class="say">
+          <span class="quiet">${r && r.since ? "Since " + esc(dayShort(r.since)) : "Since the first measured day"}, vs battery on self-consumption</span>
+          <h1 class="money" style="color:var(${r && r.gain_total >= 0 ? "--ok" : "--fault"})">${r && r.daily && r.daily.length ? signed(r.gain_total) : "—"}</h1>
+          <p class="why">Measured at the meter, priced per quarter.</p>
+        </div>
+        <svg id="days" style="display:block;flex:1 1 420px;min-width:0"></svg>
+      </section>
+      <section class="three">
+        <div class="block"><h2>Forecasts, last 7 days</h2><div class="rows">${errRow(err.pv, "Solar off by")}${errRow(err.load, "House off by")}</div>
+          ${err.pv || err.load ? "" : `<p class="quiet small">Needs a few days of measurements.</p>`}</div>
+        <div class="block"><h2>Prices</h2><div class="rows">
+          <div><span>Today average</span><span class="mono">${eur(st.avg, 3)}</span></div>
+          <div><span>Cheapest 3 h</span><span class="mono c-charge">${cheap ? esc(span(cheap.from, cheap.to)) : "—"}</span></div>
+          <div><span>Highest</span><span class="mono c-discharge">${eur(st.max, 3)}</span></div></div>
+          <p class="quiet small">Net metering ends ${esc((store.settings && store.settings.options && store.settings.options.salderen_until) || "2027-01-01")}.</p></div>
+        <div class="block"><h2>vs old battery manager</h2><div class="rows">
+          <div><span>Agree, last 24 h</span><span class="mono">${withOther.length ? `${agree} of ${withOther.length}` : "—"}</span></div></div>
+          ${withOther.length ? "" : `<p class="quiet small">Fills per quarter once its action sensor is assigned.</p>`}</div>
+      </section>
+      <details class="block"><summary>Prices per quarter</summary><div class="scroll-x" style="margin-top:12px"><svg id="heat" style="display:block;min-width:620px;width:100%"></svg></div></details>
+      <details class="block"><summary>Quarter by quarter, last 24 hours</summary><div style="margin-top:12px">${this._quarterTable(qs)}</div></details>`;
+  }
+
+  _quarterTable(qs) {
+    if (!qs.length) return `<p class="quiet">No measured quarters yet.</p>`;
     const actual = (q) => q.battery_kwh > 0.05 ? "charge" : q.battery_kwh < -0.05 ? "discharge" : "idle";
-    const norm = (v) => { const x = String(v || "").toLowerCase(); return /charg|laad|laden/.test(x) && !/dis|ont/.test(x) ? "charge" : /dis|ont/.test(x) ? "discharge" : x ? "idle" : null; };
     const hasOther = qs.some((q) => q.other);
-    const disagree = qs.filter((q) => q.planned && hasOther && q.other && norm(q.other) !== q.planned).length;
-    const b = r.bands || {};
-    return `<div class="stack" style="gap:14px">
-      <div class="grid4">
-        ${errTxt(err.pv, "Solar forecast")}${errTxt(err.load, "House forecast")}
-        <div class="tile"><small>Solar band P10–P90</small><b>${b.pv ? num(b.pv.p10, 2) + "–" + num(b.pv.p90, 2) : "—"}</b><i>${b.pv ? (b.pv.source === "measured" ? "measured, " + b.pv.samples + " q." : "default, too few measurements yet") : ""}</i></div>
-        <div class="tile"><small>House band P10–P90</small><b>${b.load ? num(b.load.p10, 2) + "–" + num(b.load.p90, 2) : "—"}</b><i>${b.load ? (b.load.source === "measured" ? "measured, " + b.load.samples + " q." : "default, too few measurements yet") : ""}</i></div>
-      </div>
-      <section class="panel"><div class="pad"><span class="eyebrow">Result per day vs self-consumption</span></div>
-        <div style="padding:0 6px 10px"><svg id="days" style="display:block;width:100%"></svg></div></section>
-      <section class="panel"><div class="pad row" style="justify-content:space-between"><span class="eyebrow">Last 24 hours per quarter</span>
-        ${hasOther ? `<span class="tag ${disagree ? "warn" : "ok"}">${disagree} quarters disagree with the old manager</span>` : `<span class="small muted">Assign the old battery manager's action sensor in Settings for the comparison.</span>`}</div>
-        <div class="scroll-x"><table><tr><th>Quarter</th><th>HEMS would</th>${hasOther ? "<th>Old manager</th>" : ""}<th>Battery did</th><th>Grid</th><th>Solar</th><th>House</th><th>Cost</th><th>Self-cons.</th></tr>
-        ${qs.slice().reverse().map((q) => { const off = hasOther && q.other && q.planned && norm(q.other) !== q.planned;
-          return `<tr style="${off ? "background:var(--discharge-soft)" : ""}"><td class="mono">${dayShort(q.t)} ${hhmm(q.t)}</td><td class="c-${q.planned || "idle"}">${esc(ACTION_LABEL[q.planned] || q.planned || "—")}</td>
-          ${hasOther ? `<td>${esc(q.other || "—")}</td>` : ""}<td class="c-${actual(q)}">${ACTION_LABEL[actual(q)]} ${num(q.battery_kwh * 4, 1)} kW</td>
-          <td class="n">${num((q.import_kwh - q.export_kwh) * 4, 1)} kW</td><td class="n">${num(q.pv_kwh * 4, 1)}${q.fc_pv_kwh !== null && q.fc_pv_kwh !== undefined ? ` <span class="muted">(${num(q.fc_pv_kwh * 4, 1)})</span>` : ""}</td>
-          <td class="n">${num(q.load_kwh * 4, 1)}${q.fc_load_kwh !== null && q.fc_load_kwh !== undefined ? ` <span class="muted">(${num(q.fc_load_kwh * 4, 1)})</span>` : ""}</td>
-          <td class="n">${q.cost === undefined ? "—" : "€ " + num(q.cost, 3)}</td><td class="n">${q.baseline_cost === undefined ? "—" : "€ " + num(q.baseline_cost, 3)}</td></tr>`; }).join("")}
-        </table></div><div class="small muted pad">In brackets: what HEMS expected. Quarters with less than 60 % measured time do not count in the totals.</div></section>
+    return `<div class="scroll-x"><table><tr><th>Quarter</th><th>HEMS would</th>${hasOther ? "<th>Old manager</th>" : ""}<th>Battery did</th><th>Grid</th><th>Solar</th><th>House</th><th>Cost</th><th>Self-cons.</th></tr>
+      ${qs.slice().reverse().map((q) => { const off = hasOther && q.other && q.planned && otherAction(q.other) !== q.planned;
+        return `<tr class="${off ? "off" : ""}"><td class="mono">${hhmm(q.t)}</td><td class="c-${q.planned || "idle"}">${esc(ACTION_LABEL[q.planned] || q.planned || "—")}</td>
+        ${hasOther ? `<td>${esc(q.other || "—")}</td>` : ""}<td class="c-${actual(q)}">${ACTION_LABEL[actual(q)]} ${num(q.battery_kwh * 4, 1)} kW</td>
+        <td class="n">${num((q.import_kwh - q.export_kwh) * 4, 1)} kW</td><td class="n">${num(q.pv_kwh * 4, 1)}${q.fc_pv_kwh !== null && q.fc_pv_kwh !== undefined ? ` <span class="quiet">(${num(q.fc_pv_kwh * 4, 1)})</span>` : ""}</td>
+        <td class="n">${num(q.load_kwh * 4, 1)}${q.fc_load_kwh !== null && q.fc_load_kwh !== undefined ? ` <span class="quiet">(${num(q.fc_load_kwh * 4, 1)})</span>` : ""}</td>
+        <td class="n">${q.cost === undefined ? "—" : "€ " + num(q.cost, 3)}</td><td class="n">${q.baseline_cost === undefined ? "—" : "€ " + num(q.baseline_cost, 3)}</td></tr>`; }).join("")}
+      </table></div><p class="quiet small">In brackets: what HEMS expected. Quarters with less than 60 % measured time do not count in the totals.</p>`;
+  }
+
+  /* ---------------- Settings (behind the gear) */
+  _view_settings(p, s) {
+    if (!s) return `<p class="quiet">Loading settings…</p>`;
+    const c = (p && p.control) || { modes: {}, armed: false };
+    return `
+      <section class="block stack">
+        <h2>Control</h2>
+        <div class="row"><span class="tag ${c.armed ? "fault" : "ok"}">${c.armed ? "ARMED" : "SAFE"}</span>
+          <button type="button" class="btn ${c.armed ? "" : "pri"} hold" data-act="arm">${c.armed ? "Disarm" : "Hold 1.5 s to arm"}</button>
+          <button type="button" class="btn" data-act="disarm">All to dry-run</button></div>
+        <p class="quiet small">No module writes to a device yet; arming changes nothing now, but it is logged. After a restart the master switch is always off. Per-device modes are on Devices.</p>
+      </section>
+      <section class="block stack">
+        <div class="spread"><h2>Settings in words</h2>${configureLink(s)}</div>
+        ${settingsInWords(s.options).map(([h, t]) => `<div><b>${h}</b><p class="quiet small" style="margin:2px 0 0">${t}</p></div>`).join("")}
+      </section>
+      <details class="block"><summary>Entity per role</summary><div class="scroll-x" style="margin-top:12px"><table>
+        ${Object.entries(s.roles).sort().map(([k, v]) => `<tr><td class="mono">${esc(k.replace(/_entity$|_entities$/, ""))}</td><td class="mono">${esc(Array.isArray(v) ? v.join(", ") : String(v))}</td><td class="mono small">${typeof v === "string" && v.includes(".") ? (this._hass.states[v] ? esc(this._hass.states[v].state) : `<span class="c-fault">missing</span>`) : ""}</td></tr>`).join("")}
+      </table></div></details>
+      <p class="quiet small mono">panel ${VERSION} · HEMS build ${esc((p && p.meta.build) || "?")}</p>`;
+  }
+
+  /* ---------------- Wall tablet: one screen, read from across the room */
+  _kioskView(p, s) {
+    const h = headline(p);
+    const next = agenda(p).find((x) => !x.what.startsWith("Battery"));
+    const bad = problems(p);
+    return `<div class="kiosk">
+      <div class="spread quiet"><span id="clock">${hhmm(Date.now())}</span><span class="row" style="gap:8px"><i class="dot" style="background:var(${bad.length ? "--warn" : "--ok"})"></i>${bad.length ? esc(bad.join(", ")) : "Dry-run"}</span></div>
+      <section class="hero">
+        <div class="say"><h1 class="huge">${esc(h.lead.replace(/ the battery\.$/, "").replace(/\.$/, ""))}</h1><p class="why big">${h.rest}</p></div>
+        <div id="live">${liveNumbersHtml(this._hass, p, s)}</div>
+      </section>
+      <section class="block chart"><svg id="combined" style="display:block;width:100%"></svg></section>
+      <p class="why big">${next ? `Next: ${esc(next.what.split(" · ")[0].toLowerCase())} ${esc(span(next.from, next.to))}` : ""}${p && p.ev ? `${next ? " · " : ""}${evLine(p)}` : ""}</p>
     </div>`;
   }
 
   _bindActions() {
     const root = this.shadowRoot;
     const on = (sel, fn) => { const b = root.querySelector(sel); if (b) b.addEventListener("click", fn); };
+    on('[data-act="details"]', () => { this._details = !this._details; this._render(); });
     root.querySelectorAll('[data-act="disarm"]').forEach((b) => b.addEventListener("click", () => this._hass.callService("hems", "disarm_all", {})));
     root.querySelectorAll("[data-apply]").forEach((b) => b.addEventListener("click", () => { this._applyId = b.dataset.apply; this._render(); }));
     root.querySelectorAll("[data-apply-no]").forEach((b) => b.addEventListener("click", () => { this._applyId = null; this._render(); }));
@@ -1018,42 +1134,122 @@ class HemsPanel extends HTMLElement {
   }
 }
 
+/* calm: few borders, surfaces by a slightly lighter ground, one text size per role, colour only for meaning */
 const PANEL_CSS = `
-:host { min-height:100vh; }
-header.top { display:flex; align-items:center; gap:10px; padding:0 12px; height:56px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:2; }
-header .title { font:700 20px var(--font-display); letter-spacing:.02em; margin-right:8px; }
-nav.tabs { display:flex; gap:2px; overflow-x:auto; scrollbar-width:none; min-width:0; }
-nav.tabs button { border:none; background:none; padding:10px 10px 12px; font:600 12px var(--font-data); letter-spacing:.04em; color:var(--fg-3); cursor:pointer; white-space:nowrap; min-height:44px; }
-nav.tabs button[aria-selected="true"] { color:var(--fg); box-shadow:inset 0 -2px 0 var(--fg); }
-.strip { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--line); }
-.strip .sp { flex:1; }
-:host([kiosk]) .strip { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; padding:6px 10px; }
-/* in one scrolling line nothing may shrink, or the health details wrap word by word into a tall column */
-:host([kiosk]) .strip > *, :host([kiosk]) .strip #health > span { flex:none; flex-wrap:nowrap; }
-:host([kiosk]) .strip .sp { display:none; }
-:host([kiosk]) .strip .tag { padding:4px 6px; }
-main { padding:14px; max-width:1600px; margin:0 auto; }
-main.kiosk { padding:10px; }
-.grid-nu { display:grid; grid-template-columns:minmax(300px,380px) minmax(0,1fr); gap:14px; align-items:start; }
-main.kiosk .grid-nu { grid-template-columns:300px minmax(0,1fr); gap:10px; }
-main.kiosk .tiles { grid-template-columns:repeat(2,minmax(0,1fr)); }
-svg#tl:focus { outline:none; }
-.grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:14px; }
-.grid4 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr)); gap:8px; }
-.legend { display:flex; gap:12px; flex-wrap:wrap; padding:2px 14px 10px; color:var(--fg-2); }
-.legend span { display:inline-flex; gap:6px; align-items:center; }
-.legend i { width:14px; height:10px; display:inline-block; border-radius:2px; }
-nav.ktabs { position:sticky; bottom:0; z-index:2; display:flex; background:var(--panel); border-top:1px solid var(--line); }
-nav.ktabs button { flex:1; border:none; background:none; padding:14px 0; font:600 13px var(--font-data); color:var(--fg-3); }
-nav.ktabs button[aria-pressed="true"] { color:var(--fg); box-shadow:inset 0 2px 0 var(--fg); }
-a { color:var(--charge); }
-.alerts { display:flex; flex-direction:column; gap:1px; }
-.alert { background:var(--discharge-soft); border-bottom:1px solid var(--line); padding:8px 14px; font-size:13px; }
-.alert b { color:var(--fault); margin-right:6px; }
-.rec { border:1px solid var(--warn); border-radius:5px; padding:10px; display:flex; flex-direction:column; gap:8px; background:var(--panel); }
+:host { min-height:100vh; font-size:15px; }
+header.top { display:flex; align-items:center; gap:28px; padding:0 32px; height:64px; background:var(--bg); border-bottom:1px solid var(--line-2); position:sticky; top:0; z-index:2; }
+header .title { font:600 18px var(--font-body); letter-spacing:.02em; }
+nav.tabs { display:flex; gap:24px; overflow-x:auto; scrollbar-width:none; min-width:0; }
+nav.tabs button { border:none; background:none; padding:21px 0; font:15px var(--font-body); color:var(--fg-3); cursor:pointer; white-space:nowrap; box-shadow:none; }
+nav.tabs button[aria-current="page"] { color:var(--fg); box-shadow:inset 0 -2px 0 var(--fg); }
+.sp { flex:1; }
+.pill { display:inline-flex; align-items:center; gap:8px; background:none; border:1px solid var(--line); border-radius:999px; padding:8px 14px; color:var(--fg-2); font:13px var(--font-body); min-height:40px; cursor:pointer; max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pill.bad { border-color:var(--warn); color:var(--fg); }
+.gear { width:44px; height:44px; border-radius:10px; border:1px solid var(--line); background:none; color:var(--fg-2); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none; }
+.gear[aria-current="page"] { color:var(--fg); border-color:var(--fg-3); }
+.details { padding:10px 32px; border-bottom:1px solid var(--line-2); }
+main { padding:36px 32px 48px; max-width:1360px; margin:0 auto; display:flex; flex-direction:column; gap:36px; }
+h1 { margin:0; font:500 34px/1.2 var(--font-body); letter-spacing:-.01em; }
+h1.mid { font-size:24px; }
+h1.money { font:500 44px var(--font-data); }
+h2 { margin:0 0 10px; font:500 15px var(--font-body); color:var(--fg); }
+p { margin:0; }
+.quiet { color:var(--fg-3); }
+.fg { color:var(--fg); font-weight:500; }
+.small { font-size:13px; }
+.why { color:var(--fg-2); font-size:15px; max-width:68ch; }
+.c-fault { color:var(--fault); }
+.hero { display:flex; flex-wrap:wrap; align-items:flex-end; gap:32px 48px; }
+.say { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.hero .say { flex:999 1 420px; }   /* only beside the live numbers: in the page column a basis would become a height */
+.live { margin:0; display:grid; grid-template-columns:repeat(3,minmax(96px,auto)); gap:32px; }
+.live dt { font-size:13px; color:var(--fg-3); }
+.live dd { margin:4px 0 0; font:500 26px var(--font-data); white-space:nowrap; }
+.live dd small { font-size:14px; color:var(--fg-3); }
+.live .sub { font-size:12px; color:var(--fg-3); white-space:nowrap; }
+.block { background:var(--panel); border-radius:14px; padding:22px 24px; min-width:0; }
+.block.chart { padding:20px 24px 14px; }
+.chart-head { display:flex; align-items:center; flex-wrap:wrap; gap:10px 20px; margin-bottom:12px; font-size:13px; color:var(--fg-3); }
+.chart-head h2 { margin:0; }
+.key { display:inline-flex; align-items:center; gap:6px; }
+.key .sw { width:10px; height:10px; border-radius:2px; display:inline-block; }
+.key .ln { width:14px; height:2px; background:var(--fg); display:inline-block; }
+.seg.small button { min-height:34px; padding:6px 10px; }
+.two { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:40px; }
+.three { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:20px; }
+.agenda { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:0 20px; }
+.agenda > span { padding:13px 0; border-top:1px solid var(--line-2); }
+.rows > div { display:flex; justify-content:space-between; gap:12px; padding:13px 0; border-top:1px solid var(--line-2); }
+.rows > div > span:first-child { color:var(--fg-2); }
+.rows + .small, .rows + a { display:inline-block; margin-top:8px; }
+.device { background:var(--panel); border-radius:14px; padding:24px 28px; display:grid; grid-template-columns:200px minmax(0,1fr) 250px; gap:20px 36px; align-items:start; }
+.device.thin { background:none; padding:4px 28px; grid-template-columns:200px minmax(0,1fr); align-items:center; }
+.device.risk { box-shadow:inset 0 0 0 1px var(--fault); }
+.device .name { display:flex; flex-direction:column; gap:6px; }
+.device .name h2 { margin:0; font-size:19px; }
+.device .body { display:flex; flex-direction:column; gap:14px; min-width:0; }
+.device .body > p { font-size:17px; }
+.device .ctl { display:flex; flex-direction:column; gap:10px; align-items:flex-start; }
+.meter { height:12px; border-radius:6px; background:var(--panel-2); position:relative; overflow:hidden; }
+.meter i { position:absolute; inset:0 auto 0 0; background:var(--fg-2); border-radius:6px; }
+.meter em { position:absolute; top:0; bottom:0; width:2px; background:var(--warn); }
+.spread { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+.chip { padding:6px 10px; border-radius:8px; background:var(--panel-2); font-size:13px; }
+.seg { border-radius:10px; border-color:var(--line); }
+.seg button { font:500 13px var(--font-body); padding:10px 14px; min-height:44px; background:none; }
+.seg button[disabled] { color:var(--fg-3); opacity:.6; cursor:not-allowed; }
+.btn { border-radius:10px; font:500 13px var(--font-body); background:none; }
+details > summary { cursor:pointer; color:var(--fg-2); font-size:13px; list-style:none; }
+details > summary::before { content:"▸ "; color:var(--fg-3); }
+details[open] > summary::before { content:"▾ "; }
+details.block > summary { font-size:15px; color:var(--fg); }
+.why-box { border-top:1px solid var(--line-2); margin-top:12px; padding-top:14px; }
+tr.off { background:var(--discharge-soft); }
+.alerts { display:flex; flex-direction:column; }
+.alert { background:var(--discharge-soft); padding:10px 32px; font-size:14px; }
+.alert b { color:var(--fault); margin-right:8px; }
+.rec { border:1px solid var(--warn); border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:10px; background:var(--panel); }
 .hold { position:relative; overflow:hidden; touch-action:none; }
 .hold.holding { box-shadow:inset 0 0 0 2px var(--fault); }
+a { color:var(--charge); }
+/* wall tablet */
+:host([kiosk]) main { padding:36px 44px; max-width:none; }
+.kiosk { display:flex; flex-direction:column; gap:28px; }
+.kiosk .spread { font-size:17px; }
+h1.huge { font-size:58px; line-height:1.05; }
+.why.big { font-size:21px; }
+:host([kiosk]) .live dd { font-size:40px; }
+:host([kiosk]) .live dt { font-size:16px; }
+:host([kiosk]) .live .sub { font-size:14px; }
+/* narrow screens: everything stacks */
+@media (max-width: 860px) {
+  header.top { padding:0 14px; gap:14px; }
+  .pill { display:none; }
+  main { padding:20px 14px 36px; gap:24px; }
+  h1 { font-size:24px; }
+  .two { grid-template-columns:1fr; gap:24px; }
+  .device { grid-template-columns:1fr; padding:18px; }
+  .device.thin { grid-template-columns:1fr; padding:4px 18px; }
+  .live { gap:18px; }
+  .live dd { font-size:20px; }
+}
 `;
+
+/**
+ * The old battery manager's action text as charge, discharge or idle. Its states start with the mode and carry a power:
+ * 'Charging 5060W', 'Discharging 8000W', 'Adaptive 700W' and 'Adaptive Discharging 300W' (adaptive = discharging to
+ * follow the house), 'Opportunistic Solar (1230W excess)' (charging on solar), 'Passive Solar (...)', 'Idle | Upcoming:
+ * Charge ...' (the upcoming part must not count). A power of 0 W is idle.
+ */
+function otherAction(v) {
+  const x = String(v || "").trim().toLowerCase();
+  if (!x || x === "unknown" || x === "unavailable") return null;
+  const watts = x.replace(/\(.*?\)/g, "").match(/(\d+)\s*w\b/);       // a figure in brackets is a note, not the power
+  if (watts && Number(watts[1]) === 0 && !x.startsWith("opportunistic")) return "idle";
+  if (x.startsWith("charging") || x.startsWith("opportunistic solar")) return "charge";
+  if (x.startsWith("discharging") || x.startsWith("adaptive")) return "discharge";
+  return "idle";
+}
 
 function configureLink(s) {
   return s ? `<a data-nav href="/config/integrations/integration/hems" class="small">Change in HEMS settings →</a>` : "";
