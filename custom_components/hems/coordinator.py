@@ -662,9 +662,15 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             self.hass.async_create_task(self._log_event("legionella_seen", at=seen.isoformat(), tank_c=self.tank_temperature()))
 
     def legionella_last(self) -> datetime | None:
-        """The last legionella run: HEMS's own record, or the add-on's sensor while it still runs (the later of the two)."""
-        known = [t for t in (self.legionella_seen, self._legionella_from_role()) if t is not None]
-        return max(known) if known else None
+        """The last legionella run: HEMS's own record, taking over the add-on's sensor while it still runs when that one is later.
+
+        Adopted into the own record (and stored) because the add-on's sensor is a REST state: it is gone after every Home Assistant
+        restart until the add-on posts it again, and HEMS must not forget the last run in that hour."""
+        role = self._legionella_from_role()
+        if role is not None and (self.legionella_seen is None or role > self.legionella_seen):
+            self.legionella_seen = role
+            self._save()
+        return self.legionella_seen
 
     def legionella_due(self) -> datetime | None:
         """The local day the next run is due (as a midnight timestamp), None when no run is known."""
@@ -673,8 +679,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
 
     def _legionella_source(self) -> str | None:
         """Which record the last run comes from: 'tank' when HEMS's own is the latest, 'role' for the add-on's sensor."""
-        last = self.legionella_last()
-        return None if last is None else "tank" if last == self.legionella_seen else "role"
+        role = self._legionella_from_role()
+        return None if self.legionella_seen is None else "role" if role is not None and role == self.legionella_seen else "tank"
 
     def _legionella_from_role(self) -> datetime | None:
         """The last run from the optional role (the add-on's `sensor.wh_last_legionella`, 'YYYY-MM-DD HH:MM' local); None when unknown."""

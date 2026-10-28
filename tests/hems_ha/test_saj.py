@@ -142,3 +142,19 @@ async def test_hems_keeps_its_own_legionella_record_from_the_tank_and_survives_a
     await hass.async_block_till_done()
     state = hass.states.get("sensor.hems_last_legionella")
     assert state.attributes["source"] == "tank" and state.attributes["due"] == (now.astimezone(TZ).date() + timedelta(days=7)).isoformat()
+
+
+
+async def test_the_add_ons_last_run_is_adopted_and_kept_when_its_sensor_is_gone(hass: HomeAssistant, freezer, aioclient_mock):
+    """The add-on's sensor.wh_last_legionella is a REST state that vanishes on a restart; HEMS stores the run it read from it."""
+    from custom_components.hems.const import CONF_LEGIONELLA_LAST
+    from test_integration import ROLES
+    set_states(hass)
+    hass.states.async_set("sensor.wh_last_legionella", "2026-10-17 18:30")
+    entry = await setup_entry(hass, freezer, aioclient_mock, roles={**ROLES, CONF_LEGIONELLA_LAST: "sensor.wh_last_legionella"})
+    coordinator = entry.runtime_data
+    adopted = coordinator.legionella_last()
+    from homeassistant.util import dt as dt_util
+    assert adopted == datetime(2026, 10, 17, 18, 30, tzinfo=dt_util.get_default_time_zone()) and coordinator._stored()["legionella_seen"] == adopted.isoformat()
+    hass.states.async_remove("sensor.wh_last_legionella")
+    assert coordinator.legionella_last() == adopted and coordinator._legionella_source() == "tank"
