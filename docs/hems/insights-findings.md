@@ -10,9 +10,19 @@ Plan van 28 okt: verkoop 16:30–19:30 (12 kwartieren), 9 actief, 3 rustkwartier
   tegenover het beste aaneengesloten blok van 9 scheelt € 0,0031/kWh. Bij 15,85 kWh is dat **ongeveer € 0,05 per dag**.
 - **Wat ze kosten.** Elke pauze is een extra SAJ-ontlaadslot. Vandaag: 3 ontlaadsloten in plaats van 1, en 4 laadsloten. De SAJ heeft er
   7 van elk, en het plan beslaat 48 uur. De pauzes nemen dus sloten die een tweede venster (morgenochtend) nodig heeft.
-- **Voorstel:** een regel in `windows.py`/`slots.py`: een gat korter dan N kwartieren wordt gevuld als het verschil kleiner is dan een
-  drempel per extra slot (startwaarde € 0,10). Hetzelfde geldt voor laden. Dit is pas meetbaar met de replay over de dagen sinds 17 okt;
-  die meting is de volgende stap, vóór fase 3.
+- **Gemeten (28 okt, `scripts/hems_slot_study.py`, uitkomst in `docs/hems/observations/slot-study.md`).** 1177 echte plannen sinds
+  17 okt, telkens de komende 24 uur:
+  - **Geen enkel plan had meer dan 7 sloten per richting nodig.** Het maximum was 7 laadsloten (middagplan van 26 okt) en 6
+    ontlaadsloten. De mediaan is 1 laad- en 2 ontlaadsloten.
+  - **Sinds 25 okt wordt het plan in stukken geknipt:** 4 tot 7 laadsloten per middagplan. Van de 35 stukken in die middagplannen zijn
+    er 17 één kwartier lang, op vol vermogen. De planner kiest losse kwartieren uit de kwartierprijzen; dit is geen ruis.
+  - **Samenvoegen kost weinig.** Gaten van 1 kwartier vullen, met één vast vermogen per blok, kost per plan mediaan € 0,014 en
+    p90 € 0,15. Bij gaten tot 3 kwartieren is dat € 0,04 en € 0,31. Het middagplan van 28 okt gaat van 6/4 naar 4/2 sloten voor € 0,32.
+    Dit is een bovengrens, want de planner zou om een samengevoegd blok heen herplannen.
+- **Voorstel:** de planner niet aanpassen. Het samenvoegen hoort in de **slotbouwer van fase 3**: vul een gat van hooguit 2 idle-kwartieren
+  zolang het minder dan € 0,05 per uitgespaard slot kost, en voeg altijd samen (goedkoopste gat eerst) als er anders meer dan 7 sloten
+  nodig zijn. De slotbouwer logt de kosten van elke samenvoeging, zodat het bedrag in Insights te volgen is. Het vaste vermogen per slot
+  (een SAJ-slot kent één vermogen) kost zonder samenvoegen al mediaan € 0,002 per plan; dat is verwaarloosbaar.
 
 ## 2. HEMS en de oude manager: 4 van 50 kwartieren eens, −€ 1,93 (open punt 4)
 
