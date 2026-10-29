@@ -28,6 +28,9 @@ ROLE_SELECTORS: dict[str, Any] = {
     CONF_BATH: selector.EntitySelector(selector.EntitySelectorConfig(domain=["input_boolean", "switch"])),
     CONF_LEGIONELLA_LAST: _SENSOR, CONF_COMPARE_ACTION: _SENSOR}
 _ROLES_OPTIONAL = tuple(ROLE_SELECTORS)
+# The add-on's sensor.wh_last_legionella is a REST state: after every Home Assistant restart it is missing until the add-on posts it
+# again, so this role is not refused for a missing entity (HEMS keeps its own record and only takes a later run from it).
+_ROLES_CHECKED = tuple(r for r in _ROLES_OPTIONAL if r != CONF_LEGIONELLA_LAST)
 _DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _OPTIONAL_DATE = selector.TextSelector()          # an ISO date (2027-01-01) or empty; a date picker cannot be left empty
 _WEEKDAY = selector.SelectSelector(selector.SelectSelectorConfig(
@@ -149,7 +152,7 @@ class HemsConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
         if user_input is not None:
-            if all(self.hass.states.get(entity) is not None for role in _ROLES_OPTIONAL for entity in _as_list(user_input.get(role))):
+            if all(self.hass.states.get(entity) is not None for role in _ROLES_CHECKED for entity in _as_list(user_input.get(role))):
                 kept = {key: value for key, value in entry.data.items() if key not in _ROLES_OPTIONAL}
                 return self.async_update_reload_and_abort(entry, data={**kept, **{r: user_input[r] for r in _ROLES_OPTIONAL if user_input.get(r)}})
             errors["base"] = "entity_not_found"

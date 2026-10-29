@@ -158,3 +158,16 @@ async def test_the_add_ons_last_run_is_adopted_and_kept_when_its_sensor_is_gone(
     assert adopted == datetime(2026, 10, 17, 18, 30, tzinfo=dt_util.get_default_time_zone()) and coordinator._stored()["legionella_seen"] == adopted.isoformat()
     hass.states.async_remove("sensor.wh_last_legionella")
     assert coordinator.legionella_last() == adopted and coordinator._legionella_source() == "tank"
+
+
+
+async def test_the_legionella_role_can_be_set_while_the_add_ons_sensor_is_missing(hass: HomeAssistant, freezer, aioclient_mock):
+    """After a restart sensor.wh_last_legionella is gone until the add-on posts it; the reconfigure form still takes the role."""
+    from custom_components.hems.const import CONF_LEGIONELLA_LAST
+    from homeassistant.data_entry_flow import FlowResultType
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    form = await entry.start_reconfigure_flow(hass)
+    done = await hass.config_entries.flow.async_configure(form["flow_id"], {CONF_LEGIONELLA_LAST: "sensor.wh_last_legionella"})
+    assert done["type"] == FlowResultType.ABORT and done["reason"] == "reconfigure_successful"
+    assert entry.data[CONF_LEGIONELLA_LAST] == "sensor.wh_last_legionella"
