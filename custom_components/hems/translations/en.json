@@ -38,6 +38,8 @@
           "meter_export_l2_entity": "Grid meter: feed-in power L2",
           "meter_export_l3_entity": "Grid meter: feed-in power L3",
           "water_heater_entity": "Dashboard: water heater or tank temperature",
+          "away_entity": "Water heater: away mode (switch or input_boolean)",
+          "bath_entity": "Water heater: bath mode (input_boolean)",
           "legionella_last_entity": "Dashboard: time of the last legionella run (sensor)",
           "compare_action_entity": "Dashboard: action sensor of the old battery manager (transition comparison)"
         }
@@ -84,6 +86,16 @@
               "water_heater_legionella_hours": "Water heater: length of the legionella run (hours)",
               "water_heater_legionella_temp_c": "Water heater: temperature of the legionella run (°C)",
               "water_heater_legionella_min_c": "Water heater: a tank at or above this counts as a legionella run (°C)",
+              "water_heater_night_preheat_c": "Water heater: night preheat, when the night is cheaper (°C)",
+              "water_heater_night_minimal_c": "Water heater: night minimal, when the day is cheaper (°C)",
+              "water_heater_day_preheat_c": "Water heater: day run (°C)",
+              "water_heater_idle_c": "Water heater: stand-by (°C)",
+              "water_heater_low_price_c": "Water heater: stand-by at a low price, below 0.10 EUR/kWh (°C)",
+              "water_heater_negative_price_c": "Water heater: negative price (°C)",
+              "water_heater_bath_c": "Water heater: bath (°C)",
+              "water_heater_away_c": "Water heater: away (°C)",
+              "water_heater_bath_off_c": "Water heater: bath mode switches off above (°C)",
+              "water_heater_cycle_gap_min": "Water heater: a finished run keeps its temperature for (minutes)",
               "water_heater_legionella_weekday": "Water heater: legionella day"
             }
           },
@@ -303,6 +315,9 @@
       },
       "battery_discharged_energy": {
         "name": "Battery energy discharged"
+      },
+      "water_heater_target": {
+        "name": "Water heater target"
       }
     },
     "binary_sensor": {

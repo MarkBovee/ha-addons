@@ -29,6 +29,8 @@ CONF_PV_EXTRA = "pv_extra_entities"            # more PV power sensors, added to
 # Optional roles for the dashboard only (read, never planned on): the water heater or its tank temperature, when the last legionella
 # run happened, and the action sensor of the battery manager HEMS replaces (for the transition comparison).
 CONF_WATER_HEATER = "water_heater_entity"
+CONF_AWAY = "away_entity"                      # switch/input_boolean/binary_sensor: the house is away (the water heater keeps 35 °C)
+CONF_BATH = "bath_entity"                      # input_boolean: bath mode (58 °C, switched off by HEMS above the bath switch-off)
 CONF_LEGIONELLA_LAST = "legionella_last_entity"
 CONF_COMPARE_ACTION = "compare_action_entity"
 
@@ -58,7 +60,18 @@ DEFAULT_OPTIONS = {
     "water_heater_legionella_energy_kwh": 2.6,
     "water_heater_legionella_hours": 3,
     "water_heater_legionella_temp_c": 62.0,    # temperature of the legionella run (for the executor; the add-on's setting)
-    "water_heater_legionella_min_c": 60.0,     # a tank at or above this counts as a run in HEMS's own record
+    "water_heater_legionella_min_c": 60.0,
+    # the water heater executor's temperatures (Mark, 28 Oct 2026: all settings); defaults = the add-on's comfort preset as it runs here
+    "water_heater_night_preheat_c": 56.0,
+    "water_heater_night_minimal_c": 52.0,
+    "water_heater_day_preheat_c": 58.0,
+    "water_heater_idle_c": 35.0,
+    "water_heater_low_price_c": 50.0,
+    "water_heater_negative_price_c": 70.0,
+    "water_heater_bath_c": 58.0,
+    "water_heater_away_c": 35.0,
+    "water_heater_bath_off_c": 56.0,
+    "water_heater_cycle_gap_min": 50,              # a finished run keeps its temperature this long before stand-by (the add-on's min_cycle_gap)     # a tank at or above this counts as a run in HEMS's own record
     "water_heater_legionella_weekday": "saturday",
     "ev_enabled": False,                       # the EV module: plans the charge of the car (dry-run, nothing is written to the charger)
     "ev_capacity_kwh": 81.4,

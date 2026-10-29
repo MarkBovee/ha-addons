@@ -24,9 +24,10 @@ from .adapters import base_load_history, parse_price_curve, reading_from_state, 
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT, CONF_EV_PLUGGED,
                     CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_PRICE_CURVE,
                     CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
-                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
+                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, CONF_AWAY, CONF_BATH, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.heater import legionella_due_date, legionella_overdue, record_legionella
+from .engine.heater_control import HeaterCommand, HeaterInputs, HeaterRules, HeaterTemps, decide as decide_heater
 from .engine.contracts import MarketPrices
 from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot, window_tree
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
@@ -70,6 +71,7 @@ class HemsSnapshot:
     cycle_at: datetime | None = None       # when this cycle ran (UTC)
     previous_decision: Decision | None = None   # the plan of the cycle before, for the dashboard's plan diff
     saj: SajAdvice | None = None           # the SAJ slots HEMS would write now and how they differ from the inverter (advisory)
+    heater: HeaterCommand | None = None    # the water heater temperature HEMS would set now and why (advisory until the lock opens)
     legionella_last: datetime | None = None    # the last legionella run (own tank record or the add-on's sensor)
     legionella_due: datetime | None = None     # local midnight of the day the next run is due
     legionella_source: str | None = None       # "tank" (HEMS's own record) or "role" (the add-on's sensor)
@@ -85,6 +87,14 @@ def water_heater_from_options(o: dict[str, Any]) -> WaterHeaterConfig:
                              legionella_energy_kwh=float(o["water_heater_legionella_energy_kwh"]), legionella_hours=int(o["water_heater_legionella_hours"]), legionella_temp_c=float(o["water_heater_legionella_temp_c"]),
                              legionella_min_c=float(o["water_heater_legionella_min_c"]),
                              legionella_weekday=WEEKDAYS.index(weekday) if weekday in WEEKDAYS else WEEKDAYS.index(DEFAULT_OPTIONS["water_heater_legionella_weekday"]))
+
+
+def heater_rules_from_options(o: dict[str, Any]) -> HeaterRules:
+    """The water heater executor's temperatures and cycle gap from the (default-filled) options."""
+    temps = HeaterTemps(night_preheat=float(o["water_heater_night_preheat_c"]), night_minimal=float(o["water_heater_night_minimal_c"]),
+                        day_preheat=float(o["water_heater_day_preheat_c"]), idle=float(o["water_heater_idle_c"]), low_price=float(o["water_heater_low_price_c"]),
+                        negative_price=float(o["water_heater_negative_price_c"]), bath=float(o["water_heater_bath_c"]), away=float(o["water_heater_away_c"]))
+    return HeaterRules(temps=temps, bath_auto_off_c=float(o["water_heater_bath_off_c"]), cycle_gap=timedelta(minutes=float(o["water_heater_cycle_gap_min"])))
 
 
 def netting_end_from_options(o: dict[str, Any]) -> date | None:
@@ -179,7 +189,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self.saj_names = entity_names(SAJ_PREFIX)
         self.energy = EnergyCounters()                 # kWh totals for HA's Energy dashboard (solar, battery in and out)
         self.legionella_seen: datetime | None = None   # HEMS's own record: the day the tank last reached 60 °C (survives the add-on)
-        self._cycles = 0                           # cycles since start: the first one never writes (no old schedule is repeated)
+        self._cycles = 0
+        self._heater: HeaterCommand | None = None     # the previous water heater command, for the cycle gap                           # cycles since start: the first one never writes (no old schedule is repeated)
 
     def _on(self, role: str) -> bool | None:
         """A binary role as a flag: True, False, or None when the role is not set or its entity has no usable state."""
@@ -481,8 +492,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         text, windows, table = self._plan_for_users(output)
         self._cycles += 1
         saj = await self._saj_round(output)
+        heater = await self._heater_round(output, settings, now)
         return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table,
-                            self._weather, car, allowed, cycle_at=now, previous_decision=previous, saj=saj,
+                            self._weather, car, allowed, cycle_at=now, previous_decision=previous, saj=saj, heater=heater,
                             legionella_last=self.legionella_last(), legionella_due=self.legionella_due(), legionella_source=self._legionella_source())
 
     def may_write(self, output: EngineOutput) -> bool:
@@ -490,6 +502,45 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         a healthy cycle with a plan, and not the first cycle after a start."""
         return (WRITE_UNLOCKED and self.control.modes.get("battery") == MODE_AUTO and self.control.armed and output.status == "ok"
                 and output.decision is not None and self._cycles > 1)
+
+    def _is_on(self, role: str) -> bool:
+        """True when the entity of a toggle role is on."""
+        state = self.hass.states.get(self._entity(role) or "")
+        return bool(state and state.state == "on")
+
+    async def _heater_round(self, output: EngineOutput, settings: EngineSettings, now: datetime) -> HeaterCommand | None:
+        """Work out the water heater temperature (always, for advisory) and set it only when the lock is open and the module is in auto."""
+        if not settings.water_heater.enabled or not output.prices or not self._entity(CONF_WATER_HEATER):
+            return None
+        try:
+            rules = heater_rules_from_options({**DEFAULT_OPTIONS, **self.config_entry.options})
+            inputs = HeaterInputs(now, self.tank_temperature(), self._is_on(CONF_AWAY), self._is_on(CONF_BATH), self.legionella_last(), output.prices)
+            command = decide_heater(inputs, settings.water_heater, rules, dt_util.get_default_time_zone(), self._heater)
+        except Exception as err:  # noqa: BLE001 - the advisory view must not stop planning
+            _LOGGER.warning("HEMS could not work out the water heater temperature: %s", err)
+            return None
+        changed = self._heater is None or (command.target_c, command.program) != (self._heater.target_c, self._heater.program)
+        self._heater = command
+        if changed:
+            await self._log_event("water_heater", target_c=command.target_c, program=command.program, reason=command.reason, bath_off=command.bath_off)
+        if WRITE_UNLOCKED and self.control.modes.get("water_heater") == MODE_AUTO and self.control.armed and self._cycles > 1:
+            await self._write_heater(command)
+        return command
+
+    async def _write_heater(self, command: HeaterCommand) -> None:
+        """Set the water heater as the add-on does (operation mode Manual, then the temperature) when it differs; switch bath mode off."""
+        entity = self._entity(CONF_WATER_HEATER) or ""
+        state = self.hass.states.get(entity)
+        try:
+            if state is not None and state.domain == "water_heater" and state.attributes.get("temperature") != command.target_c:
+                await self.hass.services.async_call("water_heater", "set_operation_mode", {"entity_id": entity, "operation_mode": "Manual"}, blocking=True)
+                await self.hass.services.async_call("water_heater", "set_temperature", {"entity_id": entity, "temperature": command.target_c}, blocking=True)
+            if command.bath_off and self._entity(CONF_BATH):
+                domain = (self._entity(CONF_BATH) or "").split(".")[0]
+                await self.hass.services.async_call(domain, "turn_off", {"entity_id": self._entity(CONF_BATH)}, blocking=True)
+            await self._log_event("write", module="water_heater", target_c=command.target_c, ok=True)
+        except Exception as err:  # noqa: BLE001 - a failed write is logged, the next cycle tries again
+            await self._log_event("write", module="water_heater", target_c=command.target_c, ok=False, error=str(err))
 
     async def _saj_round(self, output: EngineOutput) -> SajAdvice | None:
         """Work out the SAJ slots for this plan (always, for advisory), and write them when may_write allows. Never breaks the cycle."""
