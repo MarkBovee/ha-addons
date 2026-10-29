@@ -41,7 +41,9 @@
           "away_entity": "Water heater: away mode (switch or input_boolean)",
           "bath_entity": "Water heater: bath mode (input_boolean)",
           "legionella_last_entity": "Dashboard: time of the last legionella run (sensor)",
-          "compare_action_entity": "Dashboard: action sensor of the old battery manager (transition comparison)"
+          "compare_action_entity": "Dashboard: action sensor of the old battery manager (transition comparison)",
+          "spa_climate_entity": "Spa: climate entity (water and target temperature)",
+          "spa_power_entity": "Spa: power sensor (optional)"
         }
       }
     },
@@ -121,6 +123,19 @@
               "ev_deadline_friday": "Deadline Friday (HH:MM, empty = none)",
               "ev_deadline_saturday": "Deadline Saturday (HH:MM, empty = none)",
               "ev_deadline_sunday": "Deadline Sunday (HH:MM, empty = none)"
+            }
+          },
+          "module_spa": {
+            "name": "Module: spa",
+            "data": {
+              "spa_enabled": "Spa module",
+              "spa_phase": "Spa: phase of the heater",
+              "spa_heater_kw": "Spa: heater power (kW)",
+              "spa_comfort_c": "Spa: comfort temperature (°C)",
+              "spa_above_c": "Spa: may heat above comfort by (°C)",
+              "spa_below_c": "Spa: may drift below comfort by (°C)",
+              "spa_heat_rate_c_h": "Spa: heating rate (°C per hour)",
+              "spa_cool_k_h": "Spa: heat loss (share of the difference with outdoor per hour)"
             }
           },
           "base_prices": {
@@ -318,6 +333,9 @@
       },
       "water_heater_target": {
         "name": "Water heater target"
+      },
+      "spa_target": {
+        "name": "Spa target"
       }
     },
     "binary_sensor": {
@@ -366,6 +384,13 @@
           "dry_run": "Dry-run",
           "advisory": "Advisory"
         }
+      },
+      "spa_mode": {
+        "name": "Spa mode",
+        "state": {
+          "dry_run": "Dry-run",
+          "advisory": "Advisory"
+        }
       }
     }
   },
@@ -379,6 +404,13 @@
         "friday": "Friday",
         "saturday": "Saturday",
         "sunday": "Sunday"
+      }
+    },
+    "phase": {
+      "options": {
+        "l1": "L1",
+        "l2": "L2",
+        "l3": "L3"
       }
     }
   },

@@ -24,10 +24,12 @@ from .adapters import base_load_history, parse_price_curve, reading_from_state, 
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT, CONF_EV_PLUGGED,
                     CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_PRICE_CURVE,
                     CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
-                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, CONF_AWAY, CONF_BATH, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
+                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, CONF_AWAY, CONF_BATH, CONF_SPA, CONF_SPA_POWER, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.heater import legionella_due_date, legionella_overdue, record_legionella
 from .engine.heater_control import HeaterCommand, HeaterInputs, HeaterRules, HeaterTemps, decide as decide_heater
+from .engine.spa import SpaConfig, SpaTarget, spa_target
+from .engine.balancer import PhaseLoad, allocate_phases
 from .engine.contracts import MarketPrices
 from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot, window_tree
 from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
@@ -72,6 +74,7 @@ class HemsSnapshot:
     previous_decision: Decision | None = None   # the plan of the cycle before, for the dashboard's plan diff
     saj: SajAdvice | None = None           # the SAJ slots HEMS would write now and how they differ from the inverter (advisory)
     heater: HeaterCommand | None = None    # the water heater temperature HEMS would set now and why (advisory until the lock opens)
+    spa: SpaTarget | None = None           # the spa target HEMS would set now and why (advisory until the lock opens)
     legionella_last: datetime | None = None    # the last legionella run (own tank record or the add-on's sensor)
     legionella_due: datetime | None = None     # local midnight of the day the next run is due
     legionella_source: str | None = None       # "tank" (HEMS's own record) or "role" (the add-on's sensor)
@@ -87,6 +90,16 @@ def water_heater_from_options(o: dict[str, Any]) -> WaterHeaterConfig:
                              legionella_energy_kwh=float(o["water_heater_legionella_energy_kwh"]), legionella_hours=int(o["water_heater_legionella_hours"]), legionella_temp_c=float(o["water_heater_legionella_temp_c"]),
                              legionella_min_c=float(o["water_heater_legionella_min_c"]),
                              legionella_weekday=WEEKDAYS.index(weekday) if weekday in WEEKDAYS else WEEKDAYS.index(DEFAULT_OPTIONS["water_heater_legionella_weekday"]))
+
+
+PHASE_INDEX = {"l1": 0, "l2": 1, "l3": 2}
+
+
+def spa_from_options(o: dict[str, Any]) -> SpaConfig:
+    """The spa module's settings from the (default-filled) options."""
+    return SpaConfig(enabled=bool(o["spa_enabled"]), heater_kw=float(o["spa_heater_kw"]), phase=PHASE_INDEX.get(str(o["spa_phase"]), 1),
+                     comfort_c=float(o["spa_comfort_c"]), above_c=float(o["spa_above_c"]), below_c=float(o["spa_below_c"]),
+                     heat_rate_c_h=float(o["spa_heat_rate_c_h"]), cool_k_h=float(o["spa_cool_k_h"]))
 
 
 def heater_rules_from_options(o: dict[str, Any]) -> HeaterRules:
@@ -144,7 +157,7 @@ def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -
                         bonus_only_daylight=o["bonus_only_daylight"], bonus_only_positive_price=o["bonus_only_positive_price"])
     return EngineSettings(battery=battery, prices=prices, latitude=latitude, longitude=longitude,
                           pv_gain_w_per_wm2=o["pv_gain_w_per_wm2"] or 7.0, pv_max_ac_w=o["pv_max_ac_w"],
-                          tz=dt_util.get_default_time_zone(), water_heater=water_heater_from_options(o), ev=ev_config_from_options(o),
+                          tz=dt_util.get_default_time_zone(), water_heater=water_heater_from_options(o), ev=ev_config_from_options(o), spa=spa_from_options(o),
                           grid_limit_a=float(o["grid_limit_a"]), grid_margin_a=float(o["grid_margin_a"]))
 
 
@@ -469,7 +482,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             now=now, soc_pct=reading_from_state(self.hass.states.get(self._entity(CONF_SOC) or "")),
             import_curve=parse_price_curve(price_state.attributes.get("price_curve") if price_state else None),
             load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market,
-            ev=self.ev_state(settings) if settings.ev.enabled else None, legionella_last=self.legionella_last())
+            ev=self.ev_state(settings) if settings.ev.enabled else None, legionella_last=self.legionella_last(),
+            spa_water_c=self.spa_water() if settings.spa.enabled else None, outdoor_c=self._weather.temperature_c if self._weather else None)
         previous = self._previous
         output = await self.hass.async_add_executor_job(step, inputs, settings, previous)
         if output.decision:
@@ -493,8 +507,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._cycles += 1
         saj = await self._saj_round(output)
         heater = await self._heater_round(output, settings, now)
+        spa = await self._spa_round(output, settings, now, car.current_a if car else 0.0)
         return HemsSnapshot(output, gain, len(self._history), weather_age, tomorrow_quarters(known, now), prices_until, execution, text, windows, table,
-                            self._weather, car, allowed, cycle_at=now, previous_decision=previous, saj=saj, heater=heater,
+                            self._weather, car, allowed, cycle_at=now, previous_decision=previous, saj=saj, heater=heater, spa=spa,
                             legionella_last=self.legionella_last(), legionella_due=self.legionella_due(), legionella_source=self._legionella_source())
 
     def may_write(self, output: EngineOutput) -> bool:
@@ -502,6 +517,61 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         a healthy cycle with a plan, and not the first cycle after a start."""
         return (WRITE_UNLOCKED and self.control.modes.get("battery") == MODE_AUTO and self.control.armed and output.status == "ok"
                 and output.decision is not None and self._cycles > 1)
+
+    def spa_water(self) -> float | None:
+        """The spa's water temperature from its climate entity."""
+        state = self.hass.states.get(self._entity(CONF_SPA) or "")
+        value = state.attributes.get("current_temperature") if state else None
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def spa_heating_w(self, settings: EngineSettings) -> float:
+        """What the spa draws now: its power sensor, or the heater's power while the climate says it is heating."""
+        power = reading_from_state(self.hass.states.get(self._entity(CONF_SPA_POWER) or ""))
+        if power is not None:
+            return max(power.value, 0.0)
+        state = self.hass.states.get(self._entity(CONF_SPA) or "")
+        return settings.spa.heater_kw * 1000 if state and state.attributes.get("hvac_action") == "heating" else 0.0
+
+    def spa_allowed(self, settings: EngineSettings, ev_a: float) -> bool:
+        """Whether the spa's phase can take the heater now, after the car (the spa gives way first). True without per-phase readings:
+        HEMS then does not hold the spa back, and the spa's own breaker protects the group."""
+        meter = []
+        for current_role, export_role, ev_role in zip(CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_EV_CURRENTS):
+            current = reading_from_state(self.hass.states.get(self._entity(current_role) or ""))
+            if current is None:
+                return True
+            exporting = reading_from_state(self.hass.states.get(self._entity(export_role) or ""))
+            car = reading_from_state(self.hass.states.get(self._entity(ev_role) or ""))
+            meter.append(current.value * (-1.0 if exporting is not None and exporting.value > 0 else 1.0) - (car.value if car else 0.0))
+        spa_a = self.spa_heating_w(settings) / settings.grid_voltage_v
+        heater_a = settings.spa.heater_kw * 1000 / settings.grid_voltage_v
+        meter[settings.spa.phase] -= spa_a                                   # what everything else draws: the spa's own current off
+        share = tuple(1.0 if p == settings.spa.phase else 0.0 for p in range(3))
+        granted = allocate_phases(tuple(meter), [PhaseLoad("ev", ev_a, 1, settings.ev.min_current_a if ev_a else 0.0),
+                                                 PhaseLoad("spa", heater_a, 2, heater_a, share)],
+                                  settings.grid_limit_a, settings.grid_margin_a, previous={"spa": spa_a})
+        return granted.get("spa", 0.0) >= heater_a - 1e-6
+
+    async def _spa_round(self, output: EngineOutput, settings: EngineSettings, now: datetime, ev_a: float) -> SpaTarget | None:
+        """The spa target for now (always, for advisory); set only when the lock is open and the module is in auto."""
+        if output.spa_plan is None:
+            return None
+        target = spa_target(output.spa_plan, now, settings.spa, self.spa_allowed(settings, ev_a))
+        if target and WRITE_UNLOCKED and self.control.modes.get("spa") == MODE_AUTO and self.control.armed and self._cycles > 1:
+            await self._write_spa(target)
+        return target
+
+    async def _write_spa(self, target: SpaTarget) -> None:
+        """Set the spa's target temperature when it differs (never its mode: the spa stays ready and keeps its own protection)."""
+        entity = self._entity(CONF_SPA) or ""
+        state = self.hass.states.get(entity)
+        if state is None or state.attributes.get("temperature") == target.target_c:
+            return
+        try:
+            await self.hass.services.async_call("climate", "set_temperature", {"entity_id": entity, "temperature": target.target_c}, blocking=True)
+            await self._log_event("write", module="spa", target_c=target.target_c, ok=True)
+        except Exception as err:  # noqa: BLE001 - a failed write is logged, the next cycle tries again
+            await self._log_event("write", module="spa", target_c=target.target_c, ok=False, error=str(err))
 
     def _is_on(self, role: str) -> bool:
         """True when the entity of a toggle role is on."""

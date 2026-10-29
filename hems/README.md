@@ -22,6 +22,8 @@ charger or water heater comes from, as long as Home Assistant exposes the readin
   unlocked.
 - **Water heater.** The cheapest day run, the weekly legionella run (only when it is due, counted in calendar days), and the
   target temperature per program: night preheat, day run, bath, away, negative price, stand-by. Every temperature is a setting.
+- **Spa.** Keeps the water inside a band around a comfort temperature, tops up in cheap quarters or on solar surplus, and gives
+  way first when its phase is full. Works with any spa that has a climate entity (Balboa's local Wi-Fi module, for one).
 - **EV charging.** A charging plan against departure deadlines, a price threshold and solar surplus, limited per phase by the
   grid connection.
 - **Prices.** Nord Pool day-ahead prices per quarter with your tariff (VAT, markup, energy tax, net metering until a date).

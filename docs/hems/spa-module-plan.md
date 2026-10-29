@@ -53,6 +53,17 @@ laagste prioriteit en `min_a` gelijk aan de stroom van de heater (aan of uit). K
 | 5 | Schrijver achter het slot (`climate.set_temperature`) | test met een nep-climate; geen aanroep in dry-run |
 | 6 | Als de module er is: rol zetten, opwarm- en afkoelsnelheid meten, advisory een paar dagen | in het echte paneel |
 
+## Voortgang (29 okt 2026, branch `feature/hems-spa`)
+
+Plak 1 t/m 5 gebouwd, de module staat standaard uit:
+- Rollen `spa_climate_entity` en `spa_power_entity`, plus het onderdeel "Module: spa" in de instellingen (fase L1/L2/L3, kW, comfort, boven, onder, opwarm- en afkoelsnelheid) en `select.hems_spa_mode`.
+- `hems.spa.plan_spa`: DP op 0,05 °C. Binnen de band moet elk kwartier ook binnen de band eindigen; onder de band verwarmt hij altijd; PV-overschot telt tegen de exportprijs. De kWh gaan na de EV in de verbruiksprognose.
+- `Coordinator.spa_allowed`: de stroom per fase van de meter, min die van de auto en van de spa zelf, door `allocate_phases` met EV vóór spa. Zonder meterwaarden houdt HEMS de spa niet tegen.
+- `sensor.hems_spa_target` (doel, verwarmen ja/nee, reden, haalbaarheid en de kwartieren vooruit).
+- Schrijver `climate.set_temperature` (alleen bij een verschil, nooit de modus), achter `WRITE_UNLOCKED` en auto.
+
+Als de wifi-module er is: de Balboa-integratie toevoegen, `spa_climate_entity` zetten, de module aanzetten met de juiste fase en het juiste vermogen, en een paar dagen de opwarm- en afkoelsnelheid naast de meting leggen.
+
 ## Open (later, met de spa erbij)
 
 - Welke fase (L1/L2/L3), en het werkelijke vermogen. Ook of de pompen en de heater samen meer dan 16 A trekken.

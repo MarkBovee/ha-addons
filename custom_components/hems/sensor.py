@@ -32,6 +32,16 @@ class HemsSensorDescription(SensorEntityDescription):
     attributes: Callable[[HemsSnapshot], dict[str, Any]] | None = None
 
 
+def _spa_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """Heat now or not and why, whether the band holds, and the planned quarters ahead (advisory: nothing is written yet)."""
+    plan, target = snap.output.spa_plan, snap.spa
+    if plan is None or target is None:
+        return {}
+    return {"heat": target.heat, "reason": target.reason, "feasible": plan.feasible, "heat_quarters": sum(q.heat for q in plan.quarters),
+            "kwh_planned": round(sum(q.kwh for q in plan.quarters), 2),
+            "quarters": [{"t": q.start.isoformat(), "heat": q.heat, "temp_c": q.temp_c} for q in plan.quarters[:PLAN_PREVIEW_SLOTS]]}
+
+
 def _heater_attrs(snap: HemsSnapshot) -> dict[str, Any]:
     """The program, the reason and the window behind the water heater target (advisory: nothing is written yet)."""
     h = snap.heater
@@ -314,6 +324,8 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
                           value=_plan_diff_value, attributes=_plan_diff_attrs),
     HemsSensorDescription(key="last_legionella", translation_key="last_legionella", device_class=SensorDeviceClass.TIMESTAMP,
                           value=lambda s: s.legionella_last, attributes=_legionella_attrs),
+    HemsSensorDescription(key="spa_target", translation_key="spa_target", device_class=SensorDeviceClass.TEMPERATURE,
+                          native_unit_of_measurement=UnitOfTemperature.CELSIUS, value=lambda s: s.spa.target_c if s.spa else None, attributes=_spa_attrs),
     HemsSensorDescription(key="water_heater_target", translation_key="water_heater_target", device_class=SensorDeviceClass.TEMPERATURE,
                           native_unit_of_measurement=UnitOfTemperature.CELSIUS, value=lambda s: s.heater.target_c if s.heater else None,
                           attributes=_heater_attrs),

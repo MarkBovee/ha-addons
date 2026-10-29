@@ -30,6 +30,8 @@ CONF_PV_EXTRA = "pv_extra_entities"            # more PV power sensors, added to
 # run happened, and the action sensor of the battery manager HEMS replaces (for the transition comparison).
 CONF_WATER_HEATER = "water_heater_entity"
 CONF_AWAY = "away_entity"                      # switch/input_boolean/binary_sensor: the house is away (the water heater keeps 35 °C)
+CONF_SPA = "spa_climate_entity"                # climate: the spa (Balboa or any spa with a climate entity): water and target temperature
+CONF_SPA_POWER = "spa_power_entity"            # sensor (W), optional: the spa's own meter; without it heating = the heater's power
 CONF_BATH = "bath_entity"                      # input_boolean: bath mode (58 °C, switched off by HEMS above the bath switch-off)
 CONF_LEGIONELLA_LAST = "legionella_last_entity"
 CONF_COMPARE_ACTION = "compare_action_entity"
@@ -71,7 +73,16 @@ DEFAULT_OPTIONS = {
     "water_heater_bath_c": 58.0,
     "water_heater_away_c": 35.0,
     "water_heater_bath_off_c": 56.0,
-    "water_heater_cycle_gap_min": 50,              # a finished run keeps its temperature this long before stand-by (the add-on's min_cycle_gap)     # a tank at or above this counts as a run in HEMS's own record
+    "water_heater_cycle_gap_min": 50,
+    # the spa module (docs/hems/spa-module-plan.md): keep the water in a band, heat cheaply, give way first on a full phase
+    "spa_enabled": False,
+    "spa_phase": "l2",
+    "spa_heater_kw": 3.0,
+    "spa_comfort_c": 38.0,
+    "spa_above_c": 0.5,
+    "spa_below_c": 1.0,
+    "spa_heat_rate_c_h": 2.0,
+    "spa_cool_k_h": 0.02,              # a finished run keeps its temperature this long before stand-by (the add-on's min_cycle_gap)     # a tank at or above this counts as a run in HEMS's own record
     "water_heater_legionella_weekday": "saturday",
     "ev_enabled": False,                       # the EV module: plans the charge of the car (dry-run, nothing is written to the charger)
     "ev_capacity_kwh": 81.4,

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta, timezone
 from typing import Any
 
-MODULES = ("battery", "ev", "water_heater")
+MODULES = ("battery", "ev", "water_heater", "spa")
 MODE_DRY_RUN = "dry_run"
 MODE_ADVISORY = "advisory"
 MODE_AUTO = "auto"                 # writes to the device; not in MODES, so it cannot be chosen until phase 4 opens it

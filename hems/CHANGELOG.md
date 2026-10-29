@@ -2,6 +2,13 @@
 
 All notable changes to the HEMS integration. Versions follow `custom_components/hems/manifest.json`.
 
+## [Unreleased]
+
+### Added
+- Spa module (off by default): keeps the water in a temperature band, heats in cheap quarters or on solar surplus, gives way first on
+  a full phase; `sensor.hems_spa_target`, `select.hems_spa_mode`, roles `spa_climate_entity` and `spa_power_entity`. The writer
+  (`climate.set_temperature`) is behind the phase lock.
+
 ## [0.2.0] - 2026-10-29
 
 ### Added
