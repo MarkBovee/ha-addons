@@ -16,6 +16,7 @@ from hems.forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
 from hems.prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
 from hems.ev import EvConfig, EvPlan, EvState, ev_kwh_per_quarter, ev_record, plan_ev
 from hems.heater import HeatingRun, WaterHeaterConfig, plan_runs, run_kwh_per_quarter, without_daily_peak
+from hems.spa import SpaConfig, SpaPlan, plan_spa, spa_kwh_per_quarter
 from hems.pvforecast import pv_kwh_per_quarter
 from hems.rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
 from hems.slots import SLOT_H, slot_starts
@@ -42,6 +43,7 @@ class EngineSettings:
     tz: ZoneInfo = LOCAL_TZ
     water_heater: WaterHeaterConfig = field(default_factory=WaterHeaterConfig)   # the switchable water heater module (off = the heater stays in the history)
     ev: EvConfig = field(default_factory=EvConfig)                              # the switchable EV module (off = no EV plan and no grid cap)
+    spa: SpaConfig = field(default_factory=SpaConfig)                           # the switchable spa module (off = no spa plan)
     grid_limit_a: float = 25.0                                                  # the connection's limit per phase (3x25 A)
     grid_margin_a: float = 1.0                                                  # kept free below the limit: the meter and the charger answer with a delay
     grid_voltage_v: float = 230.0
@@ -56,6 +58,9 @@ class EngineInputs:
     ghi_w_m2: Mapping[datetime, float] | None         # irradiance by quarter start; None = no weather data
     market: MarketPrices | None = None                # preferred price source: market prices, priced by the model
     ev: EvState | None = None                         # the car and its socket; None = unknown (the EV module then says so)
+    legionella_last: datetime | None = None           # the water heater's last legionella run; None = unknown (the run is planned as due)
+    spa_water_c: float | None = None                  # the spa's water temperature; None = unknown (no spa plan)
+    outdoor_c: Mapping[datetime, float] | None = None # outdoor temperature by quarter start, for the spa's heat loss
 
 
 @dataclass(frozen=True)
@@ -69,6 +74,7 @@ class EngineOutput:
     detail: dict | None = None               # the full plan as compact arrays (hems.decision_log.plan_detail)
     heating_runs: tuple[HeatingRun, ...] = ()   # the water heater module's planned runs (empty when it is off)
     ev_plan: EvPlan | None = None               # the EV module's plan (None when it is off)
+    spa_plan: SpaPlan | None = None             # the spa module's plan (None when it is off or the water temperature is unknown)
 
 
 def _failure(status: str, inputs: EngineInputs, **extra) -> EngineOutput:
@@ -152,7 +158,7 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
     prices, source, price_check = _prices(inputs, settings, start)
     if prices is None:
         return _failure(STATUS_NO_PRICES, inputs)
-    runs = tuple(plan_runs(prices, inputs.now, settings.water_heater, settings.tz))
+    runs = tuple(plan_runs(prices, inputs.now, settings.water_heater, settings.tz, inputs.legionella_last))
     load, load_source = _load_forecast(inputs, settings, start, settings.max_slots, runs)
     pv = pv_kwh_per_quarter(inputs.ghi_w_m2 or {}, settings.pv_gain_w_per_wm2, settings.pv_max_ac_w)
     ev_plan = _ev_plan(inputs, settings, prices, load, pv)
@@ -160,6 +166,10 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
         for quarter, kwh in ev_kwh_per_quarter(ev_plan).items():       # the battery plans around the car, like around the heater
             if quarter in load:
                 load[quarter] += kwh
+    spa_plan = plan_spa(prices, surplus_kwh_per_quarter(pv, load), inputs.outdoor_c, inputs.now, inputs.spa_water_c, settings.spa)
+    for quarter, kwh in spa_kwh_per_quarter(spa_plan).items():          # and around the spa, which comes after the car
+        if quarter in load:
+            load[quarter] += kwh
     soc_kwh = inputs.soc_pct.value / 100 * cfg.capacity_kwh
     decision = plan_next(HorizonInputs(inputs.now, soc_kwh, prices, load, pv, settings.max_slots, import_cap_kwh=_import_cap_kwh(settings)), cfg)
     if decision is None:
@@ -177,4 +187,6 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
         trace["plan_shift"] = shift
     if ev_plan is not None:
         trace["ev"] = ev_record(ev_plan)
-    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace, plan_detail(decision), runs, ev_plan)
+    if spa_plan is not None:
+        trace["spa"] = {"reason": spa_plan.reason, "feasible": spa_plan.feasible, "heat_quarters": sum(q.heat for q in spa_plan.quarters)}
+    return EngineOutput(STATUS_OK, decision, prices, load, pv, trace, plan_detail(decision), runs, ev_plan, spa_plan)

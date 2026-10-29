@@ -1,6 +1,6 @@
 """The SAJ write layer against a fake inverter: `text.set_value` and `number.set_value` services that update the entities, one
 that fails, one the inverter ignores. Phase 3: the coordinator never writes, even with the battery set to auto and armed."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -121,3 +121,53 @@ async def test_phase_3_never_writes_even_in_auto_and_armed(hass: HomeAssistant, 
     assert not coordinator.may_write(coordinator.data.output)
     state = hass.states.get("sensor.hems_battery_schedule")
     assert state is not None and state.state.endswith("slots") and state.attributes["writes"] > 0
+
+
+async def test_hems_keeps_its_own_legionella_record_from_the_tank_and_survives_a_restart(hass: HomeAssistant, freezer, aioclient_mock):
+    """The tank reaches 62 °C: HEMS stamps that moment, stores it, and its sensor shows it with the due day a week later; the add-on's
+    sensor is not needed (it goes)."""
+    from custom_components.hems.const import CONF_WATER_HEATER
+    from test_integration import ROLES
+    set_states(hass)
+    hass.states.async_set("water_heater.boiler", "eco", {"current_temperature": 55})
+    entry = await setup_entry(hass, freezer, aioclient_mock, roles={**ROLES, CONF_WATER_HEATER: "water_heater.boiler"})
+    coordinator = entry.runtime_data
+    coordinator.async_sample(datetime.now(timezone.utc))
+    assert coordinator.legionella_seen is None
+    hass.states.async_set("water_heater.boiler", "performance", {"current_temperature": 62})
+    now = datetime.now(timezone.utc)
+    coordinator.async_sample(now)
+    assert coordinator.legionella_seen == now and coordinator._stored()["legionella_seen"] == now.isoformat()
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    state = hass.states.get("sensor.hems_last_legionella")
+    assert state.attributes["source"] == "tank" and state.attributes["due"] == (now.astimezone(TZ).date() + timedelta(days=7)).isoformat()
+
+
+
+async def test_the_add_ons_last_run_is_adopted_and_kept_when_its_sensor_is_gone(hass: HomeAssistant, freezer, aioclient_mock):
+    """The add-on's sensor.wh_last_legionella is a REST state that vanishes on a restart; HEMS stores the run it read from it."""
+    from custom_components.hems.const import CONF_LEGIONELLA_LAST
+    from test_integration import ROLES
+    set_states(hass)
+    hass.states.async_set("sensor.wh_last_legionella", "2026-10-17 18:30")
+    entry = await setup_entry(hass, freezer, aioclient_mock, roles={**ROLES, CONF_LEGIONELLA_LAST: "sensor.wh_last_legionella"})
+    coordinator = entry.runtime_data
+    adopted = coordinator.legionella_last()
+    from homeassistant.util import dt as dt_util
+    assert adopted == datetime(2026, 10, 17, 18, 30, tzinfo=dt_util.get_default_time_zone()) and coordinator._stored()["legionella_seen"] == adopted.isoformat()
+    hass.states.async_remove("sensor.wh_last_legionella")
+    assert coordinator.legionella_last() == adopted and coordinator._legionella_source() == "tank"
+
+
+
+async def test_the_legionella_role_can_be_set_while_the_add_ons_sensor_is_missing(hass: HomeAssistant, freezer, aioclient_mock):
+    """After a restart sensor.wh_last_legionella is gone until the add-on posts it; the reconfigure form still takes the role."""
+    from custom_components.hems.const import CONF_LEGIONELLA_LAST
+    from homeassistant.data_entry_flow import FlowResultType
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    form = await entry.start_reconfigure_flow(hass)
+    done = await hass.config_entries.flow.async_configure(form["flow_id"], {CONF_LEGIONELLA_LAST: "sensor.wh_last_legionella"})
+    assert done["type"] == FlowResultType.ABORT and done["reason"] == "reconfigure_successful"
+    assert entry.data[CONF_LEGIONELLA_LAST] == "sensor.wh_last_legionella"

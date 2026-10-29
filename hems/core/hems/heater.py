@@ -35,6 +35,8 @@ class WaterHeaterConfig:
     legionella_energy_kwh: float = 2.6
     legionella_hours: int = 3
     legionella_weekday: int = 5              # 0 = Monday ... 5 = Saturday
+    legionella_temp_c: float = 62.0          # the temperature of the legionella run (the add-on's setting); for the executor, not planned on
+    legionella_min_c: float = 60.0           # a tank at or above this counts as a protection run (the add-on's LEGIONELLA_TEMP_THRESHOLD)
 
 
 @dataclass(frozen=True)
@@ -74,17 +76,57 @@ def _cheapest_window(hours: dict[datetime, float], part_start: datetime, part_en
     return start, price
 
 
-def plan_runs(prices: PriceSeries, now: datetime, config: WaterHeaterConfig, tz: tzinfo) -> list[HeatingRun]:
+LEGIONELLA_INTERVAL_DAYS = 7
+def record_legionella(last_run: datetime | None, tank_c: float | None, now: datetime, tz: tzinfo, min_c: float = 60.0) -> datetime | None:
+    """The last protection run after one tank reading: `now` the first time on a local day the tank reaches `min_c`
+    (WaterHeaterConfig.legionella_min_c),
+    otherwise unchanged. Any cause counts (the legionella run, a negative price, heating by hand), as in the add-on.
+
+    The stamp is the moment 60 °C was first reached that day, not refreshed while the tank stays hot: the add-on refreshed it every hour,
+    which is what made the elapsed-time rule skip 24 Oct 2026 (§5.1 of the live-transition plan)."""
+    if tank_c is None or tank_c < min_c:
+        return last_run
+    if last_run is not None and last_run.astimezone(tz).date() >= now.astimezone(tz).date():
+        return last_run
+    return now
+LEGIONELLA_SLACK_DAYS = 1                 # the alert waits one day past the due day before it calls the run overdue
+
+
+def legionella_due_date(last_run: datetime | None, tz: tzinfo, interval_days: int = LEGIONELLA_INTERVAL_DAYS) -> date | None:
+    """The first local calendar day the protection is due again, None when no run is known (due at once).
+
+    Calendar days, not elapsed hours: the water heater add-on counted `(now - last).days` and skipped Saturday 24 Oct 2026 because the
+    run of the 17th was stamped at 18:30 and the next window opened at 14:00 (6 days 19.5 h). Same rule as the add-on's 1.3.1 fix."""
+    return None if last_run is None else last_run.astimezone(tz).date() + timedelta(days=interval_days)
+
+
+def legionella_due(last_run: datetime | None, day: date, tz: tzinfo, interval_days: int = LEGIONELLA_INTERVAL_DAYS) -> bool:
+    """Whether the protection is due on `day`: no run known, or `interval_days` calendar days after the day of the last run."""
+    due = legionella_due_date(last_run, tz, interval_days)
+    return due is None or due <= day
+
+
+def legionella_overdue(last_run: datetime | None, today: date, tz: tzinfo) -> bool:
+    """True when the due day passed more than LEGIONELLA_SLACK_DAYS ago without a run; False when no run is known (nothing to compare)."""
+    due = legionella_due_date(last_run, tz)
+    return due is not None and today > due + timedelta(days=LEGIONELLA_SLACK_DAYS)
+
+
+def plan_runs(prices: PriceSeries, now: datetime, config: WaterHeaterConfig, tz: tzinfo,
+              last_legionella: datetime | None = None) -> list[HeatingRun]:
     """The planned runs (times in UTC) from `now` on, in order: per local day with a complete price curve a night run (if it has energy) and a day run.
 
     The day run is the cheapest window of 06-24, the legionella one (longer, more energy) on its weekday; the night run the cheapest
-    window of 00-06. Empty when the module is off. A run that has ended is left out; one that is going on stays."""
+    window of 00-06. Empty when the module is off. A run that has ended is left out; one that is going on stays.
+
+    The legionella run is planned only on its weekday and only when it is due (`legionella_due`), as the add-on does; there is no
+    catch-up on another day (Mark's choice). Without a known last run it is planned (due at once: the safe side)."""
     if not config.enabled:
         return []
     hours = _hour_prices(prices, tz)
     runs: list[HeatingRun] = []
     for day in sorted({h.astimezone(tz).date() for h in hours}):
-        legionella = day.weekday() == config.legionella_weekday
+        legionella = day.weekday() == config.legionella_weekday and legionella_due(last_legionella, day, tz)
         parts = ((NIGHT, NIGHT_HOURS, config.hours, config.night_energy_kwh),
                  (LEGIONELLA if legionella else HEATING, DAY_HOURS, config.legionella_hours if legionella else config.hours,
                   config.legionella_energy_kwh if legionella else config.energy_kwh))

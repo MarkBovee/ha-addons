@@ -32,6 +32,30 @@ class HemsSensorDescription(SensorEntityDescription):
     attributes: Callable[[HemsSnapshot], dict[str, Any]] | None = None
 
 
+def _spa_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """Heat now or not and why, whether the band holds, and the planned quarters ahead (advisory: nothing is written yet)."""
+    plan, target = snap.output.spa_plan, snap.spa
+    if plan is None or target is None:
+        return {}
+    return {"heat": target.heat, "reason": target.reason, "feasible": plan.feasible, "heat_quarters": sum(q.heat for q in plan.quarters),
+            "kwh_planned": round(sum(q.kwh for q in plan.quarters), 2),
+            "quarters": [{"t": q.start.isoformat(), "heat": q.heat, "temp_c": q.temp_c} for q in plan.quarters[:PLAN_PREVIEW_SLOTS]]}
+
+
+def _heater_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """The program, the reason and the window behind the water heater target (advisory: nothing is written yet)."""
+    h = snap.heater
+    if h is None:
+        return {}
+    window = {"from": h.window[0].isoformat(), "to": h.window[1].isoformat()} if h.window else None
+    return {"program": h.program, "reason": h.reason, "in_window": h.in_window, "window": window, "bath_off": h.bath_off}
+
+
+def _legionella_attrs(snap: HemsSnapshot) -> dict[str, Any]:
+    """When the next run is due and where the last one comes from (HEMS's own tank record or the add-on's sensor)."""
+    return {"due": snap.legionella_due.date().isoformat() if snap.legionella_due else None, "source": snap.legionella_source}
+
+
 def _schedule_value(snap: HemsSnapshot) -> str | None:
     """The SAJ slots HEMS would write, in a few words ('2 charge · 1 sell slots'); None without a plan."""
     advice = snap.saj
@@ -298,6 +322,13 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
     HemsSensorDescription(key="plan", translation_key="plan", value=lambda s: s.plan_text or None, attributes=_plan_preview),
     HemsSensorDescription(key="plan_diff", translation_key="plan_diff", state_class=SensorStateClass.MEASUREMENT, native_unit_of_measurement="quarters",
                           value=_plan_diff_value, attributes=_plan_diff_attrs),
+    HemsSensorDescription(key="last_legionella", translation_key="last_legionella", device_class=SensorDeviceClass.TIMESTAMP,
+                          value=lambda s: s.legionella_last, attributes=_legionella_attrs),
+    HemsSensorDescription(key="spa_target", translation_key="spa_target", device_class=SensorDeviceClass.TEMPERATURE,
+                          native_unit_of_measurement=UnitOfTemperature.CELSIUS, value=lambda s: s.spa.target_c if s.spa else None, attributes=_spa_attrs),
+    HemsSensorDescription(key="water_heater_target", translation_key="water_heater_target", device_class=SensorDeviceClass.TEMPERATURE,
+                          native_unit_of_measurement=UnitOfTemperature.CELSIUS, value=lambda s: s.heater.target_c if s.heater else None,
+                          attributes=_heater_attrs),
     HemsSensorDescription(key="battery_schedule", translation_key="battery_schedule", value=_schedule_value, attributes=_schedule_attrs),
     HemsSensorDescription(key="last_cycle", translation_key="last_cycle", device_class=SensorDeviceClass.TIMESTAMP, entity_category=EntityCategory.DIAGNOSTIC,
                           value=lambda s: s.cycle_at),
@@ -367,6 +398,15 @@ LEDGER_SENSORS: tuple[HemsLedgerDescription, ...] = (
                           state_class=SensorStateClass.MEASUREMENT, value=_error("pv"), attributes=_error_attrs("pv")),
     HemsLedgerDescription(key="load_forecast_error", translation_key="load_forecast_error", native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
                           state_class=SensorStateClass.MEASUREMENT, value=_error("load"), attributes=_error_attrs("load")),
+    HemsLedgerDescription(key="solar_energy", translation_key="solar_energy", device_class=SensorDeviceClass.ENERGY,
+                          native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.TOTAL_INCREASING,
+                          suggested_display_precision=2, value=lambda c: round(c.energy.solar_kwh, 3)),
+    HemsLedgerDescription(key="battery_charged_energy", translation_key="battery_charged_energy", device_class=SensorDeviceClass.ENERGY,
+                          native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.TOTAL_INCREASING,
+                          suggested_display_precision=2, value=lambda c: round(c.energy.charged_kwh, 3)),
+    HemsLedgerDescription(key="battery_discharged_energy", translation_key="battery_discharged_energy", device_class=SensorDeviceClass.ENERGY,
+                          native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR, state_class=SensorStateClass.TOTAL_INCREASING,
+                          suggested_display_precision=2, value=lambda c: round(c.energy.discharged_kwh, 3)),
     HemsLedgerDescription(key="recommendations", translation_key="recommendations", value=lambda c: len(c.recommendations()),
                           attributes=lambda c: {"items": c.recommendations()}),
 )

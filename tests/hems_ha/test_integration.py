@@ -419,7 +419,7 @@ async def test_saving_the_settings_form_reloads_hems_and_the_planner_uses_the_ne
     entry = await setup_entry(hass, freezer, aioclient_mock)
     first = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
     form = await hass.config_entries.options.async_init(entry.entry_id)
-    assert form["type"] == FlowResultType.FORM and list(map(str, form["data_schema"].schema)) == ["module_battery", "module_water_heater", "module_ev", "base_prices", "base_forecast", "base_grid", "logging"]
+    assert form["type"] == FlowResultType.FORM and list(map(str, form["data_schema"].schema)) == ["module_battery", "module_water_heater", "module_ev", "module_spa", "base_prices", "base_forecast", "base_grid", "logging"]
     saved = await hass.config_entries.options.async_configure(form["flow_id"], {"module_battery": {"reserve_soc_pct": 40.0, "hold_cost_kwh_h": 0.01}})
     await hass.async_block_till_done()
     assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["reserve_soc_pct"] == 40.0 and entry.options["hold_cost_kwh_h"] == 0.01
@@ -678,7 +678,7 @@ async def test_the_settings_form_is_split_into_parts_that_cover_every_option_and
     entry = await setup_entry(hass, freezer, aioclient_mock)
     form = await hass.config_entries.options.async_init(entry.entry_id)
     collapsed = {str(name): part.options["collapsed"] for name, part in form["data_schema"].schema.items()}
-    assert collapsed == {"module_battery": False, "module_water_heater": True, "module_ev": True, "base_prices": True, "base_forecast": True, "base_grid": True, "logging": True}
+    assert collapsed == {"module_battery": False, "module_water_heater": True, "module_ev": True, "module_spa": True, "base_prices": True, "base_forecast": True, "base_grid": True, "logging": True}
     assert list(collapsed) == list(SECTIONS), "modules first, then the base components they share"
     keys = [key for keys in SECTIONS.values() for key in keys]
     assert sorted(keys) == sorted(set(keys)) and set(keys) == set(DEFAULT_OPTIONS), "every editable option is in exactly one part"
@@ -750,7 +750,7 @@ def test_the_integration_is_english_only():
     names = {file: {(domain, key): ent["name"] for domain, group in json.loads((ROOT / "custom_components" / "hems" / f"{file}.json").read_text())["entity"].items()
                     for key, ent in group.items()} for file in ("strings", "translations/en")}
     assert names["translations/en"] == names["strings"]
-    assert len(names["strings"]) == 43 and names["strings"][("sensor", "charge_window")] == "Charge window"
+    assert len(names["strings"]) == 50 and names["strings"][("sensor", "charge_window")] == "Charge window"
 
 
 EV_ROLES = {**ROLES, CONF_EV_PLUGGED: "binary_sensor.car_plugged", CONF_EV_CHARGING: "binary_sensor.car_charging", CONF_EV_SOC: "sensor.car_soc",

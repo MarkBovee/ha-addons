@@ -4,7 +4,7 @@ import pytest
 
 from hems.dryrun import EngineInputs, EngineSettings, _load_forecast
 from hems.forecast import LOCAL_TZ
-from hems.heater import HeatingRun, WaterHeaterConfig, plan_runs, run_kwh_per_quarter, without_daily_peak
+from hems.heater import HeatingRun, WaterHeaterConfig, legionella_due, legionella_overdue, plan_runs, record_legionella, run_kwh_per_quarter, without_daily_peak
 from hems.prices import PriceSeries
 
 NOW = datetime(2026, 10, 15, 9, 7, tzinfo=LOCAL_TZ)
@@ -147,3 +147,38 @@ def test_the_planned_run_replaces_the_smeared_peak_in_the_forecast():
     assert source == "history+heater"
     assert hour(plain, 0) == pytest.approx(2.6) and hour(plain, 4) == pytest.approx(0.6)                       # the old forecast: peak at 12, flat at 13
     assert hour(modelled, 0) == pytest.approx(0.7) and hour(modelled, 4) == pytest.approx(0.6 + 1.9)           # the modelled one: 12 flat, peak at 13
+
+
+def test_legionella_is_planned_only_when_due_on_calendar_days():
+    """The add-on's rule (1.3.1): due seven calendar days after the *day* of the last run. The run of Saturday 17 Oct was stamped 18:30, so
+    on Saturday 24 Oct the 14:00 window is due (6 days 19.5 h elapsed, but the 7th calendar day); a hot tank on Sunday 25 Oct (a negative
+    price, by hand) makes Saturday 31 Oct not due, so that day gets an ordinary heating run. No run known: due."""
+    sat_24 = datetime(2026, 10, 24, 0, 0, tzinfo=LOCAL_TZ)
+    prices = day_prices((2026, 10, 24), cheap={13: 0.04, 14: 0.03, 15: 0.04})
+    stamped = datetime(2026, 10, 17, 18, 30, tzinfo=LOCAL_TZ)
+    run, = plan_runs(prices, sat_24, ON, LOCAL_TZ, last_legionella=stamped)
+    assert run.kind == "legionella" and run.start.astimezone(LOCAL_TZ).hour == 13
+    sat_31 = datetime(2026, 10, 31, 0, 0, tzinfo=LOCAL_TZ)
+    hot_sunday = datetime(2026, 10, 25, 9, 0, tzinfo=LOCAL_TZ)
+    later, = plan_runs(day_prices((2026, 10, 31)), sat_31, ON, LOCAL_TZ, last_legionella=hot_sunday)
+    assert later.kind == "heating"
+    assert legionella_due(None, sat_31.date(), LOCAL_TZ) and plan_runs(day_prices((2026, 10, 31)), sat_31, ON, LOCAL_TZ)[0].kind == "legionella"
+
+
+def test_the_overdue_alert_waits_one_day_past_the_due_day():
+    """Last run Saturday 17 Oct: due Saturday 24th; not overdue on the 24th or Sunday the 25th, overdue on Monday the 26th."""
+    last = datetime(2026, 10, 17, 18, 30, tzinfo=LOCAL_TZ)
+    assert [legionella_overdue(last, datetime(2026, 10, d).date(), LOCAL_TZ) for d in (24, 25, 26)] == [False, False, True]
+    assert not legionella_overdue(None, datetime(2026, 10, 26).date(), LOCAL_TZ)
+
+
+def test_hems_records_the_day_the_tank_first_reaches_60_degrees():
+    """HEMS keeps its own record (the add-on goes): the first moment of a local day at 60 °C or more; staying hot does not move it, a
+    cooler tank does not either, the next day's hot tank does."""
+    sat = datetime(2026, 10, 24, 13, 40, tzinfo=LOCAL_TZ)
+    assert record_legionella(None, 58.0, sat, LOCAL_TZ) is None and record_legionella(None, None, sat, LOCAL_TZ) is None
+    first = record_legionella(None, 60.5, sat, LOCAL_TZ)
+    assert first == sat
+    assert record_legionella(first, 62.0, sat.replace(hour=18, minute=30), LOCAL_TZ) == sat, "not refreshed while hot (the add-on's mistake)"
+    sunday = datetime(2026, 10, 25, 9, 0, tzinfo=LOCAL_TZ)
+    assert record_legionella(first, 45.0, sunday, LOCAL_TZ) == sat and record_legionella(first, 70.0, sunday, LOCAL_TZ) == sunday

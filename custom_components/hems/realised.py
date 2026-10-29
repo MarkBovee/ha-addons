@@ -312,6 +312,42 @@ def _day_row(day: str, totals: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+@dataclass
+class EnergyCounters:
+    """Ever-rising kWh counters for Home Assistant's Energy dashboard: solar produced, battery charged, battery discharged.
+
+    Integrated from the same live power roles as the ledger (left value held, nothing across a gap of more than MAX_GAP_S), so
+    any integration that fills the roles gets them; the SAJ itself offers no such totals. Charged and discharged are kept apart
+    (the dashboard needs both), unlike the ledger's net battery flow per quarter."""
+    solar_kwh: float = 0.0
+    charged_kwh: float = 0.0
+    discharged_kwh: float = 0.0
+    _last: tuple[datetime, float, float] | None = None
+
+    def sample(self, now: datetime, pv_w: float | None, battery_w: float | None) -> None:
+        """Add the energy since the previous sample; battery_w is + charging / - discharging. A missing reading counts as 0 W."""
+        if self._last is not None:
+            t0, pv0, batt0 = self._last
+            seconds = (now - t0).total_seconds()
+            if 0 < seconds <= MAX_GAP_S:
+                h = seconds / 3600
+                self.solar_kwh += max(pv0, 0.0) * h / 1000
+                self.charged_kwh += max(batt0, 0.0) * h / 1000
+                self.discharged_kwh += max(-batt0, 0.0) * h / 1000
+        self._last = (now, pv_w or 0.0, battery_w or 0.0)
+
+    def state(self) -> dict[str, float]:
+        """The totals to store (the last sample is not: after a restart the gap rule would drop it anyway)."""
+        return {"solar_kwh": round(self.solar_kwh, 4), "charged_kwh": round(self.charged_kwh, 4), "discharged_kwh": round(self.discharged_kwh, 4)}
+
+    def restore(self, data: dict[str, Any] | None) -> None:
+        """Take stored totals back; a damaged value starts at what is there, never lower (the counters only rise)."""
+        for key in ("solar_kwh", "charged_kwh", "discharged_kwh"):
+            value = (data or {}).get(key)
+            if isinstance(value, (int, float)) and value >= getattr(self, key):
+                setattr(self, key, float(value))
+
+
 def local_date(moment: datetime, tz: tzinfo) -> date:
     """The local calendar date of a moment."""
     return moment.astimezone(tz).date()

@@ -4,11 +4,11 @@
   "codeowners": ["@MarkBovee"],
   "config_flow": true,
   "dependencies": ["http", "recorder", "websocket_api"],
-  "after_dependencies": ["frontend", "panel_custom"],
-  "documentation": "https://github.com/MarkBovee/ha-addons/tree/master/hems",
+  "after_dependencies": ["energy", "frontend", "panel_custom"],
+  "documentation": "https://github.com/MarkBovee/ha-addons/blob/master/hems/README.md",
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/MarkBovee/ha-addons/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

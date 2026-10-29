@@ -10,7 +10,7 @@ from homeassistant.helpers import selector
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT,
                     CONF_EV_PLUGGED, CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS,
                     CONF_PRICE_CURVE, CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN,
-                    CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER)
+                    CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, CONF_AWAY, CONF_BATH, CONF_SPA, CONF_SPA_POWER)
 
 _ROLES_REQUIRED = (CONF_SOC, CONF_BATTERY_POWER, CONF_PV, CONF_GRID)
 _ROLES_INITIAL = (CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE)         # the optional roles the first setup form asks for
@@ -24,8 +24,15 @@ ROLE_SELECTORS: dict[str, Any] = {
     CONF_EV_PLUGGED: _BINARY, CONF_EV_CHARGING: _BINARY, CONF_EV_PROBLEM: _BINARY, CONF_EV_SOC: _SENSOR, CONF_EV_LIMIT: _NUMBER,
     **{role: _SENSOR for role in (*CONF_EV_CURRENTS, *CONF_METER_CURRENTS, *CONF_METER_EXPORTS)},
     CONF_WATER_HEATER: selector.EntitySelector(selector.EntitySelectorConfig(domain=["water_heater", "sensor"])),
+    CONF_AWAY: selector.EntitySelector(selector.EntitySelectorConfig(domain=["switch", "input_boolean", "binary_sensor"])),
+    CONF_BATH: selector.EntitySelector(selector.EntitySelectorConfig(domain=["input_boolean", "switch"])),
+    CONF_SPA: selector.EntitySelector(selector.EntitySelectorConfig(domain="climate")), CONF_SPA_POWER: _SENSOR,
     CONF_LEGIONELLA_LAST: _SENSOR, CONF_COMPARE_ACTION: _SENSOR}
 _ROLES_OPTIONAL = tuple(ROLE_SELECTORS)
+# The add-on's sensor.wh_last_legionella is a REST state: after every Home Assistant restart it is missing until the add-on posts it
+# again, so this role is not refused for a missing entity (HEMS keeps its own record and only takes a later run from it).
+_ROLES_CHECKED = tuple(r for r in _ROLES_OPTIONAL if r != CONF_LEGIONELLA_LAST)
+_PHASE = selector.SelectSelector(selector.SelectSelectorConfig(options=["l1", "l2", "l3"], mode=selector.SelectSelectorMode.DROPDOWN, translation_key="phase"))
 _DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _OPTIONAL_DATE = selector.TextSelector()          # an ISO date (2027-01-01) or empty; a date picker cannot be left empty
 _WEEKDAY = selector.SelectSelector(selector.SelectSelectorConfig(
@@ -71,10 +78,13 @@ def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelec
 SECTIONS: dict[str, tuple[str, ...]] = {
     "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "reserve_load_factor", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
     "module_water_heater": ("water_heater_enabled", "water_heater_energy_kwh", "water_heater_hours", "water_heater_night_energy_kwh",
-                     "water_heater_legionella_energy_kwh", "water_heater_legionella_hours", "water_heater_legionella_weekday"),
+                     "water_heater_legionella_energy_kwh", "water_heater_legionella_hours", "water_heater_legionella_weekday",
+                     "water_heater_legionella_temp_c", "water_heater_legionella_min_c",
+                     "water_heater_night_preheat_c", "water_heater_night_minimal_c", "water_heater_day_preheat_c", "water_heater_idle_c", "water_heater_low_price_c", "water_heater_negative_price_c", "water_heater_bath_c", "water_heater_away_c", "water_heater_bath_off_c", "water_heater_cycle_gap_min"),
     "module_ev": ("ev_enabled", "ev_capacity_kwh", "ev_charge_efficiency", "ev_target_required_pct", "ev_target_max_pct", "ev_max_price", "ev_solar_only",
                   "ev_min_current_a", "ev_max_current_a", "ev_min_on_minutes", "ev_min_off_minutes", "ev_deadline_monday", "ev_deadline_tuesday",
                   "ev_deadline_wednesday", "ev_deadline_thursday", "ev_deadline_friday", "ev_deadline_saturday", "ev_deadline_sunday"),
+    "module_spa": ("spa_enabled", "spa_phase", "spa_heater_kw", "spa_comfort_c", "spa_above_c", "spa_below_c", "spa_heat_rate_c_h", "spa_cool_k_h"),
     "base_prices": ("nordpool_enabled", "delivery_area", "import_vat_multiplier", "import_markup", "import_energy_tax", "export_vat_multiplier",
                "export_bonus_pct", "export_fixed_bonus", "export_energy_tax", "salderen", "salderen_until", "bonus_only_daylight", "bonus_only_positive_price"),
     "base_forecast": ("weather_enabled", "pv_gain_w_per_wm2", "pv_max_ac_w"),
@@ -88,6 +98,10 @@ NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_
            "export_vat_multiplier": (1, 2, 0.01), "export_bonus_pct": (0, 1, 0.01), "export_fixed_bonus": (-0.5, 0.5, 0.0001),
            "export_energy_tax": (0, 1, 0.00001), "water_heater_energy_kwh": (0, 15, 0.1), "water_heater_hours": (1, 6, 1),
            "water_heater_night_energy_kwh": (0, 15, 0.1), "water_heater_legionella_energy_kwh": (0, 15, 0.1), "water_heater_legionella_hours": (1, 6, 1),
+           "water_heater_legionella_temp_c": (55, 75, 1), "water_heater_legionella_min_c": (50, 70, 1),
+           "water_heater_night_preheat_c": (30, 75, 1), "water_heater_night_minimal_c": (30, 75, 1), "water_heater_day_preheat_c": (30, 75, 1), "water_heater_idle_c": (30, 75, 1), "water_heater_low_price_c": (30, 75, 1), "water_heater_negative_price_c": (30, 75, 1), "water_heater_bath_c": (30, 75, 1), "water_heater_away_c": (30, 75, 1), "water_heater_bath_off_c": (30, 75, 1), "water_heater_cycle_gap_min": (10, 180, 5),
+           "spa_heater_kw": (0.5, 12, 0.1), "spa_comfort_c": (20, 40, 0.5), "spa_above_c": (0, 3, 0.5), "spa_below_c": (0, 5, 0.5),
+           "spa_heat_rate_c_h": (0.2, 10, 0.1), "spa_cool_k_h": (0, 0.2, 0.005),
            "ev_capacity_kwh": (10, 200, 0.1), "ev_charge_efficiency": (0.5, 1, 0.01), "ev_target_required_pct": (0, 100, 1), "ev_target_max_pct": (0, 100, 1),
            "ev_max_price": (-1, 2, 0.01), "ev_min_current_a": (1, 32, 1), "ev_max_current_a": (6, 32, 1), "ev_min_on_minutes": (0, 120, 1),
            "ev_min_off_minutes": (0, 120, 1), "grid_limit_a": (6, 80, 1), "grid_margin_a": (0, 10, 0.5)}
@@ -97,7 +111,7 @@ def _field(key: str) -> Any:
     """The input for one setting: a number box, the weekday choice, the area text, or a switch."""
     if key in NUMBERS:
         return _number(*NUMBERS[key])
-    return {"water_heater_legionella_weekday": _WEEKDAY, "delivery_area": str, "salderen_until": _OPTIONAL_DATE, **{f"ev_deadline_{d}": str for d in _DAYS}}.get(key, bool)
+    return {"water_heater_legionella_weekday": _WEEKDAY, "spa_phase": _PHASE, "delivery_area": str, "salderen_until": _OPTIONAL_DATE, **{f"ev_deadline_{d}": str for d in _DAYS}}.get(key, bool)
 
 
 def _options_schema(current: dict[str, Any]) -> vol.Schema:
@@ -143,7 +157,7 @@ class HemsConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
         if user_input is not None:
-            if all(self.hass.states.get(entity) is not None for role in _ROLES_OPTIONAL for entity in _as_list(user_input.get(role))):
+            if all(self.hass.states.get(entity) is not None for role in _ROLES_CHECKED for entity in _as_list(user_input.get(role))):
                 kept = {key: value for key, value in entry.data.items() if key not in _ROLES_OPTIONAL}
                 return self.async_update_reload_and_abort(entry, data={**kept, **{r: user_input[r] for r in _ROLES_OPTIONAL if user_input.get(r)}})
             errors["base"] = "entity_not_found"

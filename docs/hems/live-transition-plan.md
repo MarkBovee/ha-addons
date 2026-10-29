@@ -152,6 +152,13 @@ Gate: Marks ja per stap. Rollback: BM weer starten en HEMS op dry-run; het schem
 
 **Fase 6, afbouwen.** battery-manager en energy-prices verwijderen (na een rustige periode), repository-docs bijwerken (AGENTS.md, install.md, README van de add-ons), HEMS-versie vastzetten en een releaseproces voor de integratie.
 
+### Voortgang fase 5, boiler (29 okt 2026)
+
+Branch `feature/hems-boiler`. Besluiten Mark: eerst advisory (zelfde slot als de batterij), de regels van de add-on trouw overnemen inclusief prijsniveaus, alle temperaturen instelbaar, HEMS zet de badknop uit.
+- Legionella alleen als verschuldigd (kalenderdagen), alarm een dag na de verschuldigde dag; eigen registratie uit de tanktemperatuur (`sensor.hems_last_legionella`), de add-on-sensor wordt overgenomen en bewaard.
+- Uitvoerder `hems.heater_control.decide`: negatieve prijs > afwezig (met legionella) > bad > nacht > legionella > dag > stand-by, met de cycluspauze; `sensor.hems_water_heater_target` (programma, reden, venster). Rollen `away_entity`, `bath_entity`.
+- Schrijver (operation mode Manual, dan de temperatuur, bad uit) staat op slot (`WRITE_UNLOCKED`, `auto` niet kiesbaar). Volgende stap: een paar dagen het advies naast `sensor.wh_target_temp` leggen, dan de add-on stoppen en het slot openen.
+
 ### Voortgang fase 3 (28 okt 2026)
 
 Plan en beslissingen: `phase3-saj-writer-plan.md`. Branch `feature/hems-saj-writer`.
