@@ -1887,9 +1887,33 @@ def _build_live_trimmed_charge_schedule(
 
 
 # Return the pre-charge SOC reserve only while its schedule window is pending.
-def _get_active_sell_buffer_soc(state: RuntimeState, now: datetime) -> Optional[float]:
-    """Return the buffer target only until its associated main charge starts."""
+def _get_active_sell_buffer_soc(
+    state: RuntimeState,
+    now: datetime,
+    lead_hours: float = 0.0,
+    soc: Optional[float] = None,
+    conservative_soc: float = 0.0,
+) -> Optional[float]:
+    """Return the buffer target until its main charge starts, and not while the sale it guards is running.
+
+    The target is cached at generation time, before the sale. Once a planned sell window has started the
+    sale drains the battery below it by design (down to ``conservative_soc``), so the cached target must
+    stop pausing the discharge (2026-10-30: the 07:15 sale was paused at 59.6% < 60%). At or below
+    ``conservative_soc`` the sale is over and the target holds adaptive again.
+    """
     if state.sell_buffer_valid_until is not None and now >= state.sell_buffer_valid_until:
+        return None
+    if state.sell_buffer_required_soc is None:
+        return None
+    schedule = state.schedule or {}
+    sale_windows = [
+        {"start": bounds[0], "end": bounds[1]}
+        for period in schedule.get("discharge", [])
+        if period.get("window_type", "discharge") == "discharge"
+        and (bounds := _parse_schedule_period_bounds(period)) is not None
+    ]
+    horizon = state.sell_buffer_valid_until or datetime.max.replace(tzinfo=timezone.utc)
+    if soc is not None and soc > conservative_soc and _sale_in_progress(sale_windows, now, horizon, lead_hours):
         return None
     return state.sell_buffer_required_soc
 
@@ -3694,7 +3718,13 @@ def monitor_and_adjust_active_period(
         pause_reasons.append("SOC unavailable/stale")
     else:
         min_soc = config["soc"]["min_soc"]
-        dynamic_buffer_soc = _get_active_sell_buffer_soc(state, now)
+        dynamic_buffer_soc = _get_active_sell_buffer_soc(
+            state,
+            now,
+            float(config["soc"].get("sell_buffer_activation_hours_before_sell", 3)),
+            soc,
+            conservative_soc,
+        )
         low_soc_discharge_mode = active_discharge and soc <= conservative_soc
         sell_window_period = active_discharge_period
         if sell_window_period is None and state.schedule_pause_active:

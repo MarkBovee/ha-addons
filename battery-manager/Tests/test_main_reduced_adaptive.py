@@ -455,6 +455,23 @@ def test_sell_buffer_target_expires_at_main_charge_start():
     assert bm_main._get_active_sell_buffer_soc(state, now) is None
 
 
+# The cached buffer target must not pause a sale that has already started (2026-10-30 07:56, 59.6% < 60%).
+def test_sell_buffer_target_is_off_while_the_sale_runs():
+    now = datetime.now(timezone.utc)
+    sale = {"start": (now - timedelta(minutes=40)).isoformat(), "duration": 80, "window_type": "discharge", "power": 8000}
+    state = bm_main.RuntimeState(
+        schedule={"charge": [], "discharge": [sale]},
+        schedule_generated_at=now,
+        sell_buffer_required_soc=60.0,
+        sell_buffer_valid_until=now + timedelta(hours=3),
+    )
+    assert bm_main._get_active_sell_buffer_soc(state, now, 3.0, 59.6, 40.0) is None
+    assert bm_main._get_active_sell_buffer_soc(state, now, 3.0, 39.0, 40.0) == 60.0
+
+    state.schedule = {"charge": [], "discharge": [{**sale, "start": (now + timedelta(hours=1)).isoformat()}]}
+    assert bm_main._get_active_sell_buffer_soc(state, now, 3.0, 59.6, 40.0) == 60.0
+
+
 def test_monitor_uses_published_adaptive_schedule_for_mode_and_power(monkeypatch):
     config = deepcopy(bm_main.DEFAULT_CONFIG)
     config["soc"]["conservative_soc"] = 30
