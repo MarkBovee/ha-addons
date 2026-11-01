@@ -108,7 +108,10 @@ def decide(inputs: HeaterInputs, config: WaterHeaterConfig, rules: HeaterRules, 
     today_prices = [p for s, p in zip(inputs.prices.starts, inputs.prices.import_eur_kwh) if s.astimezone(tz).date() == today]
     level = price_level(price, today_prices) if today_prices else "medium"
     night = local.hour < rules.night_end_hour
-    legionella_on = (not night and local.weekday() == config.legionella_weekday and legionella_due(inputs.last_legionella, today, tz))
+    # a run that reached the temperature today still holds its full window: the add-on keeps 62 °C until the window ends
+    ran_today = inputs.last_legionella is not None and inputs.last_legionella.astimezone(tz).date() == today
+    legionella_on = (not night and local.weekday() == config.legionella_weekday
+                     and (legionella_due(inputs.last_legionella, today, tz) or ran_today))
     length = config.legionella_hours if legionella_on else config.hours
     night_window = _window(hours, today, NIGHT_HOURS, length, tz)
     day_window = _window(hours, today, DAY_HOURS, length, tz)

@@ -16,7 +16,7 @@ from hems.forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
 from hems.prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
 from hems.ev import EvConfig, EvPlan, EvState, ev_kwh_per_quarter, ev_record, plan_ev
 from hems.heater import HeatingRun, WaterHeaterConfig, plan_runs, run_kwh_per_quarter, without_daily_peak
-from hems.spa import SpaConfig, SpaPlan, plan_spa, spa_kwh_per_quarter
+from hems.spa import SpaConfig, SpaPlan, external_spa_kwh, plan_spa, spa_kwh_per_quarter, without_flexible_load
 from hems.pvforecast import pv_kwh_per_quarter
 from hems.rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
 from hems.slots import SLOT_H, slot_starts
@@ -113,6 +113,7 @@ def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: dateti
     heater = settings.water_heater.enabled and settings.water_heater.energy_kwh > 0
     if inputs.load_history_w:
         history = without_daily_peak(inputs.load_history_w, settings.water_heater.energy_kwh, settings.tz) if heater else list(inputs.load_history_w)
+        history = without_flexible_load(history, settings.spa, settings.tz)     # an externally controlled spa moves with the prices: planned apart
         profile, source = hourly_profile(history, settings.load_days, settings.tz), "history+heater" if heater else "history"
     else:
         profile, source = [settings.default_load_w] * 24, "default"
@@ -167,7 +168,8 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
             if quarter in load:
                 load[quarter] += kwh
     spa_plan = plan_spa(prices, surplus_kwh_per_quarter(pv, load), inputs.outdoor_c, inputs.now, inputs.spa_water_c, settings.spa)
-    for quarter, kwh in spa_kwh_per_quarter(spa_plan).items():          # and around the spa, which comes after the car
+    spa_kwh = spa_kwh_per_quarter(spa_plan) or external_spa_kwh(prices, inputs.now, settings.spa, settings.tz)
+    for quarter, kwh in spa_kwh.items():                                # and around the spa, which comes after the car
         if quarter in load:
             load[quarter] += kwh
     soc_kwh = inputs.soc_pct.value / 100 * cfg.capacity_kwh

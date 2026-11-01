@@ -7,9 +7,11 @@ leave the band. A small dynamic programme per quarter over a 0.05 °C grid: each
 temperature: the top of the band to heat, the bottom to pause; HEMS never puts the spa in rest, so the spa keeps its own frost
 and overheat protection. Pure: the caller supplies the time, the water temperature, prices, surplus and the outdoor forecast.
 """
+from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Mapping
+from datetime import date, datetime, timedelta, tzinfo
+from statistics import median
+from typing import Mapping, Sequence
 
 from hems.prices import PriceSeries
 from hems.slots import SLOT_H
@@ -23,6 +25,8 @@ INF = float("inf")
 class SpaConfig:
     """The spa module's settings; the defaults fit a Balboa spa of about 1300 l with a 3 kW heater on one phase."""
     enabled: bool = False
+    control: str = "external"          # "external": the spa's own controller heats (Spapilot): HEMS only forecasts it; "climate": HEMS plans and sets the target
+    daily_kwh: float = 20.0            # external control: what the spa heats per day (measured 30-31 Oct 2026: about 20 kWh above the house's usual load)
     heater_kw: float = 3.0
     phase: int = 1                     # 0 = L1, 1 = L2, 2 = L3: the phase the heater draws on
     comfort_c: float = 38.0
@@ -75,7 +79,7 @@ def _price(start: datetime, imp: float, exp: float, surplus: Mapping[datetime, f
 def plan_spa(prices: PriceSeries, surplus_kwh: Mapping[datetime, float], outdoor_c: Mapping[datetime, float] | None, now: datetime,
              water_c: float | None, cfg: SpaConfig) -> SpaPlan | None:
     """The cheapest on/off schedule that keeps the water in the band (see the module docstring); None without a water temperature or prices."""
-    if not cfg.enabled or water_c is None:
+    if not cfg.enabled or cfg.control != "climate" or water_c is None:
         return None
     starts = [s for s in prices.starts if s + QUARTER > now][:cfg.max_quarters]
     if not starts:
@@ -147,6 +151,54 @@ def _reason(quarters: list[SpaQuarter], water_c: float, cfg: SpaConfig) -> str:
         return f"cheap quarter ({first.price:.3f}): topping up towards {cfg.high_c:.1f} °C"
     nxt = next((q for q in quarters if q.heat), None)
     return f"waiting, next heating {nxt.start:%H:%M} UTC" if nxt else "in the band, no heating needed"
+
+
+def without_flexible_load(history: Sequence[tuple[datetime, float]], cfg: SpaConfig, tz: tzinfo) -> list[tuple[datetime, float]]:
+    """The hourly load history (W) with the externally controlled spa taken out: per local day, up to `daily_kwh` from the hours above the
+    day's median, highest first, at most the heater's power per hour. A day before the spa existed has little above its median, so
+    it loses little. Days without about a full set of hours are left as they are."""
+    if not cfg.enabled or cfg.control != "external" or cfg.daily_kwh <= 0:
+        return list(history)
+    days: dict[date, list[int]] = defaultdict(list)
+    for index, (ts, _) in enumerate(history):
+        days[ts.astimezone(tz).date()].append(index)
+    cleaned = list(history)
+    for indexes in days.values():
+        if len(indexes) < 20:
+            continue
+        mid = median(history[i][1] for i in indexes)
+        left = cfg.daily_kwh * 1000
+        for i in sorted(indexes, key=lambda i: history[i][1], reverse=True):
+            take = min(max(history[i][1] - mid, 0.0), cfg.heater_kw * 1000, left)
+            if take <= 0:
+                break
+            cleaned[i] = (history[i][0], history[i][1] - take)
+            left -= take
+    return cleaned
+
+
+def external_spa_kwh(prices: PriceSeries, now: datetime, cfg: SpaConfig, tz: tzinfo) -> dict[datetime, float]:
+    """Where an externally controlled, price-following spa heats: per local day its `daily_kwh` in that day's cheapest quarters at the
+    heater's power, as Spapilot does. Quarters already past are left out (that energy went in earlier today)."""
+    if not cfg.enabled or cfg.control != "external" or cfg.daily_kwh <= 0:
+        return {}
+    per_quarter = cfg.heater_kw * SLOT_H
+    by_day: dict[date, list[tuple[float, datetime]]] = defaultdict(list)
+    for start, price in zip(prices.starts, prices.import_eur_kwh):
+        by_day[start.astimezone(tz).date()].append((price, start))
+    out: dict[datetime, float] = {}
+    for quarters in by_day.values():
+        if len(quarters) < 88:                                     # a day without (almost) all its prices: where it heats is unknown
+            continue
+        left = cfg.daily_kwh
+        for price, start in sorted(quarters):
+            if left <= 0:
+                break
+            kwh = min(per_quarter, left)
+            left -= kwh
+            if start + QUARTER > now:
+                out[start] = kwh
+    return out
 
 
 def spa_kwh_per_quarter(plan: SpaPlan | None) -> dict[datetime, float]:

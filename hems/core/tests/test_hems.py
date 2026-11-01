@@ -329,3 +329,19 @@ def test_no_quarter_runs_against_its_label_on_random_horizons():
         for s in result.slots:
             assert not (s.action == "charge" and s.battery_kwh <= 0) and not (s.action == "discharge" and s.battery_kwh >= 0), s
             assert s.action != "idle" or abs(s.battery_kwh - s.own_kwh) < 1e-9
+
+
+def test_a_daily_limit_of_one_sell_hour_keeps_sales_to_the_four_best_quarters():
+    """Mark, 1 Nov 2026: sell at most one hour a day. Eight expensive quarters in the evening: the plan may sell only in the four that pay most."""
+    from datetime import datetime, timezone
+    from hems.rolling import with_sell_limit
+    cfg = BatteryConfig(min_profit_margin=0.0, max_sell_hours=1.0)
+    exports = [0.30] * 8 + [0.60, 0.62, 0.65, 0.66, 0.64, 0.61, 0.59, 0.58] + [0.30] * 8
+    slots = [Slot(0.30, e, 0.1, 0.0) for e in exports]
+    start = datetime(2026, 11, 1, 16, 0, tzinfo=timezone.utc)
+    limited = with_sell_limit(slots, start, cfg)
+    assert [n for n, s in enumerate(limited) if s.sell_allowed] == [9, 10, 11, 12]
+    result = plan(limited, 0.9 * cfg.capacity_kwh, cfg)
+    sold = [n for n, s in enumerate(result.slots) if s.sold_kwh > 0]
+    assert sold and set(sold) <= {9, 10, 11, 12}
+    assert with_sell_limit(slots, start, BatteryConfig()) == slots, "0 = no limit"

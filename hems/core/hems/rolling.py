@@ -3,7 +3,7 @@
 Called every quarter with the actual SoC; the rest of the plan is a forecast that is replaced next time.
 Pure (no I/O, no clock): the caller supplies `now`, so the same code serves live dry-run and replay.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Mapping
 
@@ -11,6 +11,7 @@ from hems.battery import BatteryConfig, Plan, Slot, floor_fraction, plan
 from hems.reserve import with_usage_floor
 from hems.contracts import BatteryCommand
 from hems.decision_log import best_later, plan_segments
+from hems.forecast import LOCAL_TZ
 from hems.prices import PriceSeries
 from hems.slots import SLOT_H, SLOT_MINUTES
 from hems.terminal import terminal_value
@@ -66,6 +67,21 @@ def _build_slots(inputs: HorizonInputs, start: datetime) -> tuple[list[Slot], in
     return slots, missing
 
 
+def with_sell_limit(slots: list[Slot], start: datetime, cfg: BatteryConfig) -> list[Slot]:
+    """The slots with sales allowed only in each local day's best-paying quarters, `max_sell_hours` worth (0 = every quarter allowed).
+
+    The best by export price: that is where a sale earns most. Ties go to the earliest quarter. A day only partly in the horizon gets its
+    allowance from the quarters it has."""
+    if cfg.max_sell_hours <= 0:
+        return slots
+    per_day = max(1, round(cfg.max_sell_hours / SLOT_H))
+    days: dict = {}
+    for n, slot in enumerate(slots):
+        days.setdefault((start + n * QUARTER).astimezone(LOCAL_TZ).date(), []).append(n)
+    allowed = {n for idx in days.values() for n in sorted(idx, key=lambda n: (-slots[n].export_price, n))[:per_day]}
+    return [s if n in allowed else replace(s, sell_allowed=False) for n, s in enumerate(slots)]
+
+
 def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
     """Plan the horizon and return the command for the current quarter, or None when no price is known for it."""
     start = floor_to_quarter(inputs.now)
@@ -73,6 +89,7 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
     if not slots:
         return None
     slots = with_usage_floor(slots, cfg)
+    slots = with_sell_limit(slots, start, cfg)
     default = min(s.import_price for s in slots) * cfg.round_trip_eff ** 0.5
     terminal = inputs.terminal_value
     if terminal is None and inputs.history_peak is not None:

@@ -71,6 +71,7 @@
               "reserve_soc_pct": "Sell floor, minimum (%)",
               "reserve_max_soc_pct": "Sell floor, maximum (%)",
               "reserve_load_factor": "Sell floor: load forecast factor",
+              "max_sell_hours": "Sell at most (hours per day, 0 = no limit)",
               "round_trip_eff": "Round-trip efficiency (0-1)",
               "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
               "hold_cost_kwh_h": "Waiting cost (EUR per stored kWh per hour; 0 = off, higher charges later before a sale)"
@@ -129,6 +130,8 @@
             "name": "Module: spa",
             "data": {
               "spa_enabled": "Spa module",
+              "spa_control": "Spa: who controls the heater",
+              "spa_daily_kwh": "Spa (external control): energy per day (kWh)",
               "spa_phase": "Spa: phase of the heater",
               "spa_heater_kw": "Spa: heater power (kW)",
               "spa_comfort_c": "Spa: comfort temperature (°C)",
@@ -411,6 +414,12 @@
         "l1": "L1",
         "l2": "L2",
         "l3": "L3"
+      }
+    },
+    "spa_control": {
+      "options": {
+        "external": "The spa itself (e.g. Spapilot): HEMS only forecasts it",
+        "climate": "HEMS, through the spa's climate entity"
       }
     }
   },

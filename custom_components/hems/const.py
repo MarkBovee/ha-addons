@@ -48,7 +48,8 @@ DEFAULT_OPTIONS = {
     "hard_min_soc_pct": 5.0,
     "reserve_soc_pct": 30.0,                   # sell floor minimum: a sale stops here, below it the battery only covers the house
     "reserve_max_soc_pct": 60.0,               # sell floor maximum: the floor follows the expected use until a refill (hems.reserve); = minimum turns that off
-    "reserve_load_factor": 1.3,                # safety factor on the load forecast for that floor
+    "reserve_load_factor": 1.3,
+    "max_sell_hours": 0.0,                     # sell in at most this many hours a day, the best-paying quarters; 0 = no limit                # safety factor on the load forecast for that floor
     "round_trip_eff": 0.82,
     "min_profit_margin": 0.10,
     "hold_cost_kwh_h": 0.002,                  # EUR per kWh per hour of waiting; 0 = off (charge as early as equal prices allow)
@@ -76,6 +77,8 @@ DEFAULT_OPTIONS = {
     "water_heater_cycle_gap_min": 50,
     # the spa module (docs/hems/spa-module-plan.md): keep the water in a band, heat cheaply, give way first on a full phase
     "spa_enabled": False,
+    "spa_control": "external",                 # external: the spa's own controller heats (Spapilot), HEMS forecasts it; climate: HEMS plans and sets the target
+    "spa_daily_kwh": 20.0,                     # external: what the spa heats per day (about 20 kWh above the usual load, 30-31 Oct 2026)
     "spa_phase": "l2",
     "spa_heater_kw": 3.0,
     "spa_comfort_c": 38.0,

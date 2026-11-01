@@ -33,6 +33,7 @@ _ROLES_OPTIONAL = tuple(ROLE_SELECTORS)
 # again, so this role is not refused for a missing entity (HEMS keeps its own record and only takes a later run from it).
 _ROLES_CHECKED = tuple(r for r in _ROLES_OPTIONAL if r != CONF_LEGIONELLA_LAST)
 _PHASE = selector.SelectSelector(selector.SelectSelectorConfig(options=["l1", "l2", "l3"], mode=selector.SelectSelectorMode.DROPDOWN, translation_key="phase"))
+_SPA_CONTROL = selector.SelectSelector(selector.SelectSelectorConfig(options=["external", "climate"], mode=selector.SelectSelectorMode.DROPDOWN, translation_key="spa_control"))
 _DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _OPTIONAL_DATE = selector.TextSelector()          # an ISO date (2027-01-01) or empty; a date picker cannot be left empty
 _WEEKDAY = selector.SelectSelector(selector.SelectSelectorConfig(
@@ -76,7 +77,7 @@ def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelec
 # (prices, forecasts). Each part is a collapsible section in this order on screen; a module with an on/off switch has it as its first setting.
 # The battery is open, the rest is folded away.
 SECTIONS: dict[str, tuple[str, ...]] = {
-    "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "reserve_load_factor", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
+    "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "reserve_load_factor", "max_sell_hours", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
     "module_water_heater": ("water_heater_enabled", "water_heater_energy_kwh", "water_heater_hours", "water_heater_night_energy_kwh",
                      "water_heater_legionella_energy_kwh", "water_heater_legionella_hours", "water_heater_legionella_weekday",
                      "water_heater_legionella_temp_c", "water_heater_legionella_min_c",
@@ -84,7 +85,7 @@ SECTIONS: dict[str, tuple[str, ...]] = {
     "module_ev": ("ev_enabled", "ev_capacity_kwh", "ev_charge_efficiency", "ev_target_required_pct", "ev_target_max_pct", "ev_max_price", "ev_solar_only",
                   "ev_min_current_a", "ev_max_current_a", "ev_min_on_minutes", "ev_min_off_minutes", "ev_deadline_monday", "ev_deadline_tuesday",
                   "ev_deadline_wednesday", "ev_deadline_thursday", "ev_deadline_friday", "ev_deadline_saturday", "ev_deadline_sunday"),
-    "module_spa": ("spa_enabled", "spa_phase", "spa_heater_kw", "spa_comfort_c", "spa_above_c", "spa_below_c", "spa_heat_rate_c_h", "spa_cool_k_h"),
+    "module_spa": ("spa_enabled", "spa_control", "spa_daily_kwh", "spa_phase", "spa_heater_kw", "spa_comfort_c", "spa_above_c", "spa_below_c", "spa_heat_rate_c_h", "spa_cool_k_h"),
     "base_prices": ("nordpool_enabled", "delivery_area", "import_vat_multiplier", "import_markup", "import_energy_tax", "export_vat_multiplier",
                "export_bonus_pct", "export_fixed_bonus", "export_energy_tax", "salderen", "salderen_until", "bonus_only_daylight", "bonus_only_positive_price"),
     "base_forecast": ("weather_enabled", "pv_gain_w_per_wm2", "pv_max_ac_w"),
@@ -92,7 +93,7 @@ SECTIONS: dict[str, tuple[str, ...]] = {
     "logging": ("trace_full_plan",),
 }
 OPEN_SECTIONS = ("module_battery",)
-NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1), "reserve_max_soc_pct": (0, 100, 1), "reserve_load_factor": (1, 3, 0.05),
+NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1), "reserve_max_soc_pct": (0, 100, 1), "reserve_load_factor": (1, 3, 0.05), "max_sell_hours": (0, 12, 0.25),
            "round_trip_eff": (0.5, 1.0, 0.01), "min_profit_margin": (0, 1, 0.01), "hold_cost_kwh_h": (0, 0.05, 0.0005), "pv_gain_w_per_wm2": (0, 30, 0.1),
            "pv_max_ac_w": (0, 30000, 100), "import_vat_multiplier": (1, 2, 0.01), "import_markup": (-0.5, 0.5, 0.0001), "import_energy_tax": (0, 1, 0.00001),
            "export_vat_multiplier": (1, 2, 0.01), "export_bonus_pct": (0, 1, 0.01), "export_fixed_bonus": (-0.5, 0.5, 0.0001),
@@ -100,7 +101,7 @@ NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_
            "water_heater_night_energy_kwh": (0, 15, 0.1), "water_heater_legionella_energy_kwh": (0, 15, 0.1), "water_heater_legionella_hours": (1, 6, 1),
            "water_heater_legionella_temp_c": (55, 75, 1), "water_heater_legionella_min_c": (50, 70, 1),
            "water_heater_night_preheat_c": (30, 75, 1), "water_heater_night_minimal_c": (30, 75, 1), "water_heater_day_preheat_c": (30, 75, 1), "water_heater_idle_c": (30, 75, 1), "water_heater_low_price_c": (30, 75, 1), "water_heater_negative_price_c": (30, 75, 1), "water_heater_bath_c": (30, 75, 1), "water_heater_away_c": (30, 75, 1), "water_heater_bath_off_c": (30, 75, 1), "water_heater_cycle_gap_min": (10, 180, 5),
-           "spa_heater_kw": (0.5, 12, 0.1), "spa_comfort_c": (20, 40, 0.5), "spa_above_c": (0, 3, 0.5), "spa_below_c": (0, 5, 0.5),
+           "spa_heater_kw": (0.5, 12, 0.1), "spa_daily_kwh": (0, 80, 0.5), "spa_comfort_c": (20, 40, 0.5), "spa_above_c": (0, 3, 0.5), "spa_below_c": (0, 5, 0.5),
            "spa_heat_rate_c_h": (0.2, 10, 0.1), "spa_cool_k_h": (0, 0.2, 0.005),
            "ev_capacity_kwh": (10, 200, 0.1), "ev_charge_efficiency": (0.5, 1, 0.01), "ev_target_required_pct": (0, 100, 1), "ev_target_max_pct": (0, 100, 1),
            "ev_max_price": (-1, 2, 0.01), "ev_min_current_a": (1, 32, 1), "ev_max_current_a": (6, 32, 1), "ev_min_on_minutes": (0, 120, 1),
@@ -111,7 +112,7 @@ def _field(key: str) -> Any:
     """The input for one setting: a number box, the weekday choice, the area text, or a switch."""
     if key in NUMBERS:
         return _number(*NUMBERS[key])
-    return {"water_heater_legionella_weekday": _WEEKDAY, "spa_phase": _PHASE, "delivery_area": str, "salderen_until": _OPTIONAL_DATE, **{f"ev_deadline_{d}": str for d in _DAYS}}.get(key, bool)
+    return {"water_heater_legionella_weekday": _WEEKDAY, "spa_phase": _PHASE, "spa_control": _SPA_CONTROL, "delivery_area": str, "salderen_until": _OPTIONAL_DATE, **{f"ev_deadline_{d}": str for d in _DAYS}}.get(key, bool)
 
 
 def _options_schema(current: dict[str, Any]) -> vol.Schema:
