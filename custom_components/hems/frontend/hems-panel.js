@@ -797,7 +797,7 @@ function weatherEntity(hass, s) {
 /**
  * The live energy flow: sources (solar, grid, battery) into the house and the house out to its consumers (the active modules
  * and the rest of the house). A link that carries power is drawn wide with moving dashes in the direction of the flow.
- * The house load is solar + grid − battery charging, the rest of the house is that minus the metered modules.
+ * The house load follows the planner's balance (below), the rest of the house is that minus the metered modules.
  */
 function flowHtml(hass, p, s) {
   const r = (s && s.roles) || {};
@@ -808,7 +808,9 @@ function flowHtml(hass, p, s) {
   const soc = stateNum(hass, r.soc_entity);
   const bp = watts(hass, r.battery_power_entity);
   const batt = bp === null ? null : bp * (r.battery_power_positive_is_discharging === false ? 1 : -1);    // + charging
-  const house = pv === null || grid === null || batt === null ? null : Math.max(0, pv + grid - batt);
+  // the same balance as the planner (adapters.house_load): grid + inverter output when there is an inverter sensor, else grid + solar − battery
+  const inv = r.inverter_output_entity ? watts(hass, r.inverter_output_entity) : null;
+  const house = grid === null ? null : inv !== null ? Math.max(0, grid + inv) : pv === null || batt === null ? null : Math.max(0, pv + grid - batt);
   const ev = o.ev_enabled ? watts(hass, r.ev_power_entity) : null;
   const spa = o.spa_enabled ? watts(hass, r.spa_power_entity) : null;
   const rest = house === null ? null : Math.max(0, house - (ev || 0) - (spa || 0));
@@ -828,7 +830,7 @@ function flowHtml(hass, p, s) {
   if (o.water_heater_enabled) sinks.push({ label: "Water heater", icon: ICON.tank, value: whTemp === null || whTemp === undefined ? "—" : `${num(whTemp, 0)} °C`, sub: "", w: null });
   if (o.spa_enabled) sinks.push({ label: "Spa", icon: ICON.spa, value: spa === null ? (spaClimate && spaClimate.attributes.current_temperature !== undefined ? `${num(spaClimate.attributes.current_temperature, 1)} °C` : "—") : kwTxt(spa), sub: "", w: spa });
   // geometry in a 1000 x 300 box: sources at x 0-200, the house at 400-600, consumers at 780-1000
-  const sy = (i) => 50 + i * 100, ky = (i) => sinks.length === 1 ? 150 : 36 + i * (228 / (sinks.length - 1));
+  const sy = (i) => 55 + i * 95, ky = (i) => sinks.length === 1 ? 150 : 40 + i * (220 / (sinks.length - 1));
   const link = (x1, y1, x2, y2, live, colour, reverse) => {
     const mx = (x1 + x2) / 2, d = `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`;
     return live ? `<path d="${d}" stroke="var(${colour})" stroke-width="9" fill="none" stroke-linecap="round" opacity=".28" vector-effect="non-scaling-stroke"></path><path class="flow${reverse ? " rev" : ""}" d="${d}" stroke="var(${colour})" stroke-width="2" fill="none" stroke-dasharray="4 8" stroke-linecap="round" vector-effect="non-scaling-stroke"></path>`
@@ -1394,13 +1396,15 @@ a { color:var(--charge); }
 .span-2 { grid-column:span 2; }
 .hero .money { flex:1 1 260px; max-width:360px; }
 .ic { flex:none; vertical-align:-4px; }
-.flowbox { position:relative; height:300px; min-width:640px; }
+#flow > .scroll-x { overflow-y:hidden; }
+.flowbox { position:relative; height:340px; min-width:680px; }
 .flow-lines { position:absolute; inset:0; width:100%; height:100%; }
-.fnode { position:absolute; transform:translateY(-50%); display:flex; align-items:center; gap:10px; background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:9px 12px; opacity:.6; }
+.fnode { position:absolute; transform:translateY(-50%); box-sizing:border-box; display:flex; align-items:center; gap:10px; background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:8px 12px; opacity:.6; white-space:nowrap; overflow:hidden; }
+.fnode > div { min-width:0; }
 .fnode.on { opacity:1; border-color:var(--ok); }
 .fnode span { display:block; font-size:12px; color:var(--fg-3); }
-.fnode b { font-size:16px; }
-.fnode i { font-style:normal; font-size:12px; color:var(--fg-3); margin-left:6px; }
+.fnode b { display:block; font-size:16px; }
+.fnode i { display:block; font-style:normal; font-size:12px; color:var(--fg-3); overflow:hidden; text-overflow:ellipsis; }
 .fhouse { position:absolute; left:40%; top:50%; width:20%; transform:translateY(-50%); background:var(--panel-2); border:1px solid var(--fg-3); border-radius:14px; padding:14px; text-align:center; }
 .fhouse b { display:block; font-size:24px; margin-top:4px; }
 .fhouse span { font-size:12px; color:var(--fg-3); }
