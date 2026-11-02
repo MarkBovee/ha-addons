@@ -879,6 +879,52 @@ function sunHtml(p) {
     ${lit.length ? `<div class="sunbars" role="img" aria-label="${label}: ${num(total, 1)} kWh">${lit.map(([h, v]) => `<div title="${String(h).padStart(2, "0")}:00 ${num(v, 2)} kWh"><i style="height:${Math.round(v / max * 100)}%"></i><span class="mono">${String(h).padStart(2, "0")}</span></div>`).join("")}</div>` : `<p class="quiet small">No sun expected.</p>`}</div>`;
 }
 
+const LIVE_STEP_MS = 10000;            // one sample of battery and grid power every 10 s
+const LIVE_SPAN_MS = 30 * 60000;       // the live charts show the last 30 minutes
+
+/** Battery (+ charging) and grid (+ import) power in W from the role entities, null where unknown. */
+function livePower(hass, s) {
+  const r = (s && s.roles) || {};
+  const bp = watts(hass, r.battery_power_entity);
+  return { batt: bp === null ? null : bp * (r.battery_power_positive_is_discharging === false ? 1 : -1), grid: watts(hass, r.grid_entity) };
+}
+
+/**
+ * One live series as a row: the label, the current value with its direction, and a sparkline of the last 30 minutes
+ * around a zero line (above zero `up`, below zero `down`, each in its own colour).
+ */
+function sparkRow(samples, key, label, up, down) {
+  const pts = samples.filter((x) => x[key] !== null);
+  const now = pts.length ? pts[pts.length - 1][key] : null;
+  const dir = now === null ? "" : Math.abs(now) < 50 ? "balanced" : now > 0 ? up.word : down.word;
+  const W = 300, H = 56, t1 = Date.now(), t0 = t1 - LIVE_SPAN_MS;
+  const max = Math.max(500, ...pts.map((x) => Math.abs(x[key])));
+  const xy = (x) => `${((x.t - t0) / LIVE_SPAN_MS * W).toFixed(1)},${(H / 2 - x[key] / max * (H / 2 - 3)).toFixed(1)}`;
+  const line = pts.length > 1 ? `<polyline points="${pts.map(xy).join(" ")}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"></polyline>` : "";
+  // colour above and below zero by clipping the same line twice
+  const id = `clip-${key}`;
+  return `<div class="spark">
+    <div class="spark-head"><span>${esc(label)}</span><b class="mono" style="color:var(${now === null || Math.abs(now) < 50 ? "--fg" : now > 0 ? up.colour : down.colour})">${now === null ? "—" : kw(Math.abs(now), 2) + " kW"}</b><i>${esc(dir)}</i></div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}, last 30 minutes">
+      <defs><clipPath id="${id}-up"><rect x="0" y="0" width="${W}" height="${H / 2}"></rect></clipPath><clipPath id="${id}-dn"><rect x="0" y="${H / 2}" width="${W}" height="${H / 2}"></rect></clipPath></defs>
+      <line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="var(--line)" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+      <g clip-path="url(#${id}-up)" style="color:var(${up.colour})">${line}</g><g clip-path="url(#${id}-dn)" style="color:var(${down.colour})">${line}</g>
+    </svg></div>`;
+}
+
+/** The live card: battery and grid power over the last 30 minutes, 10 s per point. */
+function liveChartsHtml(samples) {
+  return sparkRow(samples, "batt", "Battery", { word: "charging", colour: "--charge" }, { word: "discharging", colour: "--discharge" })
+    + sparkRow(samples, "grid", "Grid", { word: "import", colour: "--fg-2" }, { word: "export", colour: "--ok" })
+    + `<div class="quiet small spark-axis"><span>−30 min</span><span>now · every 10 s</span></div>`;
+}
+
+/** Recorder history of one entity as [{t, w}] (W, kW converted), for filling the live charts when the panel opens. */
+function historyWatts(hass, rows, entityId, sign) {
+  const unit = hass.states[entityId] && hass.states[entityId].attributes.unit_of_measurement;
+  return (rows || []).map((x) => ({ t: (x.lu || x.lc) * 1000, w: Number(x.s) * (unit === "kW" ? 1000 : 1) * sign })).filter((x) => Number.isFinite(x.w));
+}
+
 /* ------------------------------------------------------------------ the panel */
 
 const VIEWS = [["overview", "Overview"], ["decisions", "Decisions"], ["insights", "Insights"]];
@@ -902,6 +948,7 @@ class HemsPanel extends HTMLElement {
     this._view = viewOf(location.hash) || "overview";
     this._changesOnly = false;          // Decisions: only the quarters where the action changes
     this._forecast = null;              // daily weather forecast, from weather/subscribe_forecast
+    this._samples = [];                 // live battery and grid power, one per 10 s, the last 30 minutes ({t, batt, grid})
     this._hours = 24;
     this._period = "day";                 // Insights: day, week, month or year
     this._sel = null;
@@ -925,6 +972,35 @@ class HemsPanel extends HTMLElement {
     if (first) this._render();
     else this._liveUpdate();
   }
+  /** Add a live sample at most every 10 s and keep the last 30 minutes; the first call fills the charts from the recorder. */
+  _sample(s) {
+    if (!s || !s.roles) return;
+    const now = Date.now();
+    if (!this._seeded) { this._seeded = true; this._seedSamples(s); }
+    const last = this._samples[this._samples.length - 1];
+    if (last && now - last.t < LIVE_STEP_MS - 500) return;
+    this._samples.push({ t: now, ...livePower(this._hass, s) });
+    while (this._samples.length && this._samples[0].t < now - LIVE_SPAN_MS) this._samples.shift();
+  }
+
+  /** The last 30 minutes of battery and grid power from the recorder, resampled to 10 s steps (last value before each step). */
+  async _seedSamples(s) {
+    const r = s.roles, ids = [r.battery_power_entity, r.grid_entity].filter(Boolean);
+    if (!ids.length) return;
+    const t1 = Date.now(), t0 = t1 - LIVE_SPAN_MS;
+    try {
+      const res = await this._hass.callWS({ type: "history/history_during_period", start_time: new Date(t0).toISOString(), end_time: new Date(t1).toISOString(),
+        entity_ids: ids, minimal_response: true, no_attributes: true, significant_changes_only: false });
+      const batt = historyWatts(this._hass, res[r.battery_power_entity], r.battery_power_entity, r.battery_power_positive_is_discharging === false ? 1 : -1);
+      const grid = historyWatts(this._hass, res[r.grid_entity], r.grid_entity, 1);
+      const at = (rows, t) => { let v = null; for (const x of rows) { if (x.t > t) break; v = x.w; } return v; };
+      const seeded = [];
+      for (let t = t0; t < t1 - LIVE_STEP_MS; t += LIVE_STEP_MS) seeded.push({ t, batt: at(batt, t), grid: at(grid, t) });
+      this._samples = [...seeded, ...this._samples.filter((x) => x.t >= t1 - LIVE_STEP_MS)];
+    } catch (e) { /* no recorder access: the charts fill from now on */ }
+    const lp = this.shadowRoot && this.shadowRoot.getElementById("live-power"); if (lp) lp.innerHTML = liveChartsHtml(this._samples);
+  }
+
   /** Subscribe once to the daily forecast of the weather entity; it arrives on its own schedule and redraws only the weather row. */
   _watchForecast() {
     const id = weatherEntity(this._hass, store.settings);
@@ -950,7 +1026,7 @@ class HemsPanel extends HTMLElement {
     this._off = store.on(() => this._render());
     window.addEventListener("hashchange", this._onHash);
     window.addEventListener("resize", this._onResize);
-    this._tick = setInterval(() => this._liveUpdate(), 15000);
+    this._tick = setInterval(() => this._liveUpdate(), LIVE_STEP_MS);
     this._ro = new ResizeObserver(() => this._drawCharts());
     this._ro.observe(this);
   }
@@ -974,6 +1050,8 @@ class HemsPanel extends HTMLElement {
     const live = root.getElementById("live"); if (live) live.innerHTML = liveNumbersHtml(this._hass, p, s);
     const ph = root.getElementById("phases"); if (ph) ph.innerHTML = phasesHtml(this._hass, s);
     const fl = root.getElementById("flow"); if (fl) fl.innerHTML = flowHtml(this._hass, p, s);
+    this._sample(s);
+    const lp = root.getElementById("live-power"); if (lp) lp.innerHTML = liveChartsHtml(this._samples);
     const clock = root.getElementById("clock"); if (clock) clock.textContent = hhmm(Date.now());
   }
 
@@ -1051,7 +1129,8 @@ class HemsPanel extends HTMLElement {
       ${recsHtml(p, this._applyId)}
       <section class="grid-3">
         <div class="card span-2"><div class="card-head"><h2>Energy flow</h2><span class="quiet small">live</span></div><div id="flow">${flowHtml(this._hass, p, s)}</div></div>
-        <div class="card"><div class="card-head"><h2>Phases</h2><span class="quiet small">max ${num((s && s.options && s.options.grid_limit_a) || 25, 0)} A</span></div><div id="phases">${phasesHtml(this._hass, s)}</div></div>
+        <div class="card"><div class="card-head"><h2>Live power</h2><span class="quiet small">30 min</span></div><div id="live-power">${liveChartsHtml(this._samples)}</div>
+          <div class="card-head" style="margin-top:18px"><h2>Phases</h2><span class="quiet small">max ${num((s && s.options && s.options.grid_limit_a) || 25, 0)} A</span></div><div id="phases">${phasesHtml(this._hass, s)}</div></div>
       </section>
       <section class="grid-3" id="weather">${weatherHtml(this._hass, s, this._forecast)}${sunHtml(p)}</section>
       <section class="block chart">
@@ -1409,6 +1488,13 @@ a { color:var(--charge); }
 .fhouse b { display:block; font-size:24px; margin-top:4px; }
 .fhouse span { font-size:12px; color:var(--fg-3); }
 @media (prefers-reduced-motion: no-preference) { .flow { animation:flow 1.2s linear infinite; } .flow.rev { animation-direction:reverse; } @keyframes flow { to { stroke-dashoffset:-24; } } }
+.spark { margin-bottom:10px; }
+.spark-head { display:flex; align-items:baseline; gap:8px; }
+.spark-head span { font-size:13px; color:var(--fg-2); }
+.spark-head b { font-size:17px; margin-left:auto; }
+.spark-head i { font-style:normal; font-size:12px; color:var(--fg-3); min-width:70px; text-align:right; }
+.spark svg { display:block; width:100%; height:56px; }
+.spark-axis { display:flex; justify-content:space-between; font-size:11px; }
 .wx { display:flex; gap:16px; align-items:center; }
 .wx > div { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .wx b.big { font-size:26px; font-weight:500; }
