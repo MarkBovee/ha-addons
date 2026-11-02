@@ -77,6 +77,18 @@ def test_ssh_shares_one_connection_and_only_the_first_call_is_a_master():
     assert "ControlMaster=no" in later and "ControlPersist=300" not in later and later[-2:] == ["u@h", "ls"]
 
 
+def test_without_a_control_path_ssh_has_no_shared_connection():
+    """Windows OpenSSH has no ControlMaster ("getsockname failed: Not a socket", 2 Nov 2026): plain ssh calls there."""
+    command = deploy.ssh_command(deploy.Target("h", "u"), None, "true", master=True)
+    assert command == ["ssh", "u@h", "true"]
+
+
+def test_tar_options_fit_gnu_tar_and_windows_bsdtar():
+    """bsdtar rejects --mode and spells the owner options --uid/--gid."""
+    assert "--mode=u+rw,go+r" in deploy.tar_owner_options(windows=False)
+    assert deploy.tar_owner_options(windows=True) == ["--uid=0", "--gid=0", "--numeric-owner"]
+
+
 def test_a_key_is_passed_by_path_and_batch_forbids_prompts():
     """The script hands ssh a key path (never contents or a password); --batch turns prompts into failures."""
     target = deploy.target_from_env({"HA_HOST": "h", "HA_SSH_USER": "u", "HA_SSH_KEY": "~/.ssh/ha_hems", "HA_SSH_PASSWORD": "secret"})
