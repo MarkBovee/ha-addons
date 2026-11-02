@@ -95,13 +95,13 @@ def sell_windows(slots: list[Slot], start: datetime) -> list[list[int]]:
 
 
 def with_sell_limit(slots: list[Slot], start: datetime, cfg: BatteryConfig) -> list[Slot]:
-    """The slots with sales allowed only in each sell window's best-paying quarters, `max_sell_hours` worth per window (0 = every quarter allowed).
+    """The slots with sales allowed only in each sell window's best-paying quarters, `max_sell_quarters` per window (0 = every quarter allowed).
 
     Per window, not per day (Mark, 2 Nov 2026): a day with a morning and an evening peak may sell in both. The best by export price:
     that is where a sale earns most; ties go to the earliest quarter."""
-    if cfg.max_sell_hours <= 0:
+    if cfg.max_sell_quarters <= 0:
         return slots
-    per_window = max(1, round(cfg.max_sell_hours / SLOT_H))
+    per_window = int(cfg.max_sell_quarters)
     allowed = {n for window in sell_windows(slots, start) for n in sorted(window, key=lambda n: (-slots[n].export_price, n))[:per_window]}
     return [s if n in allowed else replace(s, sell_allowed=False) for n, s in enumerate(slots)]
 

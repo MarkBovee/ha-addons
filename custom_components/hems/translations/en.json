@@ -72,7 +72,7 @@
               "reserve_soc_pct": "Sell floor, minimum (%)",
               "reserve_max_soc_pct": "Sell floor, maximum (%)",
               "reserve_load_factor": "Sell floor: load forecast factor",
-              "max_sell_hours": "Sell at most (hours per day, 0 = no limit)",
+              "max_sell_quarters": "Sell at most (quarters of 15 min per sell window, 0 = no limit)",
               "reserve_soc_monday_pct": "Sell floor minimum on Monday (%, 0 = the general minimum)",
               "reserve_soc_tuesday_pct": "Sell floor minimum on Tuesday (%, 0 = the general minimum)",
               "reserve_soc_wednesday_pct": "Sell floor minimum on Wednesday (%, 0 = the general minimum)",
