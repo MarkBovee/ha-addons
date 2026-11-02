@@ -122,7 +122,9 @@ def test_replay_does_not_cycle_at_a_loss_on_a_thin_spread_day():
 def test_a_replay_plans_on_the_forecast_it_is_given_and_every_quarter_asks_for_one():
     """The planner uses what `forecasts` returns (an empty forecast shows as missing slots in every decision's trace), a function that returns None is
     the oracle (same flows, no missing slots), and it is asked once per quarter. The simulated battery and the accounting stay on the recorded load and PV."""
-    prices = recorded_day("2026-10-06")
+    day = recorded_day("2026-10-06")
+    # Six hours prove the per-quarter contract as well as a whole day, at a fraction of the cost (the whole day took 22 s).
+    prices = PriceSeries(day.starts[:24], day.import_eur_kwh[:24], day.export_eur_kwh[:24])
     data = synthetic_home(prices, 8.0)
     cfg = BatteryConfig()
     asked: list[datetime] = []

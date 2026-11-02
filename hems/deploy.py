@@ -17,6 +17,7 @@ Options: --host H --user U --key PATH (override .env), --batch (never prompt; ne
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import shlex
@@ -154,41 +155,58 @@ def privileged(script: str, sudo: bool) -> str:
     return f"sudo -n sh -c {shlex.quote(script)}" if sudo else script
 
 
-def ssh_command(target: Target, control_path: str, *remote: str, master: bool = False, batch: bool = False) -> list[str]:
+def ssh_command(target: Target, control_path: str | None, *remote: str, master: bool = False, batch: bool = False) -> list[str]:
     """ssh invocation that shares one authenticated connection (ControlMaster): the first call may prompt.
 
-    A key is passed by path only; `batch` forbids any prompt, so an unauthorised key fails instead of asking."""
-    options = ["-o", f"ControlPath={control_path}", "-o", "ControlMaster=yes" if master else "ControlMaster=no"]
+    A key is passed by path only; `batch` forbids any prompt, so an unauthorised key fails instead of asking.
+    `control_path` None: no shared connection (Windows OpenSSH has no ControlMaster: "getsockname failed: Not a socket")."""
+    # Windows OpenSSH against the HA SSH add-on fails with "Corrupted MAC on input" on the default MAC (2 Nov 2026); this one works.
+    options = ["-o", "MACs=hmac-sha2-256-etm@openssh.com"] if control_path is None else \
+        ["-o", f"ControlPath={control_path}", "-o", "ControlMaster=yes" if master else "ControlMaster=no"]
     if target.key:
         options += ["-i", target.key, "-o", "IdentitiesOnly=yes"]
     if batch:
         options += ["-o", "BatchMode=yes"]
-    if master:
+    if master and control_path is not None:
         options += ["-o", "ControlPersist=300"]
     return ["ssh", *options, f"{target.user}@{target.host}", *remote]
+
+
+def parallel_options() -> list[str]:
+    """`-n auto` when pytest-xdist is installed (the core tests run in a third of the time), else nothing: it stays optional."""
+    return ["-n", "auto"] if importlib.util.find_spec("xdist") else []
 
 
 def run_checks(root: Path = ROOT) -> None:
     """Abort unless the core tests pass and the vendored engine matches hems/core."""
     sync = subprocess.run([sys.executable, str(root / "scripts" / "sync_hems_core.py"), "--check"], cwd=root)
-    tests = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"], cwd=root / "hems" / "core")
+    tests = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *parallel_options()], cwd=root / "hems" / "core")
     if sync.returncode or tests.returncode:
         raise SystemExit("Checks failed; nothing was deployed. Fix them (or use --skip-checks if you know why).")
 
 
+def tar_owner_options(windows: bool = os.name == "nt") -> list[str]:
+    """tar options that make every entry root-owned and readable, for GNU tar or Windows' bsdtar.
+
+    Entries are root-owned so the server copy matches the other components regardless of local uids. GNU tar's --mode makes every
+    entry world-readable (a local 0600 file would otherwise land unreadable for the checksum check over SSH); bsdtar has no --mode,
+    and Windows files carry no such mode bits, so it is left out there."""
+    if windows:
+        return ["--uid=0", "--gid=0", "--numeric-owner"]
+    return ["--owner=0", "--group=0", "--numeric-owner", "--mode=u+rw,go+r"]
+
+
 def stream_tar(files: list[str], root: Path = ROOT) -> subprocess.Popen:
     """Start tar writing the files (paths relative to the integration folder) to its stdout."""
-    # -C must come before -T; entries are root-owned so the server copy matches the other components regardless of local uids.
-    # --mode makes every entry world-readable: a local 0600 file would otherwise land unreadable for the checksum check over SSH.
-    tar = subprocess.Popen(["tar", "-C", str(root / INTEGRATION), "--owner=0", "--group=0", "--numeric-owner", "--mode=u+rw,go+r",
-                            "--null", "-T", "-", "-cf", "-"],
+    # -C must come before -T.
+    tar = subprocess.Popen(["tar", "-C", str(root / INTEGRATION), *tar_owner_options(), "--null", "-T", "-", "-cf", "-"],
                            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     tar.stdin.write(("\0".join(files) + "\0").encode())
     tar.stdin.close()
     return tar
 
 
-def deploy(target: Target, files: list[str], control_path: str, batch: bool = False) -> None:
+def deploy(target: Target, files: list[str], control_path: str | None, batch: bool = False) -> None:
     """Open the shared connection (a password prompt, if any, happens here), install, and verify by checksum."""
     ssh = lambda *remote, master=False: ssh_command(target, control_path, *remote, master=master, batch=batch)
     subprocess.run(ssh("true", master=True), check=True)
@@ -205,7 +223,8 @@ def deploy(target: Target, files: list[str], control_path: str, batch: bool = Fa
             raise SystemExit(f"Verification failed. missing={missing} unexpected={extra} different={different}")
         print(f"Deployed and verified {len(files)} files in {target.remote_dir}")
     finally:
-        subprocess.run(["ssh", "-O", "exit", "-o", f"ControlPath={control_path}", f"{target.user}@{target.host}"], capture_output=True)
+        if control_path is not None:
+            subprocess.run(["ssh", "-O", "exit", "-o", f"ControlPath={control_path}", f"{target.user}@{target.host}"], capture_output=True)
 
 
 def wait_for_home_assistant(base: str, token: str, timeout_s: int = 300, poll_s: int = 5) -> bool:
@@ -281,7 +300,8 @@ def main() -> int:
         run_checks()
     print(f"Build {write_build_stamp()}")
     with tempfile.TemporaryDirectory() as tmp:
-        deploy(target, files, os.path.join(tmp, "ssh-%C"), args.batch)
+        # Windows OpenSSH cannot share a connection: every ssh call authenticates on its own (with a password: three prompts).
+        deploy(target, files, None if os.name == "nt" else os.path.join(tmp, "ssh-%C"), args.batch)
     if args.restart:
         restart_home_assistant(env, args.yes)
     else:
