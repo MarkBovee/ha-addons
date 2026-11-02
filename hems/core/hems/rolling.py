@@ -20,6 +20,7 @@ from hems.trace import explain
 from hems.windows import MAX_LOOKBACK, WindowAnalysis, analyse, record
 
 QUARTER = timedelta(minutes=SLOT_MINUTES)
+CHEAP_TOLERANCE = 0.02              # EUR/kWh above the cheapest quarter before the peak that still counts as the cheap stretch
 SHIFT_POWER_FRACTION = 0.25          # a replanned quarter that moves more than this share of its power is logged
 
 
@@ -106,7 +107,8 @@ def with_sell_limit(slots: list[Slot], start: datetime, cfg: BatteryConfig) -> l
 
 
 def full_before_peak(start: datetime, slots: list[Slot]) -> int | None:
-    """The slot the battery must be full by while tomorrow's prices are unknown: today's most expensive quarter (Mark, 2 Nov 2026).
+    """The slot the battery must be full by while tomorrow's prices are unknown: the end of the cheap stretch before today's most
+    expensive quarter (Mark, 2 Nov 2026).
 
     Planning on today alone ends the day empty. Battery-manager's way instead: fill to 100 % in the day's cheapest quarters before the
     evening peak, then cover the house and sell. None when tomorrow is known (the plan decides freely) or no cheaper quarter comes first."""
@@ -115,7 +117,11 @@ def full_before_peak(start: datetime, slots: list[Slot]) -> int | None:
         return None
     prices = [s.import_price for s in slots]
     peak = prices.index(max(prices))
-    return peak if peak > 0 and min(prices[:peak]) < prices[peak] else None
+    if peak == 0 or min(prices[:peak]) >= prices[peak]:
+        return None
+    # full at the end of the cheap stretch, not at the peak: topping up the house's use at near-peak prices makes no sense (Mark, 2 Nov 2026)
+    cheap = min(prices[:peak]) + CHEAP_TOLERANCE
+    return max(n for n in range(peak) if prices[n] <= cheap) + 1
 
 
 def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:

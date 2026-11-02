@@ -77,7 +77,8 @@ def test_stock_is_sold_in_a_modest_peak_by_default_and_kept_when_recent_peaks_we
 
 
 def test_the_battery_is_full_before_todays_peak_while_tomorrow_is_unknown():
-    """Today only: 0.30, cheap 0.20 at 14-16, peak 0.50 at 18-20. The battery is full at 18:00 and not refilled after. With tomorrow known there is no target."""
+    """Today only: 0.30, cheap 0.20 at 14-16, peak 0.50 at 18-20. The battery is full at 16:00 (end of the cheap stretch) and not refilled
+    after the peak. With tomorrow known there is no target."""
     today = date(2026, 10, 20)
     now = datetime(2026, 10, 20, 10, tzinfo=LOCAL_TZ)
     def run(days):
@@ -88,9 +89,10 @@ def test_the_battery_is_full_before_todays_peak_while_tomorrow_is_unknown():
         return plan_next(HorizonInputs(now, 5.0, prices, {s: 0.2 for s in starts}, {s: 0.0 for s in starts}, full_before_peak=True), CFG)
     today_only = run(1)
     peak = today_only.trace["terminal"]["full_by"]
-    assert peak == datetime(2026, 10, 20, 18, tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()
+    assert peak == datetime(2026, 10, 20, 16, tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()
     full = CFG.max_soc * CFG.capacity_kwh
     at_peak = (datetime.fromisoformat(peak) - now).seconds // 900
     assert today_only.plan.slots[at_peak - 1].soc_kwh == pytest.approx(full)
-    assert all(s.action != "charge" for s in today_only.plan.slots[at_peak:])
+    after_peak = at_peak + 8                           # 18:00, two hours after the cheap stretch ends
+    assert all(s.action != "charge" for s in today_only.plan.slots[after_peak:])
     assert run(2).trace["terminal"]["full_by"] is None
