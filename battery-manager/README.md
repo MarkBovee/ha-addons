@@ -118,6 +118,7 @@ Defaults live in `battery-manager/config.yaml`.
 | `heuristics.charge_spread_max_price_delta` | Extra cheap-hour tolerance band in EUR/kWh for spread charging |
 | `heuristics.min_profit_threshold` | Margin in EUR/kWh a sell price must exceed the cost basis by |
 | `heuristics.grid_charge_min_margin` | Minimum net margin for grid charging against the sale it is meant for (default: `min_profit_threshold`) |
+| `heuristics.charge_defer_min_saving` | Skip a charge window when later windows before the next sale are at least this much cheaper in EUR/kWh and long enough to take over (default 0.005) |
 | `heuristics.round_trip_efficiency` | Efficiency applied to the sell price in the margin check (default 0.90) |
 | `heuristics.margin_basis` | Cost basis for the profit margin: `day_min_import` (default) or `solar_export` (lowest export price in the PV charge window) |
 | `heuristics.discharge_after_charge_only` | Pick top-X sell hours per peak: after the main charge window, and separately from the profitable quarters before it (default true); false ranks the whole day with one budget |

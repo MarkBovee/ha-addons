@@ -176,6 +176,38 @@ def test_gate_defaults_follow_min_profit_and_options_override():
     assert _gate(config, [window], sell)[0] == []
 
 
+def test_evening_charge_is_deferred_to_a_cheaper_night_before_the_sale():
+    """2026-11-02: 21:45 @0.404 and 22:45 @0.408 were charged while 01:00-06:15 @0.396 came before the 08:00 sale."""
+    config = make_config(**{"heuristics.min_profit_threshold": 0.05})
+
+    def window(offset_h, hours, price):
+        start = T0 + timedelta(hours=offset_h)
+        return {"start": start, "end": start + timedelta(hours=hours), "avg_price": price, "slots": [{"start": start}]}
+
+    evening = [window(0, 0.25, 0.404), window(1, 1.25, 0.408)]
+    night = window(3.25, 5.25, 0.396)
+    morning_sale = _sell(10.25, 0.551, 30)
+    exact = {w["start"] for w in evening + [night]}
+
+    kept, records = _gate(config, evening + [night], [morning_sale], exact=exact)
+
+    assert kept == [night]
+    assert [r["allowed"] for r in records] == [False, False, True]
+    assert "cheaper charge" in records[0]["reason"]
+
+
+def test_charge_is_kept_when_the_cheaper_window_is_too_short_or_after_the_sale():
+    config = make_config(**{"heuristics.min_profit_threshold": 0.05})
+    tonight = {"start": T0, "end": T0 + timedelta(hours=2), "avg_price": 0.40, "slots": []}
+    short_cheap = {"start": T0 + timedelta(hours=3), "end": T0 + timedelta(hours=3.5), "avg_price": 0.30, "slots": []}
+    sale = _sell(5, 0.60, 60)
+    after_sale = {"start": T0 + timedelta(hours=7), "end": T0 + timedelta(hours=10), "avg_price": 0.20, "slots": []}
+
+    kept, _ = _gate(config, [tonight, short_cheap, after_sale], [sale, _sell(11, 0.60, 60)])
+
+    assert tonight in kept
+
+
 def test_night_spread_window_is_skipped_on_2026_10_07(monkeypatch, amsterdam_tz):
     """The 22:45 @0.315 block (spread-only, no profitable sell after it) is not charged."""
     schedule = replay(monkeypatch, "21:30", soc=46, remaining_solar=0.0, entity_updates=[])

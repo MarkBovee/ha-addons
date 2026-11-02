@@ -76,6 +76,45 @@ def next_window_start_after(
     return min(starts) if starts else None
 
 
+def _window_hours(window: Dict[str, Any]) -> float:
+    """Return a window's length in hours (0 for malformed windows)."""
+
+    start_dt, end_dt = window.get("start"), window.get("end")
+    if not isinstance(start_dt, datetime) or not isinstance(end_dt, datetime):
+        return 0.0
+    return max((end_dt - start_dt).total_seconds() / 3600.0, 0.0)
+
+
+def cheaper_window_ahead(
+    window: Dict[str, Any],
+    charge_windows: Sequence[Dict[str, Any]],
+    discharge_windows: Sequence[Dict[str, Any]],
+    min_saving: float,
+) -> Optional[Dict[str, Any]]:
+    """Return the cheapest later charge window that makes ``window`` pointless, or None.
+
+    A later window replaces this one when it starts before the next sale (so the energy still
+    arrives in time), is at least ``min_saving`` cheaper, and the cheaper windows together last
+    at least as long as this one (so they can take over its energy). 2026-11-02: 21:45 @0.404
+    was charged while 01:00-06:15 @0.396 came before the 08:00 sale.
+    """
+
+    price = float(window.get("avg_price", 0.0))
+    first_sale = first_sale_start_after(window["end"], discharge_windows)
+    cheaper = [
+        other
+        for other in charge_windows
+        if other is not window
+        and isinstance(other.get("start"), datetime)
+        and other["start"] >= window["end"]
+        and (first_sale is None or other["start"] < first_sale)
+        and float(other.get("avg_price", 0.0)) <= price - min_saving + 1e-9
+    ]
+    if not cheaper or sum(_window_hours(w) for w in cheaper) < _window_hours(window) - 1e-9:
+        return None
+    return min(cheaper, key=lambda w: float(w.get("avg_price", 0.0)))
+
+
 def window_has_exact_slot(window: Dict[str, Any], exact_start_dts: Set[datetime]) -> bool:
     """True when the grouped charge window contains a strict top-X cheapest slot."""
 

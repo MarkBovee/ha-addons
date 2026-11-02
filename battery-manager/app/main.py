@@ -23,6 +23,7 @@ from .decision_trace import fit_attributes, get_trace_path, summarize, write_tra
 from .ev_charger_monitor import should_pause_discharge
 from .margin import (
     DEFAULT_ROUND_TRIP_EFFICIENCY,
+    cheaper_window_ahead,
     evaluate_grid_charge,
     window_has_exact_slot,
 )
@@ -159,6 +160,7 @@ DEFAULT_CONFIG = {
         "margin_basis": "day_min_import",
         "discharge_after_charge_only": True,
         "overnight_wait_threshold": 0.02,
+        "charge_defer_min_saving": 0.005,
         "sell_wait_for_better_morning_enabled": True,
         "sell_wait_horizon_hours": 20,
         "sell_wait_min_gain_threshold": 0.02,
@@ -2000,6 +2002,7 @@ def _apply_grid_charge_margin_gate(
     """
 
     efficiency, min_margin = _grid_charge_margin_settings(config)
+    defer_min_saving = float(config.get("heuristics", {}).get("charge_defer_min_saving", 0.005) or 0.0)
 
     kept: List[Dict[str, Any]] = []
     for window in upcoming.get("charge", []):
@@ -2008,6 +2011,36 @@ def _apply_grid_charge_margin_gate(
             kept.append(window)
             continue
         is_top_x = window_has_exact_slot(window, exact_start_dts)
+        # Only windows that have not started: deferring a running charge would flap every cycle.
+        later = (
+            cheaper_window_ahead(window, upcoming.get("charge", []), upcoming.get("discharge", []), defer_min_saving)
+            if window["start"] > now
+            else None
+        )
+        if later is not None:
+            reason = (
+                f"cheaper charge {later['start'].astimezone().strftime('%H:%M')} "
+                f"@{float(later.get('avg_price', 0.0)):.3f} comes before the next sale"
+            )
+            records.append({
+                "kind": "charge_window",
+                "top_x": is_top_x,
+                "start": window["start"].astimezone().isoformat(),
+                "end": window["end"].astimezone().isoformat(),
+                "charge_price": round(price, 4),
+                "allowed": False,
+                "reason": reason,
+                "expected_sell_price": None,
+                "margin": None,
+            })
+            logger.info(
+                "⏳ Deferring grid charge %s-%s @€%.3f: %s",
+                window["start"].astimezone().strftime("%H:%M"),
+                window["end"].astimezone().strftime("%H:%M"),
+                price,
+                reason,
+            )
+            continue
         verdict = evaluate_grid_charge(
             charge_price=price,
             charge_end=window["end"],
