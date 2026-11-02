@@ -606,19 +606,24 @@ function headline(p) {
   if (!d) return { lead: STATUS_LABEL[(p && p.meta.status)] || "HEMS plans nothing now", rest: "", why: "As soon as the missing data is back, HEMS plans again within a minute." };
   const e = p.execution, act = d.action || "idle";
   const w = e && e.code !== "no_plan" ? e.power_w : d.power_w;
-  const lead = act === "charge" ? `Charging the battery at ${kw(Math.abs(w))} kW.` : act === "discharge" ? `Selling from the battery at ${kw(Math.abs(w))} kW.` : "Holding the battery.";
+  // idle is self-consumption: the battery follows the house (discharging to cover it, charging on solar surplus), it is never "holding"
+  const lead = act === "charge" ? `Charging at ${kw(Math.abs(w))} kW.`
+    : act === "discharge" ? `Selling at ${kw(Math.abs(w))} kW.`
+    : w !== null && w !== undefined && w <= -50 ? `Battery covers the house, ${kw(Math.abs(w))} kW.`
+    : w !== null && w !== undefined && w >= 50 ? `Storing solar surplus, ${kw(w)} kW.`
+    : "Battery idle.";
   const ch = nextWindow(p, "charge"), dis = nextWindow(p, "discharge");
   const parts = [];
-  // the active time goes with the window: a sale between 16:30 and 19:30 with pauses is not three hours of selling
-  if (ch && act !== "charge") parts.push({ word: "Charging", text: span(ch.from, ch.to), time: ch.active_min, cls: "c-charge" });
-  if (dis && act !== "discharge") parts.push({ word: parts.length ? "selling" : "Selling", text: span(dis.from, dis.to), time: dis.active_min, cls: "c-discharge" });
-  const paused = (w) => w && w.active_min && w.active_min < (new Date(w.to) - new Date(w.from)) / 60000 - 1;
-  parts.forEach((x, i) => { x.paused = paused(i === 0 && ch && act !== "charge" ? ch : dis); });
-  const rest = parts.map((x) => `${x.word} ${x.paused ? duration(x.time) + " between " : ""}<span class="${x.cls}">${esc(x.text)}</span>`).join(", ");
+  if (ch && act !== "charge") parts.push({ word: "charge", w: ch, cls: "c-charge" });
+  if (dis && act !== "discharge") parts.push({ word: "sell", w: dis, cls: "c-discharge" });
+  parts.sort((a, b) => new Date(a.w.from) - new Date(b.w.from));
+  // a window with pauses gets its active time: a sale between 16:30 and 19:30 with gaps is not three hours of selling
+  const paused = (x) => x.active_min && x.active_min < (new Date(x.to) - new Date(x.from)) / 60000 - 1;
+  const rest = parts.length ? "Next: " + parts.map((x) => `${x.word} <span class="${x.cls}">${esc(span(x.w.from, x.w.to))}</span>${paused(x.w) ? ` (${duration(x.w.active_min)})` : ""}`).join(", then ") : "";
   const c = d.compare || {};
-  const why = c.code === "hold" ? `Selling now pays ${eur(c.sell, 3)} €/kWh; keeping it for later is worth ${eur(c.keep, 3)}.`
-    : c.code === "sell" ? `Selling now pays ${eur(c.sell, 3)} €/kWh, more than keeping it (${eur(c.keep, 3)}).`
-    : c.code === "buy" ? `Buying now costs ${eur(c.buy, 3)} €/kWh, less than it is worth later (${eur(c.keep, 3)}).`
+  const why = c.code === "hold" || c.code === "floor" ? `Sell ${eur(c.sell, 3)} · keep ${eur(c.keep, 3)} €/kWh — ${c.code === "floor" ? "at the sell floor" : "worth more later"}.`
+    : c.code === "sell" ? `Sell ${eur(c.sell, 3)} · keep ${eur(c.keep, 3)} €/kWh — selling pays more.`
+    : c.code === "buy" ? `Buy ${eur(c.buy, 3)} · keep ${eur(c.keep, 3)} €/kWh — cheaper now than later.`
     : esc(d.reason || "");
   return { lead, rest: rest ? rest + "." : "", why };
 }
@@ -1118,11 +1123,12 @@ class HemsPanel extends HTMLElement {
       <section class="hero">
         <div class="say">
           <span class="quiet">Now · ${hhmm(Date.now())}</span>
-          <h1>${esc(h.lead)} ${h.rest}</h1>
+          <h1>${esc(h.lead)}</h1>
+          ${h.rest ? `<p class="next">${h.rest}</p>` : ""}
           <p class="why">${h.why}</p>
         </div>
         <div class="card money">
-          <span class="quiet small">Today vs self-consumption</span>
+          <span class="quiet small">vs. self-consumption only</span>
           ${this._moneyRows(p, d)}
         </div>
       </section>
@@ -1228,9 +1234,9 @@ class HemsPanel extends HTMLElement {
     const r = p && p.realised, t = r && r.today;
     const signed = (v) => v === null || v === undefined ? "—" : (v > 0 ? "+ " : v < 0 ? "− " : "") + "€ " + num(Math.abs(v), 2);
     return `<div class="rows">
-      <div><span>Expected gain</span><span class="mono">${d ? "€ " + num(d.expected_saving, 2) : "—"}</span></div>
-      <div><span>Cost</span><span class="mono">${t && t.quarters ? "€ " + num(t.cost, 2) : "—"}</span></div>
-      <div><span>Saved</span><span class="mono" style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t && t.quarters ? signed(t.gain) : "—"}</span></div>
+      <div><span>Saved today</span><span class="mono" style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t && t.quarters ? signed(t.gain) : "—"}</span></div>
+      <div><span>Energy cost today</span><span class="mono">${t && t.quarters ? "€ " + num(t.cost, 2) : "—"}</span></div>
+      <div><span>Plan, next 48 h</span><span class="mono">${d ? signed(d.expected_saving) : "—"}</span></div>
     </div>`;
   }
 
@@ -1488,6 +1494,7 @@ a { color:var(--charge); }
 .fhouse b { display:block; font-size:24px; margin-top:4px; }
 .fhouse span { font-size:12px; color:var(--fg-3); }
 @media (prefers-reduced-motion: no-preference) { .flow { animation:flow 1.2s linear infinite; } .flow.rev { animation-direction:reverse; } @keyframes flow { to { stroke-dashoffset:-24; } } }
+.next { font-size:19px; color:var(--fg); }
 .spark { margin-bottom:10px; }
 .spark-head { display:flex; align-items:baseline; gap:8px; }
 .spark-head span { font-size:13px; color:var(--fg-2); }
