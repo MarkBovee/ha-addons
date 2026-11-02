@@ -89,3 +89,13 @@ def test_every_temperature_is_a_setting():
     rules = HeaterRules(temps=HeaterTemps(day_preheat=60))
     cmd = decide(HeaterInputs(at(13, 10), 45, False, False, None, prices(cheap={13: 0.30, 3: 0.35})), CFG, rules, LOCAL_TZ)
     assert cmd.target_c == 60
+
+
+def test_the_legionella_run_holds_its_whole_window_after_the_tank_reached_60():
+    """31 Oct 2026: the tank reached 62.5 °C at about 13:00 inside the 11:00-14:00 window; the run must keep 62 °C until 14:00 (as the add-on
+    does), not drop to the day program because the protection now counts as done."""
+    sat = (2026, 10, 31)
+    series = prices(sat, cheap={11: 0.30, 12: 0.30, 13: 0.30})
+    done_at_13 = datetime(2026, 10, 31, 13, 5, tzinfo=LOCAL_TZ)
+    cmd = run(at(13, 15, sat), series, last=done_at_13)
+    assert (cmd.program, cmd.target_c) == (LEGIONELLA, 62)

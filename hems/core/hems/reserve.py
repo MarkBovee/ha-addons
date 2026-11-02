@@ -7,6 +7,7 @@ can refill: the first quarter with PV above the load, or the first cheap import 
 where the plan charges). On top comes the hard minimum, and the result stays between the configured minimum and maximum.
 """
 from dataclasses import replace
+from datetime import datetime, timedelta, tzinfo
 
 from hems.battery import BatteryConfig, Slot
 
@@ -31,27 +32,41 @@ def _is_refill(slot: Slot, cheap: float | None) -> bool:
     return slot.pv_kwh >= slot.load_kwh or (cheap is not None and slot.import_price <= cheap)
 
 
-def usage_floor(slots: list[Slot], cfg: BatteryConfig) -> list[float]:
-    """Sell floor per slot (fraction of capacity), from the expected use until the next refill moment.
+def day_minimums(n_slots: int, cfg: BatteryConfig, start: datetime | None, tz: tzinfo | None) -> list[float]:
+    """The sell floor minimum per slot: the slot's local weekday's own value when set (Mark, 2 Nov 2026: per day), else reserve_soc."""
+    if not cfg.reserve_by_weekday or start is None or tz is None:
+        return [cfg.reserve_soc] * n_slots
+    days = cfg.reserve_by_weekday
+    weekdays = ((start + n * timedelta(minutes=15)).astimezone(tz).weekday() for n in range(n_slots))
+    return [days[w] if w < len(days) and days[w] > 0 else cfg.reserve_soc for w in weekdays]
 
-    Returns cfg.reserve_soc everywhere when the maximum equals the minimum (the feature switched off)."""
-    if cfg.reserve_max_soc <= cfg.reserve_soc or not slots:
-        return [cfg.reserve_soc] * len(slots)
+
+def usage_floor(slots: list[Slot], cfg: BatteryConfig, start: datetime | None = None, tz: tzinfo | None = None) -> list[float]:
+    """Sell floor per slot (fraction of capacity), from the expected use until the next refill moment, at least the slot's day minimum.
+
+    Returns the day minimum everywhere when the maximum is not above it (the usage part switched off)."""
+    minimums = day_minimums(len(slots), cfg, start, tz)
+    if not slots:
+        return []
     eff = cfg.round_trip_eff ** 0.5
     cheap = cheap_price_threshold(slots)
     floors = []
     for t in range(len(slots)):
+        low = minimums[t]
+        if cfg.reserve_max_soc <= max(low, cfg.reserve_soc):   # the usage part is off (max = general minimum), or this day's minimum is above it
+            floors.append(low)
+            continue
         need = 0.0
         for slot in slots[t:t + MAX_LOOKAHEAD]:
             if _is_refill(slot, cheap):
                 break
             need += max(0.0, slot.load_kwh * cfg.reserve_load_factor - slot.pv_kwh) / eff
         fraction = cfg.hard_min_soc + need / cfg.capacity_kwh
-        floors.append(round(min(cfg.reserve_max_soc, max(cfg.reserve_soc, fraction)), 3))
+        floors.append(round(min(cfg.reserve_max_soc, max(low, fraction)), 3))
     return floors
 
 
-def with_usage_floor(slots: list[Slot], cfg: BatteryConfig) -> list[Slot]:
-    """The slots with their sell floor set from the expected use (Slot.reserve_soc); an explicit floor already set is kept."""
-    floors = usage_floor(slots, cfg)
+def with_usage_floor(slots: list[Slot], cfg: BatteryConfig, start: datetime | None = None, tz: tzinfo | None = None) -> list[Slot]:
+    """The slots with their sell floor set from the expected use and the day minimum (Slot.reserve_soc); an explicit floor is kept."""
+    floors = usage_floor(slots, cfg, start, tz)
     return [s if s.reserve_soc is not None else replace(s, reserve_soc=f) for s, f in zip(slots, floors)]

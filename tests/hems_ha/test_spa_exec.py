@@ -10,7 +10,7 @@ METER = {**{r: f"sensor.meter_l{i + 1}" for i, r in enumerate(CONF_METER_CURRENT
          **{r: f"sensor.export_l{i + 1}" for i, r in enumerate(CONF_METER_EXPORTS)},
          **{r: f"sensor.car_l{i + 1}" for i, r in enumerate(CONF_EV_CURRENTS)}}
 SPA_ROLES = {**ROLES, CONF_SPA: "climate.spa", **METER}
-SPA_ON = {"spa_enabled": True, "spa_phase": "l2"}
+SPA_ON = {"spa_enabled": True, "spa_control": "climate", "spa_phase": "l2"}
 
 
 def fake_spa(hass: HomeAssistant, water: float = 36.0, l2_a: float = 5.0) -> list[dict]:

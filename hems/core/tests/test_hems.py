@@ -329,3 +329,67 @@ def test_no_quarter_runs_against_its_label_on_random_horizons():
         for s in result.slots:
             assert not (s.action == "charge" and s.battery_kwh <= 0) and not (s.action == "discharge" and s.battery_kwh >= 0), s
             assert s.action != "idle" or abs(s.battery_kwh - s.own_kwh) < 1e-9
+
+
+def test_a_daily_limit_of_one_sell_hour_keeps_sales_to_the_four_best_quarters():
+    """Mark, 1 Nov 2026: sell at most one hour a day. Eight expensive quarters in the evening: the plan may sell only in the four that pay most."""
+    from datetime import datetime, timezone
+    from hems.rolling import with_sell_limit
+    cfg = BatteryConfig(min_profit_margin=0.0, max_sell_hours=1.0)
+    exports = [0.30] * 8 + [0.60, 0.62, 0.65, 0.66, 0.64, 0.61, 0.59, 0.58] + [0.30] * 8
+    slots = [Slot(0.30, e, 0.1, 0.0) for e in exports]
+    start = datetime(2026, 11, 1, 16, 0, tzinfo=timezone.utc)
+    limited = with_sell_limit(slots, start, cfg)
+    assert [n for n, s in enumerate(limited) if s.sell_allowed] == [9, 10, 11, 12]
+    result = plan(limited, 0.9 * cfg.capacity_kwh, cfg)
+    sold = [n for n, s in enumerate(result.slots) if s.sold_kwh > 0]
+    assert sold and set(sold) <= {9, 10, 11, 12}
+    assert with_sell_limit(slots, start, BatteryConfig()) == slots, "0 = no limit"
+
+
+def test_the_sell_floor_minimum_can_differ_per_weekday():
+    from datetime import datetime, timezone
+    from hems.reserve import usage_floor
+    cfg = BatteryConfig(reserve_soc=0.30, reserve_max_soc=0.60, reserve_by_weekday=(0, 0, 0, 0, 0, 0.80, 0))
+    saturday = datetime(2026, 11, 7, 23, 0, tzinfo=timezone.utc)       # 23:00 UTC Saturday: 4 quarters Saturday, then Sunday
+    floors = usage_floor([Slot(0.10, 0.10, 0.0, 1.0)] * 8, cfg, saturday, timezone.utc)
+    assert floors[:4] == [0.80] * 4, "Saturday's own minimum, above the usage maximum"
+    assert floors[4:] == [0.30] * 4, "Sunday unset: the general minimum"
+    assert usage_floor([Slot(0.10, 0.10, 0.0, 1.0)] * 2, cfg) == [0.30] * 2, "without a start time: the general minimum"
+
+
+def test_the_round_trip_efficiency_is_learned_from_charged_discharged_and_the_soc_change():
+    from datetime import datetime, timedelta, timezone
+    from hems.learn import round_trip_efficiency
+    t0 = datetime(2026, 10, 3, tzinfo=timezone.utc)
+    hours = [(t0 + timedelta(hours=h), w) for h, w in enumerate([5000.0] * 44 + [-4000.0] * 45)]   # 220 kWh in, 180 kWh out
+    soc = [(t0, 50.0), (hours[-1][0], 55.2), (hours[-1][0] + timedelta(hours=5), 90.0)]          # +1.3 kWh on 25 kWh; a later SoC without power is ignored
+    learned = round_trip_efficiency(hours, soc, 25.0, 0.82)
+    assert learned.source == "learned" and 0.81 < learned.value < 0.83, "the 3-12 Oct measurement: 0.82"
+    assert round_trip_efficiency(hours[:5], soc, 25.0, 0.82).value == 0.82, "too little charged: the configured value"
+    flip = [(t, w * 1.5 if w < 0 else w) for t, w in hours]
+    assert round_trip_efficiency(flip, soc, 25.0, 0.82).source.startswith("implausible"), "more out than in"
+
+
+def test_the_water_heater_runs_are_learned_from_its_own_meter():
+    from datetime import date, datetime, timedelta, timezone
+    from hems.heater import WaterHeaterConfig
+    from hems.learn import hourly_from_sum, water_heater_runs, without_metered
+    t0 = datetime(2026, 10, 26, tzinfo=timezone.utc)                       # a Monday; Saturday 31 Oct is the legionella day
+    per_day = [2.0, 1.8, 2.2, 1.9, 2.1, 7.1, 2.0]
+    total, sums = 0.0, []
+    for d, kwh in enumerate(per_day):
+        for h in range(24):
+            total += kwh * 1000 if h == 13 else 0.0
+            sums.append((t0 + timedelta(days=d, hours=h), total))
+    hourly = hourly_from_sum([(t0 - timedelta(hours=1), 0.0)] + sums)
+    cfg = WaterHeaterConfig(enabled=True, energy_kwh=1.9, legionella_energy_kwh=2.6)
+    learned, record = water_heater_runs(hourly, cfg, date(2026, 11, 2), timezone.utc)
+    assert record["source"] == "learned" and learned.energy_kwh == 2.0 and learned.legionella_energy_kwh == 7.1
+    assert water_heater_runs(hourly[:48], cfg, date(2026, 11, 2), timezone.utc)[0] == cfg, "too few days: configured"
+    quiet = [(t, 2300.0 if wh == 7100.0 else wh) for t, wh in hourly]                       # Saturday only 2.3 kWh
+    recorded, record = water_heater_runs(quiet, cfg, date(2026, 11, 2), timezone.utc, frozenset({date(2026, 10, 31)}))
+    assert record["legionella_days"] == 1 and recorded.legionella_energy_kwh == 2.3, "a recorded legionella day counts even without a peak"
+    assert hourly_from_sum([(t0, 5000.0), (t0 + timedelta(hours=1), 0.0)]) == [(t0 + timedelta(hours=1), 0.0)], "a reset is 0"
+    assert hourly_from_sum([(t0, 0.0), (t0 + timedelta(hours=3), 900.0)]) == [], "across a gap: no hour"
+    assert without_metered([(t0, 2500.0), (t0 + timedelta(hours=1), 300.0)], [(t0, 2000.0), (t0 + timedelta(hours=1), 900.0)]) == [(t0, 500.0), (t0 + timedelta(hours=1), 0.0)]

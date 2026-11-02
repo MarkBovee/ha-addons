@@ -20,6 +20,7 @@ class BatteryConfig:
     hard_min_soc: float = 0.05       # absolute battery minimum (fraction); never discharged below
     reserve_soc: float = 0.30        # sell floor: export stops here; below it the battery only covers the house, down to hard_min_soc
     reserve_max_soc: float = 0.30    # upper bound of the usage-based sell floor (hems.reserve); equal to reserve_soc = a fixed floor
+    reserve_by_weekday: tuple[float, ...] = ()  # sell floor minimum per local weekday (Monday first, fractions); 0 or missing = reserve_soc
     reserve_load_factor: float = 1.3  # safety factor on the load forecast when sizing the usage-based floor (about its P90)
     max_soc: float = 1.00
     round_trip_eff: float = 0.82     # measured 3-12 Oct 2026 (docs/hems/intake-decisions.md); a setting
@@ -27,6 +28,7 @@ class BatteryConfig:
     hold_cost_kwh_h: float = 0.002   # EUR per kWh stored per hour: a waiting premium, so equal prices charge late instead of early (replay 4-11 Oct)
     step_kwh: float = 0.25           # SoC grid resolution
     allow_grid_charge: bool = True
+    max_sell_hours: float = 0.0      # sell in at most this many hours a local day, the best-paying quarters (0 = no limit); Mark, 1 Nov 2026: 1 hour
     future_peak_haircut: float = 0.0  # EUR per kWh taken off the typical recent peak when valuing energy kept past the horizon (hems.terminal); a setting
 
     def __post_init__(self) -> None:
@@ -45,6 +47,7 @@ class Slot:
     pv_kwh: float = 0.0              # PV production in the slot
     reserve_soc: float | None = None  # reserve floor for this slot (fraction); None = BatteryConfig.reserve_soc
     import_cap_kwh: float | None = None  # most grid energy the connection may deliver in the slot; charging never takes the import above it (None = no cap)
+    sell_allowed: bool = True        # False: no sale in this slot (a daily limit on sell hours keeps sales to the best quarters)
 
 
 @dataclass
@@ -243,7 +246,7 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
                 k2 = k + d
                 if k2 > hi:
                     continue
-                if d < own and k2 < min(lo, k):              # discharging past self-consumption is a sale: never below the sell floor
+                if d < own and (k2 < min(lo, k) or not s.sell_allowed):   # a sale: never below the sell floor, only in allowed quarters
                     continue
                 if _between(d, own):                         # a hold or curtailed PV: no SAJ setting does that, self-consumption always runs
                     continue

@@ -4,7 +4,7 @@ Gathering inputs (entities, recorder history, weather HTTP) is the HA layer's jo
 battery decision and a status that says WHY there is none. It never writes to a device: the decision is advice
 that the coordinator publishes as sensors and appends to the trace, next to the control that is still in charge.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Mapping, Sequence
 from zoneinfo import ZoneInfo
@@ -16,7 +16,8 @@ from hems.forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
 from hems.prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
 from hems.ev import EvConfig, EvPlan, EvState, ev_kwh_per_quarter, ev_record, plan_ev
 from hems.heater import HeatingRun, WaterHeaterConfig, plan_runs, run_kwh_per_quarter, without_daily_peak
-from hems.spa import SpaConfig, SpaPlan, plan_spa, spa_kwh_per_quarter
+from hems.learn import water_heater_runs, without_metered
+from hems.spa import SpaConfig, SpaPlan, external_spa_kwh, learned_daily_kwh, plan_spa, spa_kwh_per_quarter, without_flexible_load
 from hems.pvforecast import pv_kwh_per_quarter
 from hems.rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
 from hems.slots import SLOT_H, slot_starts
@@ -61,6 +62,7 @@ class EngineInputs:
     legionella_last: datetime | None = None           # the water heater's last legionella run; None = unknown (the run is planned as due)
     spa_water_c: float | None = None                  # the spa's water temperature; None = unknown (no spa plan)
     outdoor_c: Mapping[datetime, float] | None = None # outdoor temperature by quarter start, for the spa's heat loss
+    water_heater_w: Sequence[tuple[datetime, float]] = ()  # the water heater's own metered energy per hour (Wh = mean W); empty = not metered
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,13 @@ def _prices(inputs: EngineInputs, settings: EngineSettings, start: datetime) -> 
     return from_market, "market" if from_market else "none", check
 
 
+def _without_heater(inputs: EngineInputs, settings: EngineSettings) -> list[tuple[datetime, float]]:
+    """The load history with the water heater out: hour by hour from its own meter when there is one, else each day's peak hour."""
+    if inputs.water_heater_w:
+        return without_metered(inputs.load_history_w, inputs.water_heater_w)
+    return without_daily_peak(inputs.load_history_w, settings.water_heater.energy_kwh, settings.tz)
+
+
 def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: datetime, n_slots: int,
                    runs: Sequence[HeatingRun] = ()) -> tuple[dict[datetime, float], str]:
     """Base-load kWh per quarter from the local-hour median profile, or the flat default without history.
@@ -112,7 +121,8 @@ def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: dateti
     are added where it plans them."""
     heater = settings.water_heater.enabled and settings.water_heater.energy_kwh > 0
     if inputs.load_history_w:
-        history = without_daily_peak(inputs.load_history_w, settings.water_heater.energy_kwh, settings.tz) if heater else list(inputs.load_history_w)
+        history = _without_heater(inputs, settings) if heater else list(inputs.load_history_w)
+        history = without_flexible_load(history, settings.spa, settings.tz)     # an externally controlled spa moves with the prices: planned apart
         profile, source = hourly_profile(history, settings.load_days, settings.tz), "history+heater" if heater else "history"
     else:
         profile, source = [settings.default_load_w] * 24, "default"
@@ -158,6 +168,11 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
     prices, source, price_check = _prices(inputs, settings, start)
     if prices is None:
         return _failure(STATUS_NO_PRICES, inputs)
+    heater_learned = None
+    if inputs.water_heater_w and settings.water_heater.enabled:          # learn the run energies from the heater's own meter
+        recorded = frozenset({inputs.legionella_last.astimezone(settings.tz).date()}) if inputs.legionella_last else frozenset()
+        heater_cfg, heater_learned = water_heater_runs(inputs.water_heater_w, settings.water_heater, inputs.now.astimezone(settings.tz).date(), settings.tz, recorded)
+        settings = replace(settings, water_heater=heater_cfg)
     runs = tuple(plan_runs(prices, inputs.now, settings.water_heater, settings.tz, inputs.legionella_last))
     load, load_source = _load_forecast(inputs, settings, start, settings.max_slots, runs)
     pv = pv_kwh_per_quarter(inputs.ghi_w_m2 or {}, settings.pv_gain_w_per_wm2, settings.pv_max_ac_w)
@@ -167,7 +182,11 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
             if quarter in load:
                 load[quarter] += kwh
     spa_plan = plan_spa(prices, surplus_kwh_per_quarter(pv, load), inputs.outdoor_c, inputs.now, inputs.spa_water_c, settings.spa)
-    for quarter, kwh in spa_kwh_per_quarter(spa_plan).items():          # and around the spa, which comes after the car
+    heater_on = settings.water_heater.enabled and settings.water_heater.energy_kwh > 0     # the same history the forecast strips, heater out
+    spa_history = _without_heater(inputs, settings) if heater_on and inputs.load_history_w else inputs.load_history_w
+    spa_daily = learned_daily_kwh(spa_history, settings.spa, inputs.now.astimezone(settings.tz).date(), settings.tz)
+    spa_kwh = spa_kwh_per_quarter(spa_plan) or external_spa_kwh(prices, inputs.now, settings.spa, settings.tz, spa_daily)
+    for quarter, kwh in spa_kwh.items():                                # and around the spa, which comes after the car
         if quarter in load:
             load[quarter] += kwh
     soc_kwh = inputs.soc_pct.value / 100 * cfg.capacity_kwh
@@ -187,6 +206,10 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
         trace["plan_shift"] = shift
     if ev_plan is not None:
         trace["ev"] = ev_record(ev_plan)
+    if heater_learned is not None:
+        trace["water_heater_learned"] = heater_learned
+    if settings.spa.enabled and settings.spa.control == "external":
+        trace["spa_daily_kwh"] = spa_daily
     if spa_plan is not None:
         trace["spa"] = {"reason": spa_plan.reason, "feasible": spa_plan.feasible, "heat_quarters": sum(q.heat for q in spa_plan.quarters)}
     return EngineOutput(STATUS_OK, decision, prices, load, pv, trace, plan_detail(decision), runs, ev_plan, spa_plan)

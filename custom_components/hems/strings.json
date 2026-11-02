@@ -38,6 +38,7 @@
           "meter_export_l2_entity": "Grid meter: feed-in power L2",
           "meter_export_l3_entity": "Grid meter: feed-in power L3",
           "water_heater_entity": "Dashboard: water heater or tank temperature",
+          "water_heater_energy_entity": "Water heater: energy meter (optional; HEMS learns its runs from it)",
           "away_entity": "Water heater: away mode (switch or input_boolean)",
           "bath_entity": "Water heater: bath mode (input_boolean)",
           "legionella_last_entity": "Dashboard: time of the last legionella run (sensor)",
@@ -71,7 +72,15 @@
               "reserve_soc_pct": "Sell floor, minimum (%)",
               "reserve_max_soc_pct": "Sell floor, maximum (%)",
               "reserve_load_factor": "Sell floor: load forecast factor",
-              "round_trip_eff": "Round-trip efficiency (0-1)",
+              "max_sell_hours": "Sell at most (hours per day, 0 = no limit)",
+              "reserve_soc_monday_pct": "Sell floor minimum on Monday (%, 0 = the general minimum)",
+              "reserve_soc_tuesday_pct": "Sell floor minimum on Tuesday (%, 0 = the general minimum)",
+              "reserve_soc_wednesday_pct": "Sell floor minimum on Wednesday (%, 0 = the general minimum)",
+              "reserve_soc_thursday_pct": "Sell floor minimum on Thursday (%, 0 = the general minimum)",
+              "reserve_soc_friday_pct": "Sell floor minimum on Friday (%, 0 = the general minimum)",
+              "reserve_soc_saturday_pct": "Sell floor minimum on Saturday (%, 0 = the general minimum)",
+              "reserve_soc_sunday_pct": "Sell floor minimum on Sunday (%, 0 = the general minimum)",
+              "round_trip_eff": "Round-trip efficiency (0-1; the start value, HEMS learns it from the battery's energy in and out)",
               "min_profit_margin": "Minimum profit margin (EUR per discharged kWh, net of losses)",
               "hold_cost_kwh_h": "Waiting cost (EUR per stored kWh per hour; 0 = off, higher charges later before a sale)"
             }
@@ -129,6 +138,8 @@
             "name": "Module: spa",
             "data": {
               "spa_enabled": "Spa module",
+              "spa_control": "Spa: who controls the heater",
+              "spa_daily_kwh": "Spa (external control): energy per day (kWh; the start value, HEMS learns it from the measured load)",
               "spa_phase": "Spa: phase of the heater",
               "spa_heater_kw": "Spa: heater power (kW)",
               "spa_comfort_c": "Spa: comfort temperature (°C)",
@@ -411,6 +422,12 @@
         "l1": "L1",
         "l2": "L2",
         "l3": "L3"
+      }
+    },
+    "spa_control": {
+      "options": {
+        "external": "The spa itself (e.g. Spapilot): HEMS only forecasts it",
+        "climate": "HEMS, through the spa's climate entity"
       }
     }
   },
