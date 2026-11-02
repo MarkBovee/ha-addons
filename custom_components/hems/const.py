@@ -31,6 +31,7 @@ CONF_PV_EXTRA = "pv_extra_entities"            # more PV power sensors, added to
 CONF_WATER_HEATER = "water_heater_entity"
 CONF_AWAY = "away_entity"                      # switch/input_boolean/binary_sensor: the house is away (the water heater keeps 35 °C)
 CONF_SPA = "spa_climate_entity"                # climate: the spa (Balboa or any spa with a climate entity): water and target temperature
+CONF_WATER_HEATER_ENERGY = "water_heater_energy_entity"  # sensor (energy, daily or total), optional: the heater's own meter; HEMS learns its runs from it
 CONF_SPA_POWER = "spa_power_entity"            # sensor (W), optional: the spa's own meter; without it heating = the heater's power
 CONF_BATH = "bath_entity"                      # input_boolean: bath mode (58 °C, switched off by HEMS above the bath switch-off)
 CONF_LEGIONELLA_LAST = "legionella_last_entity"
@@ -48,9 +49,10 @@ DEFAULT_OPTIONS = {
     "hard_min_soc_pct": 5.0,
     "reserve_soc_pct": 30.0,                   # sell floor minimum: a sale stops here, below it the battery only covers the house
     "reserve_max_soc_pct": 60.0,               # sell floor maximum: the floor follows the expected use until a refill (hems.reserve); = minimum turns that off
-    "reserve_load_factor": 1.3,
-    "max_sell_hours": 0.0,                     # sell in at most this many hours a day, the best-paying quarters; 0 = no limit                # safety factor on the load forecast for that floor
-    "round_trip_eff": 0.82,
+    **{f"reserve_soc_{day}_pct": 0.0 for day in ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")},  # sell floor minimum per weekday; 0 = the general minimum
+    "reserve_load_factor": 1.3,                # safety factor on the load forecast for that floor
+    "max_sell_hours": 0.0,                     # sell in at most this many hours a day, the best-paying quarters; 0 = no limit
+    "round_trip_eff": 0.82,                    # the start value: HEMS learns it from the battery's charged and discharged kWh (hems.learn)
     "min_profit_margin": 0.10,
     "hold_cost_kwh_h": 0.002,                  # EUR per kWh per hour of waiting; 0 = off (charge as early as equal prices allow)
     "pv_gain_w_per_wm2": 0.0,                  # 0 = calibrate from recorded PV against the weather data
@@ -78,14 +80,14 @@ DEFAULT_OPTIONS = {
     # the spa module (docs/hems/spa-module-plan.md): keep the water in a band, heat cheaply, give way first on a full phase
     "spa_enabled": False,
     "spa_control": "external",                 # external: the spa's own controller heats (Spapilot), HEMS forecasts it; climate: HEMS plans and sets the target
-    "spa_daily_kwh": 20.0,                     # external: what the spa heats per day (about 20 kWh above the usual load, 30-31 Oct 2026)
+    "spa_daily_kwh": 20.0,                     # external: what the spa heats per day (about 20 kWh above the usual load, 30-31 Oct 2026); the start value until learned
     "spa_phase": "l2",
     "spa_heater_kw": 3.0,
     "spa_comfort_c": 38.0,
     "spa_above_c": 0.5,
     "spa_below_c": 1.0,
     "spa_heat_rate_c_h": 2.0,
-    "spa_cool_k_h": 0.02,              # a finished run keeps its temperature this long before stand-by (the add-on's min_cycle_gap)     # a tank at or above this counts as a run in HEMS's own record
+    "spa_cool_k_h": 0.02,                      # share of the water-outdoor difference lost per hour
     "water_heater_legionella_weekday": "saturday",
     "ev_enabled": False,                       # the EV module: plans the charge of the car (dry-run, nothing is written to the charger)
     "ev_capacity_kwh": 81.4,

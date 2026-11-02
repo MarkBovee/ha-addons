@@ -89,7 +89,7 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
     slots, missing = _build_slots(inputs, start)
     if not slots:
         return None
-    slots = with_usage_floor(slots, cfg)
+    slots = with_usage_floor(slots, cfg, start, LOCAL_TZ)
     slots = with_sell_limit(slots, start, cfg)
     default = min(s.import_price for s in slots) * cfg.round_trip_eff ** 0.5
     terminal = inputs.terminal_value

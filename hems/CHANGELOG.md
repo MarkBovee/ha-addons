@@ -5,6 +5,14 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
 ## [Unreleased]
 
 ### Added
+- Spa (external control) learns its energy per day from the measured load, recent days weighing most (an existing setup's
+  forecast moves from the configured kWh to the learned value; `spa_daily_kwh` is the start value).
+- The battery's round-trip efficiency is learned from its charged and discharged energy and the SoC change over the history
+  window (`round_trip_eff` is the start value and the fallback for too little or implausible data).
+- Optional role `water_heater_energy_entity` (the heater's own energy meter): the heater comes out of the load history hour by
+  hour, and the night, day and legionella run energies are learned from it (median normal day, legionella-day mean).
+- What HEMS learned, next to the configured values, in the `learned` attribute of the status sensor.
+- Sell floor minimum per weekday (`reserve_soc_<day>_pct`, 0 = the general minimum).
 - Spa module (off by default): keeps the water in a temperature band, heats in cheap quarters or on solar surplus, gives way first on
   a full phase; `sensor.hems_spa_target`, `select.hems_spa_mode`, roles `spa_climate_entity` and `spa_power_entity`. The writer
   (`climate.set_temperature`) is behind the phase lock.

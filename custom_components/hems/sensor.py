@@ -279,7 +279,7 @@ SENSORS: tuple[HemsSensorDescription, ...] = (
     HemsSensorDescription(key="status", translation_key="status", device_class=SensorDeviceClass.ENUM,
                           options=["ok", "no_soc", "stale_soc", "no_prices", "no_price_for_now"], value=lambda s: s.output.status,
                           attributes=lambda s: {"price_source": s.output.trace.get("price_source"), "weather_age_min": None if s.weather_age_min is None else round(s.weather_age_min),
-                                                "history_hours": s.history_hours}),
+                                                "history_hours": s.history_hours, "learned": s.output.trace.get("learned")}),
     HemsSensorDescription(key="import_price", translation_key="import_price", native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
                           state_class=SensorStateClass.MEASUREMENT, value=lambda s: _first_price(s, "import_eur_kwh"),
                           attributes=lambda s: _price_attrs(s, "import")),

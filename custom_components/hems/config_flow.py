@@ -10,7 +10,7 @@ from homeassistant.helpers import selector
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT,
                     CONF_EV_PLUGGED, CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS,
                     CONF_PRICE_CURVE, CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN,
-                    CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, CONF_AWAY, CONF_BATH, CONF_SPA, CONF_SPA_POWER)
+                    CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, CONF_AWAY, CONF_BATH, CONF_SPA, CONF_SPA_POWER, CONF_WATER_HEATER_ENERGY)
 
 _ROLES_REQUIRED = (CONF_SOC, CONF_BATTERY_POWER, CONF_PV, CONF_GRID)
 _ROLES_INITIAL = (CONF_INVERTER, CONF_EV, CONF_PRICE_CURVE)         # the optional roles the first setup form asks for
@@ -24,6 +24,7 @@ ROLE_SELECTORS: dict[str, Any] = {
     CONF_EV_PLUGGED: _BINARY, CONF_EV_CHARGING: _BINARY, CONF_EV_PROBLEM: _BINARY, CONF_EV_SOC: _SENSOR, CONF_EV_LIMIT: _NUMBER,
     **{role: _SENSOR for role in (*CONF_EV_CURRENTS, *CONF_METER_CURRENTS, *CONF_METER_EXPORTS)},
     CONF_WATER_HEATER: selector.EntitySelector(selector.EntitySelectorConfig(domain=["water_heater", "sensor"])),
+    CONF_WATER_HEATER_ENERGY: selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="energy")),
     CONF_AWAY: selector.EntitySelector(selector.EntitySelectorConfig(domain=["switch", "input_boolean", "binary_sensor"])),
     CONF_BATH: selector.EntitySelector(selector.EntitySelectorConfig(domain=["input_boolean", "switch"])),
     CONF_SPA: selector.EntitySelector(selector.EntitySelectorConfig(domain="climate")), CONF_SPA_POWER: _SENSOR,
@@ -77,7 +78,9 @@ def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelec
 # (prices, forecasts). Each part is a collapsible section in this order on screen; a module with an on/off switch has it as its first setting.
 # The battery is open, the rest is folded away.
 SECTIONS: dict[str, tuple[str, ...]] = {
-    "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "reserve_load_factor", "max_sell_hours", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
+    "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "reserve_load_factor", "max_sell_hours",
+                       "reserve_soc_monday_pct", "reserve_soc_tuesday_pct", "reserve_soc_wednesday_pct", "reserve_soc_thursday_pct", "reserve_soc_friday_pct",
+                       "reserve_soc_saturday_pct", "reserve_soc_sunday_pct", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
     "module_water_heater": ("water_heater_enabled", "water_heater_energy_kwh", "water_heater_hours", "water_heater_night_energy_kwh",
                      "water_heater_legionella_energy_kwh", "water_heater_legionella_hours", "water_heater_legionella_weekday",
                      "water_heater_legionella_temp_c", "water_heater_legionella_min_c",
@@ -94,6 +97,7 @@ SECTIONS: dict[str, tuple[str, ...]] = {
 }
 OPEN_SECTIONS = ("module_battery",)
 NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1), "reserve_max_soc_pct": (0, 100, 1), "reserve_load_factor": (1, 3, 0.05), "max_sell_hours": (0, 12, 0.25),
+           **{f"reserve_soc_{day}_pct": (0, 100, 1) for day in ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")},
            "round_trip_eff": (0.5, 1.0, 0.01), "min_profit_margin": (0, 1, 0.01), "hold_cost_kwh_h": (0, 0.05, 0.0005), "pv_gain_w_per_wm2": (0, 30, 0.1),
            "pv_max_ac_w": (0, 30000, 100), "import_vat_multiplier": (1, 2, 0.01), "import_markup": (-0.5, 0.5, 0.0001), "import_energy_tax": (0, 1, 0.00001),
            "export_vat_multiplier": (1, 2, 0.01), "export_bonus_pct": (0, 1, 0.01), "export_fixed_bonus": (-0.5, 0.5, 0.0001),

@@ -24,7 +24,7 @@ from .adapters import base_load_history, parse_price_curve, reading_from_state, 
 from .const import (CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_EV, CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_LIMIT, CONF_EV_PLUGGED,
                     CONF_EV_PROBLEM, CONF_EV_SOC, CONF_GRID, CONF_INVERTER, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_PRICE_CURVE,
                     CONF_PV, CONF_PV_EXTRA, CONF_SOC, DEFAULT_OPTIONS, DOMAIN, EVENTS_FILE, EXECUTION_NOTICE_W, HISTORY_DAYS, HISTORY_REFRESH,
-                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, CONF_AWAY, CONF_BATH, CONF_SPA, CONF_SPA_POWER, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
+                    PLANS_FILE, RETRY_DELAY, CONF_COMPARE_ACTION, CONF_LEGIONELLA_LAST, CONF_WATER_HEATER, CONF_AWAY, CONF_BATH, CONF_SPA, CONF_SPA_POWER, CONF_WATER_HEATER_ENERGY, STORE_VERSION, RETRY_STATUSES, TRACE_DIR, TRACE_FILE, WEATHER_MAX_AGE, WEATHER_REFRESH)
 from .engine.battery import BatteryConfig
 from .engine.heater import legionella_due_date, legionella_overdue, record_legionella
 from .engine.heater_control import HeaterCommand, HeaterInputs, HeaterRules, HeaterTemps, decide as decide_heater
@@ -38,6 +38,7 @@ from .engine.balancer import phase_room_a
 from .engine.executor import AS_PLANNED, Execution, execute
 from .engine.ev import EvConfig, EvSetpoint, EvState, STATUS_FORCED, setpoint as ev_setpoint
 from .engine.heater import WaterHeaterConfig
+from .engine.learn import Learned, hourly_from_sum, round_trip_efficiency
 from .engine.pvforecast import fit_gain_from_history
 from .engine.prices import PriceModel
 from .engine.rolling import Decision
@@ -95,6 +96,15 @@ def water_heater_from_options(o: dict[str, Any]) -> WaterHeaterConfig:
 PHASE_INDEX = {"l1": 0, "l2": 1, "l3": 2}
 
 
+def reserve_by_weekday(o: dict[str, Any]) -> tuple[float, ...]:
+    """The sell floor minimum per weekday (Monday first, fractions) from the options; 0 keeps the general minimum, a set value
+    stays between the hard minimum and 100 %."""
+    hard_min = o["hard_min_soc_pct"]
+    days = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    values = [float(o.get(f"reserve_soc_{day}_pct") or 0) for day in days]
+    return tuple(min(100.0, max(hard_min, v)) / 100 if v > 0 else 0.0 for v in values)
+
+
 def spa_from_options(o: dict[str, Any]) -> SpaConfig:
     """The spa module's settings from the (default-filled) options."""
     return SpaConfig(enabled=bool(o["spa_enabled"]), control=str(o["spa_control"]), daily_kwh=float(o["spa_daily_kwh"]), heater_kw=float(o["spa_heater_kw"]), phase=PHASE_INDEX.get(str(o["spa_phase"]), 1),
@@ -148,7 +158,7 @@ def settings_from_entry(entry: ConfigEntry, latitude: float, longitude: float) -
     o = {**DEFAULT_OPTIONS, **entry.options}
     battery = BatteryConfig(capacity_kwh=o["capacity_kwh"], max_power_kw=o["max_power_kw"], hard_min_soc=o["hard_min_soc_pct"] / 100,
                             reserve_soc=o["reserve_soc_pct"] / 100, reserve_max_soc=max(o["reserve_soc_pct"], o["reserve_max_soc_pct"]) / 100,
-                            reserve_load_factor=o["reserve_load_factor"], max_sell_hours=float(o["max_sell_hours"]), round_trip_eff=o["round_trip_eff"], min_profit_margin=o["min_profit_margin"],
+                            reserve_by_weekday=reserve_by_weekday(o), reserve_load_factor=o["reserve_load_factor"], max_sell_hours=float(o["max_sell_hours"]), round_trip_eff=o["round_trip_eff"], min_profit_margin=o["min_profit_margin"],
                             hold_cost_kwh_h=o["hold_cost_kwh_h"])
     prices = PriceModel(import_vat_multiplier=o["import_vat_multiplier"], import_markup=o["import_markup"],
                         import_energy_tax=o["import_energy_tax"], export_vat_multiplier=o["export_vat_multiplier"],
@@ -180,6 +190,10 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._previous: Decision | None = None
         self._history: list[tuple[datetime, float]] = []
         self._pv_history: list[tuple[datetime, float]] = []
+        self._battery_history: list[tuple[datetime, float]] = []     # hourly mean battery power, + charging (W)
+        self._soc_history: list[tuple[datetime, float]] = []         # hourly mean state of charge (%)
+        self._heater_history: list[tuple[datetime, float]] = []      # the water heater's metered Wh per hour
+        self.learned_rte: Learned | None = None
         self._history_at: datetime | None = None
         self._weather: Weather | None = None
         self._last_windows: tuple | None = None
@@ -291,11 +305,20 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             statistics_during_period, self.hass, start, None, entity_ids, "hour", None, {"mean"})
         return {eid: statistic_rows(raw.get(eid)) for eid in entity_ids}
 
+    async def _metered_hours(self, entity_id: str | None, start: datetime) -> list[tuple[datetime, float]]:
+        """Wh per hour of an energy sensor from its long-term statistics' running sum (a daily or a total meter both work)."""
+        if not entity_id:
+            return []
+        raw = await get_instance(self.hass).async_add_executor_job(
+            statistics_during_period, self.hass, start, None, {entity_id}, "hour", {"energy": "Wh"}, {"sum"})   # kWh or MWh meters too
+        rows = [(datetime.fromtimestamp(r["start"], tz=timezone.utc), float(r["sum"])) for r in raw.get(entity_id) or [] if r.get("sum") is not None]
+        return hourly_from_sum(rows)
+
     async def _refresh_history(self, now: datetime) -> None:
         """Rebuild the hourly base-load and PV history when the cache is older than HISTORY_REFRESH."""
         if self._history_at and now - self._history_at < HISTORY_REFRESH:
             return
-        roles = {k: self._entity(k) for k in (CONF_GRID, CONF_PV, CONF_BATTERY_POWER, CONF_EV, CONF_INVERTER)}
+        roles = {k: self._entity(k) for k in (CONF_GRID, CONF_PV, CONF_BATTERY_POWER, CONF_EV, CONF_INVERTER, CONF_SOC)}
         extras = list(self.config_entry.data.get(CONF_PV_EXTRA) or [])
         wanted = {e for e in roles.values() if e} | set(extras)
         start = (now - timedelta(days=HISTORY_DAYS)).replace(minute=0, second=0, microsecond=0)
@@ -306,6 +329,12 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         pv = sum_series([get(CONF_PV), *(series.get(e, []) for e in extras)])          # several arrays or inverters count as one PV
         self._history = base_load_history(get(CONF_GRID), pv, battery, get(CONF_EV), get(CONF_INVERTER))
         self._pv_history = pv
+        self._battery_history, self._soc_history = battery, get(CONF_SOC)
+        try:
+            self._heater_history = await self._metered_hours(self._entity(CONF_WATER_HEATER_ENERGY), start)
+        except Exception as err:                # noqa: BLE001 - an optional meter must not stop the history refresh
+            self._heater_history = []
+            await self._log_event("history_error", source="water_heater_energy", error=str(err))
         self._history_at = now
         await self._log_event("history", base_load_hours=len(self._history), pv_hours=len(self._pv_history),
                               entities_with_statistics=sorted(e for e in wanted if series.get(e)),
@@ -373,6 +402,32 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
                 # half an hour. Try again at the next retry (a minute away) instead of after WEATHER_REFRESH, once per outage.
                 self._weather_retry_used = self._weather_retry_wanted = True
                 self._weather_tried_at = None
+
+    async def _with_learned_battery(self, settings: EngineSettings) -> EngineSettings:
+        """The settings with the round-trip efficiency HEMS measured (hems.learn); the configured value is the start and the fallback.
+        A change is logged once."""
+        b = settings.battery
+        learned = round_trip_efficiency(self._battery_history, self._soc_history, b.capacity_kwh, b.round_trip_eff)
+        if self.learned_rte is None or learned.value != self.learned_rte.value or learned.source != self.learned_rte.source:
+            await self._log_event("learned", setting="round_trip_eff", value=learned.value, configured=learned.configured,
+                                  source=learned.source, charged_kwh=learned.samples)
+        self.learned_rte = learned
+        return replace(settings, battery=replace(b, round_trip_eff=learned.value))
+
+    def _learned_record(self, output: EngineOutput) -> dict[str, Any]:
+        """What HEMS learned and uses now, next to the configured values, for the status sensor."""
+        o = {**DEFAULT_OPTIONS, **self.config_entry.options}
+        record: dict[str, Any] = {}
+        if self.learned_rte:
+            r = self.learned_rte
+            record["round_trip_eff"] = {"value": r.value, "configured": r.configured, "source": r.source, "charged_kwh": r.samples}
+        if "water_heater_learned" in output.trace:
+            record["water_heater"] = output.trace["water_heater_learned"]
+        if "spa_daily_kwh" in output.trace:
+            record["spa_daily_kwh"] = {"value": output.trace["spa_daily_kwh"], "configured": float(o["spa_daily_kwh"])}
+        if self._last_gain is not None:
+            record["pv_gain_w_per_wm2"] = {"value": round(self._last_gain, 3), "configured": float(o["pv_gain_w_per_wm2"]) or None}
+        return record
 
     def _calibrated_gain(self, settings: EngineSettings) -> float:
         """PV gain: the setting when given, otherwise fitted from recorded PV against the weather series."""
@@ -471,8 +526,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         await self._refresh_weather(now, settings)
         gain = self._calibrated_gain(settings)
         settings = replace(settings, pv_gain_w_per_wm2=gain, ev=self.ev_ceiling_a(settings))
+        await self._log_settings(settings)          # the configured settings; learned values go to the "learned" event and trace
+        settings = await self._with_learned_battery(settings)
         self._settings = settings
-        await self._log_settings(settings)
         if self._last_gain is None or abs(gain - self._last_gain) > 0.02 * self._last_gain:
             await self._log_event("pv_gain", gain=round(gain, 3), previous=self._last_gain and round(self._last_gain, 3),
                                   source="setting" if {**DEFAULT_OPTIONS, **self.config_entry.options}["pv_gain_w_per_wm2"] else "fit")
@@ -483,9 +539,11 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             import_curve=parse_price_curve(price_state.attributes.get("price_curve") if price_state else None),
             load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market,
             ev=self.ev_state(settings) if settings.ev.enabled else None, legionella_last=self.legionella_last(),
-            spa_water_c=self.spa_water() if settings.spa.enabled else None, outdoor_c=self._weather.temperature_c if self._weather else None)
+            spa_water_c=self.spa_water() if settings.spa.enabled else None, outdoor_c=self._weather.temperature_c if self._weather else None,
+            water_heater_w=self._heater_history)
         previous = self._previous
         output = await self.hass.async_add_executor_job(step, inputs, settings, previous)
+        output.trace["learned"] = self._learned_record(output)
         if output.decision:
             self._previous = output.decision
         self._remember_quarters(output)

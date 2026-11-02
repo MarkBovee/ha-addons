@@ -21,6 +21,7 @@ class BatteryConfig:
     hard_min_soc: float = 0.05       # absolute battery minimum (fraction); never discharged below
     reserve_soc: float = 0.30        # sell floor: export stops here; below it the battery only covers the house, down to hard_min_soc
     reserve_max_soc: float = 0.30    # upper bound of the usage-based sell floor (hems.reserve); equal to reserve_soc = a fixed floor
+    reserve_by_weekday: tuple[float, ...] = ()  # sell floor minimum per local weekday (Monday first, fractions); 0 or missing = reserve_soc
     reserve_load_factor: float = 1.3  # safety factor on the load forecast when sizing the usage-based floor (about its P90)
     max_soc: float = 1.00
     round_trip_eff: float = 0.82     # measured 3-12 Oct 2026 (docs/hems/intake-decisions.md); a setting

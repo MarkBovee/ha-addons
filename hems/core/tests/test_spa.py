@@ -88,7 +88,35 @@ def test_the_external_spa_is_taken_out_of_the_load_history():
     tz = ZoneInfo("Europe/Amsterdam")
     day = datetime(2026, 10, 30, 0, 0, tzinfo=tz)
     spa_day = [(day + timedelta(hours=h), 3400.0 if 11 <= h < 15 else 400.0) for h in range(24)]
-    cleaned = without_flexible_load(spa_day, SpaConfig(enabled=True, daily_kwh=20.0), tz)
+    cleaned = without_flexible_load(spa_day, SpaConfig(enabled=True, daily_kwh=20.0, learn=False), tz)
     assert all(abs(w - 400.0) < 1e-6 for _, w in cleaned)
     quiet = [(day - timedelta(days=2) + timedelta(hours=h), 450.0 if h == 18 else 400.0) for h in range(24)]
-    assert sum(w for _, w in without_flexible_load(quiet, SpaConfig(enabled=True), tz)) >= sum(w for _, w in quiet) - 50
+    assert sum(w for _, w in without_flexible_load(quiet, SpaConfig(enabled=True, learn=False), tz)) >= sum(w for _, w in quiet) - 50
+
+
+def _days(per_day_spa_kwh: list[float], first=datetime(2026, 10, 20, tzinfo=timezone.utc)):
+    """Hourly history (W): a flat 400 W house with one 600 W cooking peak per day, plus the spa's kWh at 3 kW from 01:00."""
+    out = []
+    for d, spa in enumerate(per_day_spa_kwh):
+        for h in range(24):
+            w = 400.0 + (600.0 if h == 18 else 0.0) + min(3000.0, max(0.0, spa * 1000 - (h - 1) * 3000)) * (h >= 1)
+            out.append((first + timedelta(days=d, hours=h), w))
+    return out
+
+
+def test_the_spa_energy_per_day_is_learned_with_the_recent_days_weighing_most():
+    from hems.spa import learned_daily_kwh, measured_spa_kwh, without_flexible_load
+    tz, cfg = timezone.utc, SpaConfig(enabled=True, daily_kwh=20.0)
+    history = _days([0, 0, 0, 9, 9, 21])                          # before the spa, two quiet days, yesterday a spa day
+    measured = measured_spa_kwh(history, cfg, tz)
+    assert [round(v) for v in measured.values()] == [0, 0, 0, 9, 9, 21], "the house's own peak is not counted as spa"
+    today = history[-1][0].date() + timedelta(days=1)
+    learned = learned_daily_kwh(history, cfg, today, tz)
+    assert (9 + 9 + 21) / 3 < learned < 21, "the days before the spa are left out, a spa day weighs in, the recent day most"
+    assert learned_daily_kwh(history[:4 * 24], cfg, today, tz) == 20.0, "too few spa days: the configured value"
+    quiet_week = _days([0, 9, 9, 9, 0, 0, 0])
+    assert learned_daily_kwh(quiet_week, cfg, quiet_week[-1][0].date() + timedelta(days=1), tz) < 4.5, "quiet days after the spa count"
+    assert learned_daily_kwh(history, SpaConfig(enabled=True, daily_kwh=20.0, learn=False), today, tz) == 20.0
+    cleaned = without_flexible_load(history, cfg, tz)
+    per_day = [sum(w for _, w in cleaned[d * 24:(d + 1) * 24]) / 1000 for d in range(6)]
+    assert max(per_day) - min(per_day) < 0.5, "each day loses what its spa drew, the house profile stays"
