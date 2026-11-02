@@ -17,6 +17,7 @@ Options: --host H --user U --key PATH (override .env), --batch (never prompt; ne
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import shlex
@@ -171,10 +172,15 @@ def ssh_command(target: Target, control_path: str | None, *remote: str, master: 
     return ["ssh", *options, f"{target.user}@{target.host}", *remote]
 
 
+def parallel_options() -> list[str]:
+    """`-n auto` when pytest-xdist is installed (the core tests run in a third of the time), else nothing: it stays optional."""
+    return ["-n", "auto"] if importlib.util.find_spec("xdist") else []
+
+
 def run_checks(root: Path = ROOT) -> None:
     """Abort unless the core tests pass and the vendored engine matches hems/core."""
     sync = subprocess.run([sys.executable, str(root / "scripts" / "sync_hems_core.py"), "--check"], cwd=root)
-    tests = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"], cwd=root / "hems" / "core")
+    tests = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *parallel_options()], cwd=root / "hems" / "core")
     if sync.returncode or tests.returncode:
         raise SystemExit("Checks failed; nothing was deployed. Fix them (or use --skip-checks if you know why).")
 
