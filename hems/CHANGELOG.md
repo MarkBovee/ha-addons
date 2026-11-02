@@ -5,6 +5,11 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
 ## [Unreleased]
 
 ### Changed
+- Panel 0.6.0: the Today, Plan and Devices tabs are one **Overview** (what HEMS does now and the result, a live energy flow
+  from solar, grid and battery through the house to the active modules, phase load, weather now and tomorrow, expected solar,
+  the next 24 hours per quarter, what is coming up and the devices with their mode) and a **Decisions** tab (every planned
+  quarter with its action and the sell, keep and buy values behind it, the timeline, changes and windows). Old links land on the
+  new tabs. The weather comes from the first `weather.*` entity in Home Assistant.
 - While tomorrow's prices are unknown, the battery is filled to 100 % in the day's cheapest quarters before today's most expensive
   quarter; after that peak the plan decides freely (no forced refill at night). Once tomorrow's prices are known, no target applies.
 - Energy kept past the horizon is valued from the last 7 days of Nord Pool prices (typical peak, never below the typical refill
