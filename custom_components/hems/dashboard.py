@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .engine.rolling import Decision
+from .engine.forecast import LOCAL_TZ
+from .engine.weather import weather_summary
 from .engine.windows import record
 
 QUARTER = timedelta(minutes=15)
@@ -112,4 +114,6 @@ def build_payload(snap: Any, *, build: str, cycle_at: datetime | None, previous:
             "setpoint": None if point is None else {"current_a": point.current_a, "planned_a": point.planned_a, "code": point.code, "reason": point.reason},
             "allowed_a": snap.ev_allowed_a},
         "diff": plan_diff(d, previous),
+        # the sky now and tomorrow from HEMS's own Open-Meteo fetch (the panel no longer reads a weather entity)
+        "weather": weather_summary(getattr(snap, "weather", None), cycle_at or datetime.now(timezone.utc), LOCAL_TZ),
     }

@@ -9,10 +9,10 @@
  * live power comes straight from the entities of the roles in the settings. Nothing here writes to a device: the only
  * action is the EV override switch, behind an inline confirmation.
  *
- * URL options: ?kiosk (one screen for the wall tablet), ?theme=dark|light (force a theme), #today|plan|devices|insights|settings (older hashes still land on the right view).
+ * URL options: ?kiosk (one screen for the wall tablet), ?theme=dark|light (force a theme), #overview|decisions|insights|settings (older hashes still land on the right view).
  */
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const Q_MS = 15 * 60 * 1000;
 
 /* ------------------------------------------------------------------ store */
@@ -604,21 +604,22 @@ function nextWindow(p, action) {
 function headline(p) {
   const d = p && p.decision;
   if (!d) return { lead: STATUS_LABEL[(p && p.meta.status)] || "HEMS plans nothing now", rest: "", why: "As soon as the missing data is back, HEMS plans again within a minute." };
-  const e = p.execution, act = d.action || "idle";
-  const w = e && e.code !== "no_plan" ? e.power_w : d.power_w;
-  const lead = act === "charge" ? `Charging the battery at ${kw(Math.abs(w))} kW.` : act === "discharge" ? `Selling from the battery at ${kw(Math.abs(w))} kW.` : "Holding the battery.";
+  const act = d.action || "idle";
+  // idle is self-consumption: the battery follows the house and keeps the grid at zero (battery-manager calls it adaptive).
+  // No power in the headline: it is set once per cycle, the live numbers are in the energy flow and the live charts.
+  const lead = act === "charge" ? "Charging from the grid." : act === "discharge" ? "Selling to the grid." : "Adaptive: keeping the grid at zero.";
   const ch = nextWindow(p, "charge"), dis = nextWindow(p, "discharge");
   const parts = [];
-  // the active time goes with the window: a sale between 16:30 and 19:30 with pauses is not three hours of selling
-  if (ch && act !== "charge") parts.push({ word: "Charging", text: span(ch.from, ch.to), time: ch.active_min, cls: "c-charge" });
-  if (dis && act !== "discharge") parts.push({ word: parts.length ? "selling" : "Selling", text: span(dis.from, dis.to), time: dis.active_min, cls: "c-discharge" });
-  const paused = (w) => w && w.active_min && w.active_min < (new Date(w.to) - new Date(w.from)) / 60000 - 1;
-  parts.forEach((x, i) => { x.paused = paused(i === 0 && ch && act !== "charge" ? ch : dis); });
-  const rest = parts.map((x) => `${x.word} ${x.paused ? duration(x.time) + " between " : ""}<span class="${x.cls}">${esc(x.text)}</span>`).join(", ");
+  if (ch && act !== "charge") parts.push({ word: "charge", w: ch, cls: "c-charge" });
+  if (dis && act !== "discharge") parts.push({ word: "sell", w: dis, cls: "c-discharge" });
+  parts.sort((a, b) => new Date(a.w.from) - new Date(b.w.from));
+  // a window with pauses gets its active time: a sale between 16:30 and 19:30 with gaps is not three hours of selling
+  const paused = (x) => x.active_min && x.active_min < (new Date(x.to) - new Date(x.from)) / 60000 - 1;
+  const rest = parts.length ? "Next: " + parts.map((x) => `${x.word} <span class="${x.cls}">${esc(span(x.w.from, x.w.to))}</span>${paused(x.w) ? ` (${duration(x.w.active_min)})` : ""}`).join(", then ") : "";
   const c = d.compare || {};
-  const why = c.code === "hold" ? `Selling now pays ${eur(c.sell, 3)} €/kWh; keeping it for later is worth ${eur(c.keep, 3)}.`
-    : c.code === "sell" ? `Selling now pays ${eur(c.sell, 3)} €/kWh, more than keeping it (${eur(c.keep, 3)}).`
-    : c.code === "buy" ? `Buying now costs ${eur(c.buy, 3)} €/kWh, less than it is worth later (${eur(c.keep, 3)}).`
+  const why = c.code === "hold" || c.code === "floor" ? `Sell ${eur(c.sell, 3)} · keep ${eur(c.keep, 3)} €/kWh — ${c.code === "floor" ? "at the sell floor" : "worth more later"}.`
+    : c.code === "sell" ? `Sell ${eur(c.sell, 3)} · keep ${eur(c.keep, 3)} €/kWh — selling pays more.`
+    : c.code === "buy" ? `Buy ${eur(c.buy, 3)} · keep ${eur(c.keep, 3)} €/kWh — cheaper now than later.`
     : esc(d.reason || "");
   return { lead, rest: rest ? rest + "." : "", why };
 }
@@ -754,13 +755,183 @@ function drawCombined(host, svg, payload, hours, big) {
   svg.setAttribute("aria-label", `Next ${hours} hours: price per quarter, battery level and the planned charge and sell windows.`);
 }
 
+/* ------------------------------------------------------------------ overview: icons, energy flow, weather, solar */
+
+/** Inline stroke icons (no icon font in a shadow root); they take the text colour unless a stroke is given. */
+const icon = (paths, size = 18, stroke = "currentColor") => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ICON_PATH = {
+  sun: '<circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"></path>',
+  cloud: '<path d="M7 18h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 18z"></path>',
+  cloudSun: '<circle cx="8" cy="8" r="3"></circle><path d="M8 2.5v1M2.5 8h1M4.1 4.1l.7.7M11.9 4.1l-.7.7M4.1 11.9l.7-.7"></path><path d="M10 20h7a3.5 3.5 0 0 0 0-7 4.5 4.5 0 0 0-8.6 1.2A2.9 2.9 0 0 0 10 20z"></path>',
+  cloudMoon: '<path d="M8.5 3A4.5 4.5 0 1 0 13.6 9.2 3.6 3.6 0 0 1 8.5 3z"></path><path d="M10 20h7a3.5 3.5 0 0 0 0-7 4.5 4.5 0 0 0-8.6 1.2A2.9 2.9 0 0 0 10 20z"></path>',
+  drizzle: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M8 18.5v.5M12 20v.5M16 18.5v.5"></path>',
+  rain: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M8 18l-1 3M12 18l-1 3M16 18l-1 3"></path>',
+  snow: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M8 17.5v3.5M6.5 18.4l3 1.7M6.5 20.1l3-1.7M16 17.5v3.5M14.5 18.4l3 1.7M14.5 20.1l3-1.7"></path>',
+  storm: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M12 15l-2 4h3l-2 4"></path>',
+  fog: '<path d="M4 9h16M4 13h16M6 17h12"></path>',
+  grid: '<path d="M8 21l4-18 4 18M6 8h12M5 13h14M9.5 13l5 8M14.5 13l-5 8"></path>',
+  house: '<path d="M3 11l9-7 9 7"></path><path d="M5 10v10h14V10"></path><path d="M10 20v-5h4v5"></path>',
+  battery: '<rect x="3" y="7" width="16" height="10" rx="2"></rect><path d="M21 11v2"></path><path d="M7 10v4M10 10v4"></path>',
+  car: '<path d="M5 16l1.5-5a2 2 0 0 1 1.9-1.4h7.2a2 2 0 0 1 1.9 1.4L19 16"></path><rect x="3" y="16" width="18" height="3" rx="1"></rect><circle cx="7.5" cy="19.5" r="1.5"></circle><circle cx="16.5" cy="19.5" r="1.5"></circle>',
+  tank: '<rect x="7" y="3" width="10" height="18" rx="4"></rect><path d="M12 8c-1.5 2-2 3-2 4a2 2 0 0 0 4 0c0-1-.5-2-2-4z"></path>',
+  spa: '<path d="M3 15h18v3a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"></path><path d="M8 11c0-1.5 1-1.5 1-3s-1-1.5-1-3M12 11c0-1.5 1-1.5 1-3s-1-1.5-1-3M16 11c0-1.5 1-1.5 1-3s-1-1.5-1-3"></path>',
+};
+const ICON = Object.fromEntries(Object.entries(ICON_PATH).map(([k, v]) => [k, icon(v)]));
+/** A WMO weather code (Open-Meteo) as a label and an icon; at night a clear or partly cloudy sky gets no sun. */
+function sky(code, isDay = true) {
+  const c = Number(code);
+  const [label, ic] = c === 0 ? ["Clear", isDay ? "sun" : "moon"] : c <= 2 ? [c === 1 ? "Mostly clear" : "Partly cloudy", isDay ? "cloudSun" : "cloudMoon"]
+    : c === 3 ? ["Overcast", "cloud"] : c <= 48 ? ["Fog", "fog"] : c <= 57 ? ["Drizzle", "drizzle"] : c <= 67 ? ["Rain", "rain"]
+    : c <= 77 ? ["Snow", "snow"] : c <= 82 ? ["Showers", "rain"] : c <= 86 ? ["Snow showers", "snow"] : ["Thunderstorms", "storm"];
+  return { label, icon: ic };
+}
+
+/** A power entity in watts, whatever unit it reports (W or kW); null when unknown. */
+function watts(hass, entityId) {
+  const v = stateNum(hass, entityId);
+  if (v === null) return null;
+  const unit = hass.states[entityId].attributes.unit_of_measurement;
+  return unit === "kW" ? v * 1000 : v;
+}
+
+/**
+ * The live energy flow: sources (solar, grid, battery) into the house and the house out to its consumers (the active modules
+ * and the rest of the house). A link that carries power is drawn wide with moving dashes in the direction of the flow.
+ * The house load follows the planner's balance (below), the rest of the house is that minus the metered modules.
+ */
+function flowHtml(hass, p, s) {
+  const r = (s && s.roles) || {};
+  const o = (s && s.options) || {};
+  const pvIds = [r.pv_entity, ...(r.pv_extra_entities || [])].filter(Boolean);
+  const pv = pvIds.length ? pvIds.map((id) => watts(hass, id)).reduce((a, b) => (a === null || b === null) ? null : a + b, 0) : null;
+  const grid = watts(hass, r.grid_entity);
+  const soc = stateNum(hass, r.soc_entity);
+  const bp = watts(hass, r.battery_power_entity);
+  const batt = bp === null ? null : bp * (r.battery_power_positive_is_discharging === false ? 1 : -1);    // + charging
+  // the same balance as the planner (adapters.house_load): grid + inverter output when there is an inverter sensor, else grid + solar − battery
+  const inv = r.inverter_output_entity ? watts(hass, r.inverter_output_entity) : null;
+  const house = grid === null ? null : inv !== null ? Math.max(0, grid + inv) : pv === null || batt === null ? null : Math.max(0, pv + grid - batt);
+  const ev = o.ev_enabled ? watts(hass, r.ev_power_entity) : null;
+  const spa = o.spa_enabled ? watts(hass, r.spa_power_entity) : null;
+  const rest = house === null ? null : Math.max(0, house - (ev || 0) - (spa || 0));
+  const on = (w) => w !== null && Math.abs(w) >= 50;
+  const kwTxt = (w) => w === null ? "—" : `${kw(Math.abs(w))} kW`;
+  const wh = o.water_heater_enabled && r.water_heater_entity ? hass.states[r.water_heater_entity] : null;
+  const whTemp = wh ? wh.attributes.current_temperature : null;
+  const spaClimate = o.spa_enabled && r.spa_climate_entity ? hass.states[r.spa_climate_entity] : null;
+  const evPlugged = r.ev_plugged_entity && hass.states[r.ev_plugged_entity] ? hass.states[r.ev_plugged_entity].state === "on" : null;
+  const sources = [
+    { key: "pv", label: "Solar", icon: icon(ICON_PATH.sun, 22, "var(--pv)"), value: kwTxt(pv), sub: "", w: pv, colour: "--pv", out: true },
+    { key: "grid", label: "Grid", icon: icon(ICON_PATH.grid, 22), value: kwTxt(grid), sub: grid === null || !on(grid) ? "" : grid > 0 ? "import" : "export", w: grid, colour: "--fg-2", out: grid === null || grid >= 0 },
+    { key: "batt", label: "Battery", icon: icon(ICON_PATH.battery, 22, "var(--ok)"), value: soc === null ? "—" : `${num(soc, 0)} %`, sub: batt === null || !on(batt) ? "idle" : `${batt > 0 ? "charging" : "discharging"} ${kwTxt(batt)}`, w: batt, colour: "--ok", out: batt === null || batt <= 0 },
+  ];
+  const sinks = [{ label: "Home", icon: ICON.house, value: kwTxt(rest), sub: "", w: rest }];
+  if (o.ev_enabled) sinks.push({ label: "EV", icon: ICON.car, value: kwTxt(ev), sub: evPlugged === false ? "not plugged in" : "", w: ev });
+  if (o.water_heater_enabled) sinks.push({ label: "Water heater", icon: ICON.tank, value: whTemp === null || whTemp === undefined ? "—" : `${num(whTemp, 0)} °C`, sub: "", w: null });
+  if (o.spa_enabled) sinks.push({ label: "Spa", icon: ICON.spa, value: spa === null ? (spaClimate && spaClimate.attributes.current_temperature !== undefined ? `${num(spaClimate.attributes.current_temperature, 1)} °C` : "—") : kwTxt(spa), sub: "", w: spa });
+  // geometry in a 1000 x 300 box: sources at x 0-200, the house at 400-600, consumers at 780-1000
+  const sy = (i) => 55 + i * 95, ky = (i) => sinks.length === 1 ? 150 : 40 + i * (220 / (sinks.length - 1));
+  const link = (x1, y1, x2, y2, live, colour, reverse) => {
+    const mx = (x1 + x2) / 2, d = `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`;
+    return live ? `<path d="${d}" stroke="var(${colour})" stroke-width="9" fill="none" stroke-linecap="round" opacity=".28" vector-effect="non-scaling-stroke"></path><path class="flow${reverse ? " rev" : ""}" d="${d}" stroke="var(${colour})" stroke-width="2" fill="none" stroke-dasharray="4 8" stroke-linecap="round" vector-effect="non-scaling-stroke"></path>`
+      : `<path d="${d}" stroke="var(--line)" stroke-width="1.5" fill="none" vector-effect="non-scaling-stroke"></path>`;
+  };
+  const svg = `<svg class="flow-lines" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">
+    ${sources.map((x, i) => link(200, sy(i), 400, 150, on(x.w), x.colour, !x.out)).join("")}
+    ${sinks.map((x, i) => link(600, 150, 780, ky(i), on(x.w), "--ok", false)).join("")}</svg>`;
+  const node = (x, left, top, width) => `<div class="fnode ${on(x.w) ? "on" : ""}" style="left:${left}%;top:${top / 3}%;width:${width}%">${x.icon}<div><span>${esc(x.label)}</span><b class="mono">${esc(x.value)}</b>${x.sub ? `<i>${esc(x.sub)}</i>` : ""}</div></div>`;
+  const label = `Solar ${kwTxt(pv)}, grid ${kwTxt(grid)}, battery ${sources[2].sub}, house ${kwTxt(house)}`;
+  return `<div class="scroll-x"><div class="flowbox" role="img" aria-label="${esc(label)}">${svg}
+    ${sources.map((x, i) => node(x, 0, sy(i), 20)).join("")}
+    <div class="fhouse">${icon(ICON_PATH.house, 28)}<b class="mono">${esc(kwTxt(house))}</b><span>use</span></div>
+    ${sinks.map((x, i) => node(x, 78, ky(i), 22)).join("")}</div></div>`;
+}
+
+/** Weather now and tomorrow from HEMS's own Open-Meteo fetch: sky, cloud cover, temperature and (tomorrow) rain. */
+function weatherHtml(p) {
+  const w = p && p.weather;
+  if (!w || (!w.now && !w.tomorrow)) return `<div class="card span-2"><h2>Weather</h2><p class="quiet small">No weather yet (Open-Meteo).</p></div>`;
+  const card = (title, x, big, line) => {
+    if (!x) return `<div class="card wx">${icon(ICON_PATH.cloud, 44)}<div><span class="quiet small">${title}</span><b class="mono big">—</b></div></div>`;
+    const k = sky(x.code, x.is_day !== false);
+    return `<div class="card wx">${icon(ICON_PATH[k.icon], 44, k.icon === "sun" ? "var(--pv)" : "currentColor")}<div><span class="quiet small">${title}</span><b class="mono big">${big}</b><span class="small">${esc(k.label)} · ${line}</span></div></div>`;
+  };
+  const n = w.now, t = w.tomorrow;
+  return card("Now", n, n && n.temp_c !== null && n.temp_c !== undefined ? `${num(n.temp_c, 0)} °C` : "—", n ? `${num(n.cloud_pct, 0)} % cloud` : "")
+    + card("Tomorrow", t, t && t.temp_min_c !== null ? `${num(t.temp_min_c, 0)}–${num(t.temp_max_c, 0)} °C` : "—",
+      t ? `${num(t.cloud_pct, 0)} % cloud${t.precip_mm ? ` · ${num(t.precip_mm, 1)} mm` : ""}` : "");
+}
+
+/** Expected solar for tomorrow (or the rest of today before tomorrow's prices exist) as a total and bars per hour. */
+function sunHtml(p) {
+  const rows = (p && p.quarters) || [];
+  const tomorrow = localDayKey(Date.now() + 864e5);
+  let day = rows.filter((q) => localDayKey(q.t) === tomorrow);
+  const label = day.length ? "Solar tomorrow" : "Solar today";
+  if (!day.length) day = rows.filter((q) => localDayKey(q.t) === localDayKey(Date.now()));
+  const hours = new Map();
+  for (const q of day) { const h = localHour(q.t); hours.set(h, (hours.get(h) || 0) + (q.pv || 0)); }
+  const lit = [...hours].filter(([, v]) => v > 0.01);
+  const total = day.reduce((a, q) => a + (q.pv || 0), 0);
+  const max = Math.max(0.1, ...lit.map(([, v]) => v));
+  return `<div class="card"><div class="card-head"><h2>${label}</h2><b class="mono" style="color:var(--pv)">${num(total, 1)} kWh</b></div>
+    ${lit.length ? `<div class="sunbars" role="img" aria-label="${label}: ${num(total, 1)} kWh">${lit.map(([h, v]) => `<div title="${String(h).padStart(2, "0")}:00 ${num(v, 2)} kWh"><i style="height:${Math.round(v / max * 100)}%"></i><span class="mono">${String(h).padStart(2, "0")}</span></div>`).join("")}</div>` : `<p class="quiet small">No sun expected.</p>`}</div>`;
+}
+
+const LIVE_STEP_MS = 10000;            // one sample of battery and grid power every 10 s
+const LIVE_SPAN_MS = 30 * 60000;       // the live charts show the last 30 minutes
+
+/** Battery (+ charging) and grid (+ import) power in W from the role entities, null where unknown. */
+function livePower(hass, s) {
+  const r = (s && s.roles) || {};
+  const bp = watts(hass, r.battery_power_entity);
+  return { batt: bp === null ? null : bp * (r.battery_power_positive_is_discharging === false ? 1 : -1), grid: watts(hass, r.grid_entity) };
+}
+
+/**
+ * One live series as a row: the label, the current value with its direction, and a sparkline of the last 30 minutes
+ * around a zero line (above zero `up`, below zero `down`, each in its own colour).
+ */
+function sparkRow(samples, key, label, up, down) {
+  const pts = samples.filter((x) => x[key] !== null);
+  const now = pts.length ? pts[pts.length - 1][key] : null;
+  const dir = now === null ? "" : Math.abs(now) < 50 ? "balanced" : now > 0 ? up.word : down.word;
+  const W = 300, H = 56, t1 = Date.now(), t0 = t1 - LIVE_SPAN_MS;
+  const max = Math.max(500, ...pts.map((x) => Math.abs(x[key])));
+  const xy = (x) => `${((x.t - t0) / LIVE_SPAN_MS * W).toFixed(1)},${(H / 2 - x[key] / max * (H / 2 - 3)).toFixed(1)}`;
+  const line = pts.length > 1 ? `<polyline points="${pts.map(xy).join(" ")}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"></polyline>` : "";
+  // colour above and below zero by clipping the same line twice
+  const id = `clip-${key}`;
+  return `<div class="spark">
+    <div class="spark-head"><span>${esc(label)}</span><b class="mono" style="color:var(${now === null || Math.abs(now) < 50 ? "--fg" : now > 0 ? up.colour : down.colour})">${now === null ? "—" : kw(Math.abs(now), 2) + " kW"}</b><i>${esc(dir)}</i></div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}, last 30 minutes">
+      <defs><clipPath id="${id}-up"><rect x="0" y="0" width="${W}" height="${H / 2}"></rect></clipPath><clipPath id="${id}-dn"><rect x="0" y="${H / 2}" width="${W}" height="${H / 2}"></rect></clipPath></defs>
+      <line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="var(--line)" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+      <g clip-path="url(#${id}-up)" style="color:var(${up.colour})">${line}</g><g clip-path="url(#${id}-dn)" style="color:var(${down.colour})">${line}</g>
+    </svg></div>`;
+}
+
+/** The live card: battery and grid power over the last 30 minutes, 10 s per point. */
+function liveChartsHtml(samples) {
+  return sparkRow(samples, "batt", "Battery", { word: "charging", colour: "--charge" }, { word: "discharging", colour: "--discharge" })
+    + sparkRow(samples, "grid", "Grid", { word: "import", colour: "--fg-2" }, { word: "export", colour: "--ok" })
+    + `<div class="quiet small spark-axis"><span>−30 min</span><span>now · every 10 s</span></div>`;
+}
+
+/** Recorder history of one entity as [{t, w}] (W, kW converted), for filling the live charts when the panel opens. */
+function historyWatts(hass, rows, entityId, sign) {
+  const unit = hass.states[entityId] && hass.states[entityId].attributes.unit_of_measurement;
+  return (rows || []).map((x) => ({ t: (x.lu || x.lc) * 1000, w: Number(x.s) * (unit === "kW" ? 1000 : 1) * sign })).filter((x) => Number.isFinite(x.w));
+}
+
 /* ------------------------------------------------------------------ the panel */
 
-const VIEWS = [["today", "Today"], ["plan", "Plan"], ["devices", "Devices"], ["insights", "Insights"]];
+const VIEWS = [["overview", "Overview"], ["decisions", "Decisions"], ["insights", "Insights"]];
 // earlier releases had more views and Dutch names; old bookmarks and the wall tablet URL land on the view that now holds them
 const VIEW_ALIAS = {
-  nu: "today", now: "today", prijzen: "insights", prices: "insights", leren: "insights", learn: "insights",
-  batterij: "devices", battery: "devices", auto: "devices", ev: "devices", boiler: "devices", "water-heater": "devices", net: "devices", grid: "devices",
+  today: "overview", plan: "decisions", devices: "overview", nu: "overview", now: "overview", prijzen: "insights", prices: "insights", leren: "insights", learn: "insights",
+  batterij: "overview", battery: "overview", auto: "overview", ev: "overview", boiler: "overview", "water-heater": "overview", net: "overview", grid: "overview",
   regie: "settings", control: "settings",
 };
 /** The view key for a location hash: a current key, an old alias, or null. */
@@ -774,7 +945,9 @@ class HemsPanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._view = viewOf(location.hash) || "today";
+    this._view = viewOf(location.hash) || "overview";
+    this._changesOnly = false;          // Decisions: only the quarters where the action changes
+    this._samples = [];                 // live battery and grid power, one per 10 s, the last 30 minutes ({t, batt, grid})
     this._hours = 24;
     this._period = "day";                 // Insights: day, week, month or year
     this._sel = null;
@@ -797,6 +970,35 @@ class HemsPanel extends HTMLElement {
     if (first) this._render();
     else this._liveUpdate();
   }
+  /** Add a live sample at most every 10 s and keep the last 30 minutes; the first call fills the charts from the recorder. */
+  _sample(s) {
+    if (!s || !s.roles) return;
+    const now = Date.now();
+    if (!this._seeded) { this._seeded = true; this._seedSamples(s); }
+    const last = this._samples[this._samples.length - 1];
+    if (last && now - last.t < LIVE_STEP_MS - 500) return;
+    this._samples.push({ t: now, ...livePower(this._hass, s) });
+    while (this._samples.length && this._samples[0].t < now - LIVE_SPAN_MS) this._samples.shift();
+  }
+
+  /** The last 30 minutes of battery and grid power from the recorder, resampled to 10 s steps (last value before each step). */
+  async _seedSamples(s) {
+    const r = s.roles, ids = [r.battery_power_entity, r.grid_entity].filter(Boolean);
+    if (!ids.length) return;
+    const t1 = Date.now(), t0 = t1 - LIVE_SPAN_MS;
+    try {
+      const res = await this._hass.callWS({ type: "history/history_during_period", start_time: new Date(t0).toISOString(), end_time: new Date(t1).toISOString(),
+        entity_ids: ids, minimal_response: true, no_attributes: true, significant_changes_only: false });
+      const batt = historyWatts(this._hass, res[r.battery_power_entity], r.battery_power_entity, r.battery_power_positive_is_discharging === false ? 1 : -1);
+      const grid = historyWatts(this._hass, res[r.grid_entity], r.grid_entity, 1);
+      const at = (rows, t) => { let v = null; for (const x of rows) { if (x.t > t) break; v = x.w; } return v; };
+      const seeded = [];
+      for (let t = t0; t < t1 - LIVE_STEP_MS; t += LIVE_STEP_MS) seeded.push({ t, batt: at(batt, t), grid: at(grid, t) });
+      this._samples = [...seeded, ...this._samples.filter((x) => x.t >= t1 - LIVE_STEP_MS)];
+    } catch (e) { /* no recorder access: the charts fill from now on */ }
+    const lp = this.shadowRoot && this.shadowRoot.getElementById("live-power"); if (lp) lp.innerHTML = liveChartsHtml(this._samples);
+  }
+
   set narrow(v) { this._narrow = v; }
   set panel(v) { this._panel = v; }
   set route(v) { this._route = v; }
@@ -807,7 +1009,7 @@ class HemsPanel extends HTMLElement {
     this._off = store.on(() => this._render());
     window.addEventListener("hashchange", this._onHash);
     window.addEventListener("resize", this._onResize);
-    this._tick = setInterval(() => this._liveUpdate(), 15000);
+    this._tick = setInterval(() => this._liveUpdate(), LIVE_STEP_MS);
     this._ro = new ResizeObserver(() => this._drawCharts());
     this._ro.observe(this);
   }
@@ -828,6 +1030,9 @@ class HemsPanel extends HTMLElement {
     const p = store.payload, s = store.settings;
     const live = root.getElementById("live"); if (live) live.innerHTML = liveNumbersHtml(this._hass, p, s);
     const ph = root.getElementById("phases"); if (ph) ph.innerHTML = phasesHtml(this._hass, s);
+    const fl = root.getElementById("flow"); if (fl) fl.innerHTML = flowHtml(this._hass, p, s);
+    this._sample(s);
+    const lp = root.getElementById("live-power"); if (lp) lp.innerHTML = liveChartsHtml(this._samples);
     const clock = root.getElementById("clock"); if (clock) clock.textContent = hhmm(Date.now());
   }
 
@@ -856,6 +1061,7 @@ class HemsPanel extends HTMLElement {
     if (menu) { menu.hass = this._hass; menu.narrow = this._narrow; }
     this.shadowRoot.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => this._go(b.dataset.view)));
     this.shadowRoot.querySelectorAll("[data-hours]").forEach((b) => b.addEventListener("click", () => { this._hours = Number(b.dataset.hours); this._sel = null; this._render(); }));
+    this.shadowRoot.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => { this._changesOnly = b.dataset.filter === "changes"; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-period]").forEach((b) => b.addEventListener("click", () => { this._period = b.dataset.period; this._render(); }));
     this._bindActions();
     this._drawCharts();
@@ -885,23 +1091,33 @@ class HemsPanel extends HTMLElement {
     return `<span class="seg small">${[8, 24, 48].map((h) => `<button type="button" data-hours="${h}" aria-pressed="${this._hours === h}">${h} h</button>`).join("")}</span>`;
   }
 
-  /* ---------------- Today */
-  _view_today(p, s) {
+  /* ---------------- Overview: everything on one screen */
+  _view_overview(p, s) {
     const h = headline(p);
     const d = p && p.decision;
     return `
       <section class="hero">
         <div class="say">
           <span class="quiet">Now · ${hhmm(Date.now())}</span>
-          <h1>${esc(h.lead)} ${h.rest}</h1>
+          <h1>${esc(h.lead)}</h1>
+          ${h.rest ? `<p class="next">${h.rest}</p>` : ""}
           <p class="why">${h.why}</p>
         </div>
-        <div id="live">${liveNumbersHtml(this._hass, p, s)}</div>
+        <div class="card money">
+          <span class="quiet small">vs. self-consumption only</span>
+          ${this._moneyRows(p, d)}
+        </div>
       </section>
       ${recsHtml(p, this._applyId)}
+      <section class="grid-3">
+        <div class="card span-2"><div class="card-head"><h2>Energy flow</h2><span class="quiet small">live</span></div><div id="flow">${flowHtml(this._hass, p, s)}</div></div>
+        <div class="card"><div class="card-head"><h2>Live power</h2><span class="quiet small">30 min</span></div><div id="live-power">${liveChartsHtml(this._samples)}</div>
+          <div class="card-head" style="margin-top:18px"><h2>Phases</h2><span class="quiet small">max ${num((s && s.options && s.options.grid_limit_a) || 25, 0)} A</span></div><div id="phases">${phasesHtml(this._hass, s)}</div></div>
+      </section>
+      <section class="grid-3">${weatherHtml(p)}${sunHtml(p)}</section>
       <section class="block chart">
         <div class="chart-head">
-          <h2>Next ${this._hours} hours</h2>
+          <h2>Next ${this._hours} hours</h2><span class="quiet">per quarter</span>
           <span class="key"><i class="sw" style="background:var(--mid-bar)"></i>price</span>
           <span class="key"><i class="ln"></i>battery %</span>
           <span class="key"><i class="sw" style="background:var(--charge)"></i>charge</span>
@@ -910,113 +1126,94 @@ class HemsPanel extends HTMLElement {
         </div>
         <svg id="combined" style="display:block;width:100%"></svg>
       </section>
-      <section class="two">
-        <div>
-          <h2>Coming up</h2>
-          ${agendaHtml(p)}
-          <p class="quiet small">${evLine(p)}</p>
-        </div>
-        <div>
-          <h2>Today</h2>
-          ${this._moneyRows(p, d)}
-          <a href="#insights" data-view="insights" class="small">More in Insights →</a>
-        </div>
+      <section class="grid-2">
+        <div class="card"><h2>Coming up</h2>${agendaHtml(p)}</div>
+        <div class="card"><h2>Devices</h2>${this._devicesHtml(p, s)}</div>
       </section>`;
+  }
+
+  /** One compact row per module: what it does now and its mode; the EV keeps its force-charge override. */
+  _devicesHtml(p, s) {
+    const o = (s && s.options) || {};
+    const r = (s && s.roles) || {};
+    const b = (p && p.battery) || {};
+    const soc = stateNum(this._hass, r.soc_entity);
+    const rows = [];
+    rows.push(`<div class="dev"><span class="dev-name">${ICON.battery}Battery</span>
+      <div class="meter"><i style="width:${soc ?? 0}%"></i><em style="left:${b.capacity_kwh ? b.reserve_kwh / b.capacity_kwh * 100 : 0}%"></em></div>
+      <span class="mono">${soc === null ? "—" : num(soc, 0) + " %"}</span>${modeSegHtml(p, "battery")}</div>`);
+    if (o.ev_enabled) {
+      const ev = p && p.ev;
+      const forceOn = this._hass.states["switch.hems_ev_force_charge"] && this._hass.states["switch.hems_ev_force_charge"].state === "on";
+      const status = ev ? (EV_LABEL[ev.status] || ev.status) : "no plan yet";
+      rows.push(`<div class="dev"><span class="dev-name">${ICON.car}EV</span><span class="quiet small">${esc(status)}${ev && ev.shortfall_kwh > 0 ? ` · <span class="c-fault">${num(ev.shortfall_kwh, 1)} kWh short</span>` : ""}</span><span></span>${modeSegHtml(p, "ev")}</div>
+        <div class="dev-ctl">${this._confirm ? `<span class="small">${forceOn ? "Stop force charging?" : "Start force charging? Only the plan changes in dry-run."}</span>
+          <button type="button" class="btn pri" data-act="force-yes">${forceOn ? "Stop" : "Start"}</button><button type="button" class="btn" data-act="force-no">Cancel</button>`
+          : `<button type="button" class="btn" data-act="force">${forceOn ? "Force charging · stop…" : "Force charge…"}</button>`}</div>`);
+    }
+    if (o.water_heater_enabled) {
+      const wh = r.water_heater_entity && this._hass.states[r.water_heater_entity];
+      const temp = wh ? (wh.attributes.current_temperature ?? null) : null;
+      const next = ((p && p.heating) || [])[0];
+      rows.push(`<div class="dev"><span class="dev-name">${ICON.tank}Water heater</span><span class="quiet small">${temp === null ? "" : num(temp, 0) + " °C · "}${next ? esc(span(next.from, next.to)) : "no run planned"}</span><span></span>${modeSegHtml(p, "water_heater")}</div>`);
+    }
+    if (o.spa_enabled) {
+      const spa = r.spa_climate_entity && this._hass.states[r.spa_climate_entity];
+      const t = spa ? spa.attributes.current_temperature : null;
+      rows.push(`<div class="dev"><span class="dev-name">${ICON.spa}Spa</span><span class="quiet small">${t === null || t === undefined ? "no climate entity" : num(t, 1) + " °C"}</span><span></span><span></span></div>`);
+    }
+    return `<div class="devs">${rows.join("")}</div>`;
+  }
+
+  /* ---------------- Decisions: every planned quarter and the comparison behind it */
+  _view_decisions(p) {
+    const b = (p && p.battery) || {};
+    const rows = ((p && p.quarters) || []).filter((q) => q.act);
+    const shown = this._changesOnly ? rows.filter((q, i) => i === 0 || q.act !== rows[i - 1].act) : rows;
+    const pct = (kwh) => b.capacity_kwh ? num(kwh / b.capacity_kwh * 100, 0) + " %" : "—";
+    const vals = rows.flatMap((q) => [q.sell, q.keep, q.buy]).filter((v) => v !== null && v !== undefined);
+    const lo = vals.length ? Math.min(...vals) : 0, hi = vals.length ? Math.max(...vals) : 1;
+    const bar = (v, c) => v === null || v === undefined ? `<i class="vb"></i>` : `<i class="vb"><i style="width:${Math.max(3, (v - lo) / (hi - lo || 1) * 100)}%;background:var(${c})"></i></i>`;
+    return `
+      <section class="say"><span class="quiet">Per kWh: sell, keep or buy. The best wins.</span><h1 class="mid">${esc((p && p.decision && p.decision.plan_text) || "—")}</h1></section>
+      <section class="chips">
+        <span class="chip">Margin <b class="mono">€ ${num(b.min_profit_margin, 2)}</b></span>
+        <span class="chip">Efficiency <b class="mono">${num((b.round_trip_eff || 0) * 100, 0)} %</b></span>
+        <span class="chip">Sell floor <b class="mono">${b.capacity_kwh ? num(b.reserve_kwh / b.capacity_kwh * 100, 0) : "—"} %</b></span>
+        <span class="chip">Changed <b class="mono">${p && p.diff && p.diff.available ? p.diff.changed : "—"}</b> quarters</span>
+      </section>
+      <section class="block">
+        <div class="chart-head"><h2>Timeline</h2><span class="sp"></span>${this._hoursSeg()}</div>
+        <svg id="tl" style="display:block;width:100%"></svg>
+        <div class="why-box" id="why">${whyHtml(p, this._sel)}</div>
+      </section>
+      <section class="block">
+        <div class="chart-head"><h2>Every quarter</h2><span class="sp"></span>
+          <span class="seg small" role="group" aria-label="Filter"><button type="button" data-filter="all" aria-pressed="${!this._changesOnly}">All</button><button type="button" data-filter="changes" aria-pressed="${!!this._changesOnly}">Changes</button></span></div>
+        <div class="scroll-x"><table class="dec">
+          <tr><th>Time</th><th>Action</th><th>Battery</th><th>Why</th><th>Sell · keep · buy</th></tr>
+          ${shown.map((q) => `<tr><td class="mono">${esc(dayWord(q.t) === "today" ? "" : dayWord(q.t) + " ")}${hhmm(q.t)}</td>
+            <td><span class="act act-${q.act}">${esc(ACTION_LABEL[q.act] || q.act)}</span></td>
+            <td class="n">${q.soc === null ? "—" : pct(q.soc)}</td>
+            <td class="small">${esc(q.why || "")}</td>
+            <td><div class="vbars">${bar(q.sell, "--discharge")}${bar(q.keep, "--fg-2")}${bar(q.buy, "--charge")}</div><span class="mono quiet small">${eur(q.sell, 3)} · ${eur(q.keep, 3)} · ${eur(q.buy, 3)}</span></td></tr>`).join("")}
+        </table></div>
+      </section>
+      <section class="grid-2">
+        <div class="card"><h2>Changes since the last plan</h2>${diffHtml(p)}</div>
+        <div class="card"><h2>Windows</h2><div class="scroll-x">${windowsTable(p)}</div></div>
+      </section>
+      <details class="block"><summary>Battery detail</summary><div class="stack" style="margin-top:12px">${verdictHtml(p, 24)}${chainHtml(p)}<div class="scroll-x">${sellTable(p)}</div>${wouldWriteHtml(p && p.saj)}</div></details>`;
   }
 
   _moneyRows(p, d) {
     const r = p && p.realised, t = r && r.today;
     const signed = (v) => v === null || v === undefined ? "—" : (v > 0 ? "+ " : v < 0 ? "− " : "") + "€ " + num(Math.abs(v), 2);
     return `<div class="rows">
-      <div><span>Expected gain</span><span class="mono">${d ? "€ " + num(d.expected_saving, 2) : "—"}</span></div>
-      <div><span>Cost</span><span class="mono">${t && t.quarters ? "€ " + num(t.cost, 2) : "—"}</span></div>
-      <div><span>Saved</span><span class="mono" style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t && t.quarters ? signed(t.gain) : "—"}</span></div>
+      <div><span>Saved today</span><span class="mono" style="color:var(${t && t.gain >= 0 ? "--ok" : "--fault"})">${t && t.quarters ? signed(t.gain) : "—"}</span></div>
+      <div><span>Energy cost today</span><span class="mono">${t && t.quarters ? "€ " + num(t.cost, 2) : "—"}</span></div>
+      <div><span>Plan, next 48 h</span><span class="mono">${d ? signed(d.expected_saving) : "—"}</span></div>
     </div>`;
-  }
-
-  /* ---------------- Plan */
-  _view_plan(p) {
-    return `
-      ${p && p.decision ? `<section class="say"><span class="quiet">Plan</span><h1 class="mid">${esc(p.decision.plan_text || "—")}</h1></section>` : ""}
-      <section class="block">
-        <div class="chart-head"><h2>Timeline</h2><span class="sp"></span>${this._hoursSeg()}</div>
-        <svg id="tl" style="display:block;width:100%"></svg>
-        <div class="why-box" id="why">${whyHtml(p, this._sel)}</div>
-      </section>
-      <section class="two">
-        <div><h2>Windows</h2><div class="scroll-x">${windowsTable(p)}</div></div>
-        <div><h2>Changes</h2>${diffHtml(p)}</div>
-      </section>`;
-  }
-
-  /* ---------------- Devices */
-  _view_devices(p, s) {
-    const o = (s && s.options) || {};
-    return `${this._batteryRow(p, s)}${o.ev_enabled ? this._evRow(p, s) : ""}${o.water_heater_enabled ? this._heaterRow(p, s) : ""}
-      <section class="device thin">
-        <div class="name"><h2>Grid connection</h2><span class="quiet small">${num(o.grid_limit_a, 0)} A per phase</span></div>
-        <div id="phases">${phasesHtml(this._hass, s)}</div>
-      </section>`;
-  }
-
-  _batteryRow(p, s) {
-    const b = (p && p.battery) || {};
-    const soc = stateNum(this._hass, s && s.roles && s.roles.soc_entity);
-    const h = headline(p);
-    return `<section class="device">
-      <div class="name"><h2>Battery</h2><span class="quiet small">${num(b.capacity_kwh, 0)} kWh · max ${num(b.max_power_kw, 0)} kW</span></div>
-      <div class="body">
-        <p>${esc(h.lead)} ${h.rest}</p>
-        <div class="meter"><i style="width:${soc ?? 0}%"></i><em style="left:${b.reserve_kwh / b.capacity_kwh * 100}%"></em></div>
-        <div class="mono quiet small spread"><span>${soc === null ? "—" : num(soc, 0) + " % · " + num(soc / 100 * b.capacity_kwh, 1) + " kWh"}</span><span>reserve ${num(b.reserve_kwh / b.capacity_kwh * 100, 0)} % · floor ${num(b.floor_kwh / b.capacity_kwh * 100, 0)} %</span></div>
-        <details><summary>Details</summary>
-          <div class="stack" style="margin-top:12px">${verdictHtml(p, 24)}${chainHtml(p)}<div class="scroll-x">${sellTable(p)}</div></div>
-        </details>
-        ${wouldWriteHtml(p && p.saj)}
-      </div>
-      <div class="ctl"><span class="quiet small">Mode</span>${modeSegHtml(p, "battery")}</div>
-    </section>`;
-  }
-
-  _evRow(p, s) {
-    const ev = p && p.ev;
-    const o = s.options;
-    const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], short = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    const deadlines = days.map((d, i) => o["ev_deadline_" + d] ? `<span class="chip mono">${short[i]} ${esc(o["ev_deadline_" + d])}</span>` : "").join("");
-    const evSoc = stateNum(this._hass, s.roles && s.roles.ev_soc_entity);
-    const forceOn = this._hass.states["switch.hems_ev_force_charge"] && this._hass.states["switch.hems_ev_force_charge"].state === "on";
-    const blocks = evBlocks(((p && p.quarters) || []).filter((r) => r.ev_a));
-    const status = ev ? `${(EV_LABEL[ev.status] || ev.status).replace(/^./, (c) => c.toUpperCase())}.` : "No EV plan yet.";
-    return `<section class="device ${ev && ev.status === "deadline_at_risk" ? "risk" : ""}">
-      <div class="name"><h2>EV</h2><span class="quiet small">${num(o.ev_capacity_kwh, 1)} kWh · ${num(o.ev_min_current_a, 0)}–${num(o.ev_max_current_a, 0)} A</span></div>
-      <div class="body">
-        <p>${esc(status)}${evSoc === null ? "" : ` Car at ${num(evSoc, 0)} %.`}${ev && ev.shortfall_kwh > 0 ? ` <span class="c-fault">${num(ev.shortfall_kwh, 1)} kWh short.</span>` : ""}</p>
-        <div class="row">${deadlines || `<span class="quiet small">No deadlines set.</span>`}<span class="quiet small">${num(o.ev_target_required_pct, 0)} % by a deadline · up to ${num(o.ev_target_max_pct, 0)} % below € ${num(o.ev_max_price, 2)}</span></div>
-        ${blocks.length ? `<details><summary>${blocks.length} planned charging block${blocks.length > 1 ? "s" : ""}</summary><div class="scroll-x" style="margin-top:12px"><table><tr><th>Block</th><th>Current</th><th>Tier</th><th>Avg. price</th></tr>${blocks.map((b) => `<tr><td class="mono">${esc(span(b.from, b.to))}</td><td class="n">${num(b.a, 0)} A</td><td>${esc(TIER_LABEL[b.tier] || b.tier)}</td><td class="n">${eur(b.price)}</td></tr>`).join("")}</table></div></details>` : ""}
-      </div>
-      <div class="ctl"><span class="quiet small">Mode</span>${modeSegHtml(p, "ev")}
-        ${this._confirm ? `<span class="small">${forceOn ? "Stop force charging?" : "Start force charging? Only the plan changes in dry-run."}</span>
-          <div class="row"><button type="button" class="btn pri" data-act="force-yes">${forceOn ? "Stop" : "Start"}</button><button type="button" class="btn" data-act="force-no">Cancel</button></div>`
-          : `<button type="button" class="btn" data-act="force">${forceOn ? "Force charging · stop…" : "Force charge…"}</button>`}
-      </div>
-    </section>`;
-  }
-
-  _heaterRow(p, s) {
-    const o = s.options;
-    const runs = (p && p.heating) || [];
-    const wh = s.roles && s.roles.water_heater_entity && this._hass.states[s.roles.water_heater_entity];
-    const temp = wh ? (wh.attributes.current_temperature ?? (Number.isFinite(Number(wh.state)) ? Number(wh.state) : null)) : null;
-    const leg = p && p.alerts && p.alerts.legionella;
-    const next = runs[0];
-    return `<section class="device ${leg && leg.on ? "risk" : ""}">
-      <div class="name"><h2>Water heater</h2><span class="quiet small">${num(o.water_heater_energy_kwh, 1)} kWh daily · legionella ${esc(DAY_LABEL[o.water_heater_legionella_weekday] || o.water_heater_legionella_weekday)}</span></div>
-      <div class="body">
-        <p>${temp === null ? "" : `Tank ${num(temp, 0)} °C. `}${next ? `${HEAT_LABEL[next.kind] === "heating" ? "Daily" : (HEAT_LABEL[next.kind] || next.kind).replace(/^./, (c) => c.toUpperCase())} run ${esc(span(next.from, next.to))}.` : "No run planned yet."}</p>
-        <div class="row quiet small"><span>Last legionella run <b class="fg">${leg && leg.last ? esc(dayShort(leg.last)) : leg && leg.configured ? "unknown" : "no sensor assigned"}</b></span>${leg && leg.on ? `<span class="c-fault">overdue</span>` : ""}</div>
-      </div>
-      <div class="ctl"><span class="quiet small">Mode</span>${modeSegHtml(p, "water_heater")}</div>
-    </section>`;
   }
 
   /* ---------------- Insights */
@@ -1251,6 +1448,58 @@ tr.off { background:var(--discharge-soft); }
 .hold { position:relative; overflow:hidden; touch-action:none; }
 .hold.holding { box-shadow:inset 0 0 0 2px var(--fault); }
 a { color:var(--charge); }
+/* overview */
+.card { background:var(--panel); border-radius:14px; padding:18px 22px; min-width:0; }
+.card-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.card-head h2 { margin:0; }
+.grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr)); gap:20px; }
+.grid-3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; }
+.span-2 { grid-column:span 2; }
+.hero .money { flex:1 1 260px; max-width:360px; }
+.ic { flex:none; vertical-align:-4px; }
+#flow > .scroll-x { overflow-y:hidden; }
+.flowbox { position:relative; height:340px; min-width:680px; }
+.flow-lines { position:absolute; inset:0; width:100%; height:100%; }
+.fnode { position:absolute; transform:translateY(-50%); box-sizing:border-box; display:flex; align-items:center; gap:10px; background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:8px 12px; opacity:.6; white-space:nowrap; overflow:hidden; }
+.fnode > div { min-width:0; }
+.fnode.on { opacity:1; border-color:var(--ok); }
+.fnode span { display:block; font-size:12px; color:var(--fg-3); }
+.fnode b { display:block; font-size:16px; }
+.fnode i { display:block; font-style:normal; font-size:12px; color:var(--fg-3); overflow:hidden; text-overflow:ellipsis; }
+.fhouse { position:absolute; left:40%; top:50%; width:20%; transform:translateY(-50%); background:var(--panel-2); border:1px solid var(--fg-3); border-radius:14px; padding:14px; text-align:center; }
+.fhouse b { display:block; font-size:24px; margin-top:4px; }
+.fhouse span { font-size:12px; color:var(--fg-3); }
+@media (prefers-reduced-motion: no-preference) { .flow { animation:flow 1.2s linear infinite; } .flow.rev { animation-direction:reverse; } @keyframes flow { to { stroke-dashoffset:-24; } } }
+.next { font-size:19px; color:var(--fg); }
+.spark { margin-bottom:10px; }
+.spark-head { display:flex; align-items:baseline; gap:8px; }
+.spark-head span { font-size:13px; color:var(--fg-2); }
+.spark-head b { font-size:17px; margin-left:auto; }
+.spark-head i { font-style:normal; font-size:12px; color:var(--fg-3); min-width:70px; text-align:right; }
+.spark svg { display:block; width:100%; height:56px; }
+.spark-axis { display:flex; justify-content:space-between; font-size:11px; }
+.wx { display:flex; gap:16px; align-items:center; }
+.wx > div { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.wx b.big { font-size:26px; font-weight:500; }
+.sunbars { display:flex; align-items:flex-end; gap:4px; height:84px; }
+.sunbars > div { flex:1 1 0; height:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:4px; }
+.sunbars i { width:100%; background:var(--pv); border-radius:3px 3px 0 0; }
+.sunbars span { font-size:10px; color:var(--fg-3); }
+.devs { display:flex; flex-direction:column; }
+.dev { display:grid; grid-template-columns:150px minmax(0,1fr) auto auto; gap:12px; align-items:center; padding:10px 0; border-top:1px solid var(--line-2); }
+.dev-name { display:flex; align-items:center; gap:8px; }
+.dev .seg button { min-height:36px; padding:6px 10px; }
+.dev-ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 0 10px 150px; }
+/* decisions */
+.chips { display:flex; flex-wrap:wrap; gap:8px; }
+.chips .chip b { margin-left:6px; }
+table.dec td { vertical-align:middle; }
+.act { display:inline-block; padding:3px 9px; border-radius:6px; font-size:12px; background:var(--panel-2); color:var(--fg-2); white-space:nowrap; }
+.act-charge { background:var(--charge); color:var(--bg); }
+.act-discharge { background:var(--discharge); color:var(--bg); }
+.vbars { display:flex; flex-direction:column; gap:3px; width:180px; margin-bottom:3px; }
+.vb { display:block; height:5px; background:var(--panel-2); border-radius:3px; overflow:hidden; }
+.vb > i { display:block; height:100%; border-radius:3px; }
 /* wall tablet */
 :host([kiosk]) main { padding:36px 44px; max-width:none; }
 .kiosk { display:flex; flex-direction:column; gap:28px; }
@@ -1267,6 +1516,10 @@ h1.huge { font-size:58px; line-height:1.05; }
   main { padding:20px 14px 36px; gap:24px; }
   h1 { font-size:24px; }
   .two { grid-template-columns:1fr; gap:24px; }
+  .grid-3 { grid-template-columns:1fr; }
+  .span-2 { grid-column:auto; }
+  .dev { grid-template-columns:1fr auto; }
+  .dev-ctl { padding-left:0; }
   .device { grid-template-columns:1fr; padding:18px; }
   .device.thin { grid-template-columns:1fr; padding:4px 18px; }
   .live { gap:18px; }
