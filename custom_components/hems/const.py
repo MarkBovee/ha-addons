@@ -49,7 +49,7 @@ DEFAULT_OPTIONS = {
     "reserve_max_soc_pct": 60.0,               # sell floor maximum: the floor follows the expected use until a refill (hems.reserve); = minimum turns that off
     **{f"reserve_soc_{day}_pct": 0.0 for day in ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")},  # sell floor minimum per weekday; 0 = the general minimum
     "reserve_load_factor": 1.3,                # safety factor on the load forecast for that floor
-    "max_sell_hours": 0.0,                     # sell in at most this many hours a day, the best-paying quarters; 0 = no limit
+    "max_sell_quarters": 0,                    # sell in at most this many quarters per sell window, the best-paying ones; 0 = no limit
     "round_trip_eff": 0.82,                    # the start value: HEMS learns it from the battery's charged and discharged kWh (hems.learn)
     "min_profit_margin": 0.10,
     "hold_cost_kwh_h": 0.002,                  # EUR per kWh per hour of waiting; 0 = off (charge as early as equal prices allow)
@@ -131,6 +131,15 @@ PLANS_FILE = "plans.jsonl"                 # one line per cycle: every planned q
 EVENTS_FILE = "events.jsonl"               # fetches, status changes, action changes, settings changes
 BUILD_FILE = "BUILD"                  # written by hems/deploy.py: the commit this code was deployed from
 STORE_VERSION = 1
+
+
+def sell_quarters(options: dict) -> int:
+    """The sell limit in quarters per sell window from the stored options.
+
+    Until 2 Nov 2026 the setting was `max_sell_hours`; an entry that only has the old key keeps its limit (1 hour = 4 quarters)."""
+    if "max_sell_quarters" in options:
+        return int(options["max_sell_quarters"])
+    return round(float(options.get("max_sell_hours", 0.0)) * 4)
 PRICE_HISTORY_DAYS = 7                   # past days of market prices for the typical peak and refill price (hems.terminal)
 FOLLOW_SECONDS = 60                      # grid-follow step, battery-manager's monitor_interval (the inverter needs about that to settle)
 SAMPLE_SECONDS = 10                      # live power is integrated into energy per quarter at this interval

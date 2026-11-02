@@ -335,7 +335,7 @@ def test_a_daily_limit_of_one_sell_hour_keeps_sales_to_the_four_best_quarters():
     """Mark, 1 Nov 2026: sell at most one hour a day. Eight expensive quarters in the evening: the plan may sell only in the four that pay most."""
     from datetime import datetime, timezone
     from hems.rolling import with_sell_limit
-    cfg = BatteryConfig(min_profit_margin=0.0, max_sell_hours=1.0)
+    cfg = BatteryConfig(min_profit_margin=0.0, max_sell_quarters=4)
     exports = [0.30] * 8 + [0.60, 0.62, 0.65, 0.66, 0.64, 0.61, 0.59, 0.58] + [0.30] * 8
     slots = [Slot(0.30, e, 0.1, 0.0) for e in exports]
     start = datetime(2026, 11, 1, 16, 0, tzinfo=timezone.utc)
@@ -399,7 +399,7 @@ def test_two_peaks_in_a_day_are_two_sell_windows_with_an_hour_each():
     """Mark, 2 Nov 2026: one hour per sell window. A morning and an evening peak split by a cheap midday: four quarters in each."""
     from datetime import datetime, timezone
     from hems.rolling import with_sell_limit
-    cfg = BatteryConfig(max_sell_hours=1.0)
+    cfg = BatteryConfig(max_sell_quarters=4)
     exports = [0.30] * 4 + [0.50, 0.52, 0.55, 0.53, 0.51, 0.50] + [0.30] * 6 + [0.60, 0.62, 0.65, 0.66, 0.64, 0.61] + [0.30] * 4
     slots = [Slot(0.30, e, 0.1, 0.0) for e in exports]
     start = datetime(2026, 11, 2, 6, 0, tzinfo=timezone.utc)

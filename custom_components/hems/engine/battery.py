@@ -30,7 +30,7 @@ class BatteryConfig:
     hold_cost_kwh_h: float = 0.002   # EUR per kWh stored per hour: a waiting premium, so equal prices charge late instead of early (replay 4-11 Oct)
     step_kwh: float = 0.25           # SoC grid resolution
     allow_grid_charge: bool = True
-    max_sell_hours: float = 0.0      # sell in at most this many hours a local day, the best-paying quarters (0 = no limit); Mark, 1 Nov 2026: 1 hour
+    max_sell_quarters: int = 0       # sell in at most this many quarters per sell window, the best-paying ones (0 = no limit); Mark, 2 Nov 2026: in quarters, not hours
     future_peak_haircut: float = 0.0  # EUR per kWh taken off the typical recent peak when valuing energy kept past the horizon (hems.terminal); a setting
 
     def __post_init__(self) -> None:

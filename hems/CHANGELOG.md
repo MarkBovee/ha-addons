@@ -11,6 +11,8 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
   price), fetched once a day, instead of today's cheapest price.
 - The sell limit (`max_sell_hours`) applies per sell window (a run of quarters above the day's median export price), not per day:
   a morning and an evening peak may each sell.
+- The sell limit is set in quarters of 15 minutes per sell window (`max_sell_quarters`, 0 = no limit) instead of hours. An entry that
+  still has `max_sell_hours` keeps its limit (1 hour = 4 quarters) until the setting is saved again.
 - Tomorrow's Nord Pool prices are asked for from 12:30 (published around 12:45) instead of 13:00, so the plan picks them up sooner.
 
 ### Added
