@@ -63,9 +63,9 @@ def test_request_parameters_name_the_delivery_day_and_area():
 
 
 def test_tomorrow_is_wanted_from_the_publication_hour():
-    """Tomorrow is requested from 13:00 local, not before."""
-    assert delivery_dates(at(6, 12, 59)) == [date(2026, 10, 6)]
-    assert delivery_dates(at(6, 13, 0)) == [date(2026, 10, 6), date(2026, 10, 7)]
+    """Tomorrow is requested from 12:30 local (published around 12:45), not before."""
+    assert delivery_dates(at(6, 12, 29)) == [date(2026, 10, 6)]
+    assert delivery_dates(at(6, 12, 30)) == [date(2026, 10, 6), date(2026, 10, 7)]
     assert wanted_until(at(6, 9)) == at(7, 0).astimezone(timezone.utc)
     assert wanted_until(at(6, 14)) == at(8, 0).astimezone(timezone.utc)
 

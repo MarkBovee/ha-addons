@@ -11,6 +11,7 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
   price), fetched once a day, instead of today's cheapest price.
 - The sell limit (`max_sell_hours`) applies per sell window (a run of quarters above the day's median export price), not per day:
   a morning and an evening peak may each sell.
+- Tomorrow's Nord Pool prices are asked for from 12:30 (published around 12:45) instead of 13:00, so the plan picks them up sooner.
 
 ### Added
 - Write lock per module (`advice.WRITE_UNLOCKED_MODULES`, still empty): a module whose lock is open offers `auto` in its mode select.
