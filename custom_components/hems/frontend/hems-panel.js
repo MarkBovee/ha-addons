@@ -604,14 +604,10 @@ function nextWindow(p, action) {
 function headline(p) {
   const d = p && p.decision;
   if (!d) return { lead: STATUS_LABEL[(p && p.meta.status)] || "HEMS plans nothing now", rest: "", why: "As soon as the missing data is back, HEMS plans again within a minute." };
-  const e = p.execution, act = d.action || "idle";
-  const w = e && e.code !== "no_plan" ? e.power_w : d.power_w;
-  // idle is self-consumption: the battery follows the house (discharging to cover it, charging on solar surplus), it is never "holding"
-  const lead = act === "charge" ? `Charging at ${kw(Math.abs(w))} kW.`
-    : act === "discharge" ? `Selling at ${kw(Math.abs(w))} kW.`
-    : w !== null && w !== undefined && w <= -50 ? `Battery covers the house, ${kw(Math.abs(w))} kW.`
-    : w !== null && w !== undefined && w >= 50 ? `Storing solar surplus, ${kw(w)} kW.`
-    : "Battery idle.";
+  const act = d.action || "idle";
+  // idle is self-consumption: the battery follows the house and keeps the grid at zero (battery-manager calls it adaptive).
+  // No power in the headline: it is set once per cycle, the live numbers are in the energy flow and the live charts.
+  const lead = act === "charge" ? "Charging from the grid." : act === "discharge" ? "Selling to the grid." : "Adaptive: keeping the grid at zero.";
   const ch = nextWindow(p, "charge"), dis = nextWindow(p, "discharge");
   const parts = [];
   if (ch && act !== "charge") parts.push({ word: "charge", w: ch, cls: "c-charge" });
