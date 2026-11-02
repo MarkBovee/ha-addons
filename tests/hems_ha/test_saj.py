@@ -1,12 +1,13 @@
 """The SAJ write layer against a fake inverter: `text.set_value` and `number.set_value` services that update the entities, one
-that fails, one the inverter ignores. Phase 3: the coordinator never writes, even with the battery set to auto and armed."""
+that fails, one the inverter ignores. The coordinator writes only with the battery's lock open, in auto and armed (phase 4), and
+clears the slots it wrote when it lets go."""
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 from homeassistant.core import HomeAssistant, ServiceCall
 
-from custom_components.hems.engine.saj_protocol import entity_names, plan_writes, wanted_inputs
+from custom_components.hems.engine.saj_protocol import InverterInputs, entity_names, plan_writes, wanted_inputs
 from custom_components.hems.engine.saj_slots import SajSlot, Schedule
 from custom_components.hems.saj import GridFollow, async_apply, missing_entities, read_inputs
 
@@ -106,7 +107,101 @@ async def test_the_grid_follow_brings_the_meter_to_zero_on_an_inverter_that_sits
     assert follow.power_w == 0 and have.discharge_mask == 0 and have.mode == 0
 
 
-async def test_phase_3_never_writes_even_in_auto_and_armed(hass: HomeAssistant, freezer, aioclient_mock):
+@pytest.fixture
+def battery_unlocked(monkeypatch):
+    """The battery's write lock open, as at the handover."""
+    from custom_components.hems import advice, coordinator
+    monkeypatch.setattr(advice, "WRITE_UNLOCKED_MODULES", frozenset({"battery"}))
+    monkeypatch.setattr(coordinator, "WRITE_UNLOCKED_MODULES", frozenset({"battery"}))
+
+
+async def _writing_entry(hass: HomeAssistant, freezer, aioclient_mock):
+    """HEMS with the battery in auto and armed, after two cycles (the first never writes)."""
+    set_states(hass)
+    saj = FakeSaj(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    coordinator = entry.runtime_data
+    await coordinator.async_set_mode("battery", "auto")
+    await coordinator.async_set_armed(True)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    return saj, coordinator
+
+
+async def test_auto_writes_and_the_master_off_clears_the_slots(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    """Unlocked, in auto and armed: a cycle writes the schedule. Master off: masks and mode first, then every slot back to empty."""
+    saj, coordinator = await _writing_entry(hass, freezer, aioclient_mock)
+    assert saj.calls and coordinator.saj_owned and read_inputs(hass, NAMES).mode == 1
+    assert coordinator._stored()["saj_owned"] is True
+    written = len(saj.calls)
+    await coordinator.async_set_armed(False)
+    cleared = saj.calls[written:]
+    assert cleared[0][0] in ("number.saj_charge_time_enable_input", "number.saj_discharge_time_enable_input")
+    assert read_inputs(hass, NAMES) == InverterInputs() and not coordinator.saj_owned
+    await coordinator.async_refresh()
+    assert len(saj.calls) == written + len(cleared), "not armed: nothing more is written"
+
+
+@pytest.mark.parametrize("leave", ["advisory", "disarm_all"])
+async def test_leaving_auto_clears_the_slots(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked, leave):
+    saj, coordinator = await _writing_entry(hass, freezer, aioclient_mock)
+    assert coordinator.saj_owned
+    if leave == "disarm_all":
+        await coordinator.async_disarm_all()
+    else:
+        await coordinator.async_set_mode("battery", leave)
+    assert read_inputs(hass, NAMES) == InverterInputs() and not coordinator.saj_owned
+
+
+async def test_slots_left_before_a_restart_are_cleared_and_battery_managers_are_not(hass: HomeAssistant, freezer, aioclient_mock):
+    """After a restart the master is off: slots HEMS still owned go on the first cycle. Slots HEMS never wrote stay."""
+    set_states(hass)
+    saj = FakeSaj(hass)
+    hass.states.async_set("number.saj_charge_time_enable_input", "1")       # someone else's schedule (battery-manager)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    coordinator = entry.runtime_data
+    await coordinator.async_refresh()
+    assert saj.calls == [] and read_inputs(hass, NAMES).charge_mask == 1
+    coordinator.saj_owned = True                                           # as restored from .storage
+    await coordinator.async_refresh()
+    assert read_inputs(hass, NAMES) == InverterInputs() and not coordinator.saj_owned
+
+
+async def test_a_failing_release_keeps_the_slots_owned_for_the_next_cycle(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    saj, coordinator = await _writing_entry(hass, freezer, aioclient_mock)
+    saj.fail = "number.saj_charge_time_enable_input"
+    assert not await coordinator.async_release_saj("test") and coordinator.saj_owned
+    saj.fail = None
+    assert await coordinator.async_release_saj("test") and not coordinator.saj_owned
+
+
+async def test_an_exception_in_the_write_round_does_not_stop_the_cycle(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked, monkeypatch):
+    from custom_components.hems import coordinator as module
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("integration gone")
+    set_states(hass)
+    FakeSaj(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    coordinator = entry.runtime_data
+    await coordinator.async_set_mode("battery", "auto")
+    await coordinator.async_set_armed(True)
+    monkeypatch.setattr(module, "async_apply", boom)
+    await coordinator.async_refresh()
+    assert coordinator.last_update_success and coordinator.data.saj is not None
+
+
+async def test_auto_cannot_be_chosen_while_the_lock_is_closed(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    """Only the battery's lock is open: its select offers auto, the others do not, and setting auto on them is refused."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    assert "auto" in hass.states.get("select.hems_battery_mode").attributes["options"]
+    assert "auto" not in hass.states.get("select.hems_water_heater_mode").attributes["options"]
+    with pytest.raises(ValueError):
+        await entry.runtime_data.async_set_mode("water_heater", "auto")
+
+
+async def test_locked_never_writes_even_in_auto_and_armed(hass: HomeAssistant, freezer, aioclient_mock):
     """The phase lock: with the battery forced to auto and the master switch on, a cycle shows the schedule but makes no call."""
     set_states(hass)
     saj = FakeSaj(hass)
@@ -171,3 +266,48 @@ async def test_the_legionella_role_can_be_set_while_the_add_ons_sensor_is_missin
     done = await hass.config_entries.flow.async_configure(form["flow_id"], {CONF_LEGIONELLA_LAST: "sensor.wh_last_legionella"})
     assert done["type"] == FlowResultType.ABORT and done["reason"] == "reconfigure_successful"
     assert entry.data[CONF_LEGIONELLA_LAST] == "sensor.wh_last_legionella"
+
+
+async def test_unavailable_inputs_keep_the_slots_owned(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    """Audit P1: after a restart the SAJ inputs are unavailable for a while and read as empty; HEMS must not take that as cleared."""
+    saj, coordinator = await _writing_entry(hass, freezer, aioclient_mock)
+    await coordinator.async_set_mode("battery", "advisory")
+    coordinator.saj_owned = True
+    for eid in NAMES.values():
+        hass.states.async_set(eid, "unavailable")
+    assert not await coordinator.async_release_saj("test") and coordinator.saj_owned
+
+
+async def test_a_release_waits_for_a_running_write_round(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    """Audit P1: master off in the middle of a write round. The release runs after the round, so nothing of HEMS is left."""
+    import asyncio
+    set_states(hass)
+    saj = FakeSaj(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    coordinator = entry.runtime_data
+    await coordinator.async_set_mode("battery", "auto")
+    await coordinator.async_set_armed(True)
+    gate, started = asyncio.Event(), asyncio.Event()
+    original = saj._set
+
+    async def slow(call):
+        started.set()
+        await gate.wait()
+        await original(call)
+    for domain in ("text", "number"):
+        hass.services.async_register(domain, "set_value", slow)
+    cycle = hass.async_create_task(coordinator.async_refresh())
+    await started.wait()
+    release = hass.async_create_task(coordinator.async_set_armed(False))
+    await asyncio.sleep(0)
+    gate.set()
+    await cycle
+    await release
+    assert read_inputs(hass, NAMES) == InverterInputs() and not coordinator.saj_owned
+
+
+async def test_ownership_is_stored_at_once(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    """Audit P1: the flag goes to .storage straight away, not after the 30 s delayed save."""
+    saj, coordinator = await _writing_entry(hass, freezer, aioclient_mock)
+    data = await coordinator._store.async_load()
+    assert data["saj_owned"] is True

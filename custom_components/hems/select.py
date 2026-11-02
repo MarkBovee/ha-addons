@@ -1,10 +1,10 @@
-"""The owner's mode per module: dry_run (plan only) or advisory (plan and recommend). 'auto' comes with the first module that writes."""
+"""The owner's mode per module: dry_run (plan only) or advisory (plan and recommend). 'auto' (writing) only for a module whose write lock is open."""
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HemsConfigEntry
-from .advice import MODES, MODULES
+from .advice import MODULES, modes_for
 from .coordinator import HemsCoordinator
 from .entity import HemsEntity
 
@@ -17,12 +17,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry, async_a
 class ModeSelect(HemsEntity, SelectEntity):
     """The mode is stored by HEMS itself (.storage), so it survives a restart."""
 
-    _attr_options = list(MODES)
-
     def __init__(self, coordinator: HemsCoordinator, entry: HemsConfigEntry, module: str) -> None:
         super().__init__(coordinator, entry, "select", f"{module}_mode")
         self._module = module
         self._attr_translation_key = f"{module}_mode"
+        self._attr_options = list(modes_for(module))       # auto only for a module whose write lock is open
 
     @property
     def current_option(self) -> str:

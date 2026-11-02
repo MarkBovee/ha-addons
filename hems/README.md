@@ -50,8 +50,9 @@ HEMS is not in HACS yet. Install it by hand:
 
 ## Safety
 
-- Every module starts in **dry run**. **Advisory** shows what it would do. **Auto** (writing) cannot be chosen yet.
-- A master switch is off after every restart.
+- Every module starts in **dry run**. **Advisory** shows what it would do. **Auto** (writing) can only be chosen for a module whose
+  write lock is open (none yet).
+- A master switch is off after every restart. Switching it off, leaving auto or unloading HEMS clears the inverter slots HEMS wrote.
 - HEMS never writes on stale or missing data, nor in the first cycle after a start.
 - The SAJ writer writes only what differs, verifies by reading back, and retries what the inverter did not take.
 - A watchdog automation (`hems/watchdog/hems_saj_watchdog.yaml`) clears the inverter's slots when HEMS stops working while it

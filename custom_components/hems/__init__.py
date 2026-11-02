@@ -78,7 +78,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool:
-    """Unload the sensors; the quarter listener goes with the entry."""
+    """Unload the sensors and clear the SAJ slots HEMS wrote; the quarter listener goes with the entry."""
+    await entry.runtime_data.async_release_saj("unload")   # a slot HEMS no longer manages would repeat every day
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         await entry.runtime_data.async_save_now()

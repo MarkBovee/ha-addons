@@ -3,6 +3,7 @@
 It never writes to a device. Home Assistant entities are the only interface: states for SoC, power and prices,
 recorder statistics for the consumption history, and one HTTP weather source owned by HEMS itself.
 """
+import asyncio
 import logging
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -45,14 +46,15 @@ from .engine.rolling import Decision
 from .engine.trace import TraceWriter
 from .engine.windows import UNSOLD
 from .dashboard import build_payload
-from .advice import EVENT_APPLIED, MODE_AUTO, MODES, MODULES, Control
+from .advice import EVENT_APPLIED, MODE_AUTO, MODULES, WRITE_UNLOCKED_MODULES, Control, modes_for
 from .realised import EnergyCounters, Ledger, PlannedQuarter, QuarterPrice, quarter_start
-from .saj import SajAdvice, advise, async_apply, read_inputs
-from .engine.saj_protocol import entity_names, plan_writes
-from .const import SAJ_PREFIX, WRITE_UNLOCKED
+from .saj import SajAdvice, advise, async_apply, missing_entities, read_inputs
+from .engine.saj_protocol import InverterInputs, entity_names, plan_writes
+from .const import SAJ_PREFIX
 from .engine.weather import OPEN_METEO_URL, Weather, open_meteo_params, parse_open_meteo
 
 _LOGGER = logging.getLogger(__name__)
+EMPTY_INPUTS = InverterInputs()                  # no slot, no mask, Self-consumption: what HEMS leaves when it lets go of the battery
 
 
 @dataclass(frozen=True)
@@ -217,7 +219,11 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self.energy = EnergyCounters()                 # kWh totals for HA's Energy dashboard (solar, battery in and out)
         self.legionella_seen: datetime | None = None   # HEMS's own record: the day the tank last reached 60 °C (survives the add-on)
         self._cycles = 0
-        self._heater: HeaterCommand | None = None     # the previous water heater command, for the cycle gap                           # cycles since start: the first one never writes (no old schedule is repeated)
+        self._heater: HeaterCommand | None = None     # the previous water heater command, for the cycle gap
+        # True once HEMS wrote the SAJ slots, until it cleared them again. Stored, so slots HEMS left behind before a restart (the
+        # master is off after one) are cleared on the first cycle: SAJ slots repeat every day and never expire.
+        self.saj_owned = False
+        self._saj_lock = asyncio.Lock()               # one SAJ writer at a time: a release never interleaves with a write round
 
     def _on(self, role: str) -> bool | None:
         """A binary role as a flag: True, False, or None when the role is not set or its entity has no usable state."""
@@ -573,8 +579,11 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
     def may_write(self, output: EngineOutput) -> bool:
         """True only when every condition for a write round holds: the phase lock open, the battery in auto, the master switch on,
         a healthy cycle with a plan, and not the first cycle after a start."""
-        return (WRITE_UNLOCKED and self.control.modes.get("battery") == MODE_AUTO and self.control.armed and output.status == "ok"
-                and output.decision is not None and self._cycles > 1)
+        return self.writing("battery") and output.status == "ok" and output.decision is not None and self._cycles > 1
+
+    def writing(self, module: str) -> bool:
+        """True when the owner lets a module write: its lock open, the module in auto and the master switch on."""
+        return module in WRITE_UNLOCKED_MODULES and self.control.modes.get(module) == MODE_AUTO and self.control.armed
 
     def spa_water(self) -> float | None:
         """The spa's water temperature from its climate entity."""
@@ -615,7 +624,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         if output.spa_plan is None:
             return None
         target = spa_target(output.spa_plan, now, settings.spa, self.spa_allowed(settings, ev_a))
-        if target and WRITE_UNLOCKED and self.control.modes.get("spa") == MODE_AUTO and self.control.armed and self._cycles > 1:
+        if target and self.writing("spa") and self._cycles > 1:
             await self._write_spa(target)
         return target
 
@@ -651,7 +660,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._heater = command
         if changed:
             await self._log_event("water_heater", target_c=command.target_c, program=command.program, reason=command.reason, bath_off=command.bath_off)
-        if WRITE_UNLOCKED and self.control.modes.get("water_heater") == MODE_AUTO and self.control.armed and self._cycles > 1:
+        if self.writing("water_heater") and self._cycles > 1:
             await self._write_heater(command)
         return command
 
@@ -672,6 +681,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
 
     async def _saj_round(self, output: EngineOutput) -> SajAdvice | None:
         """Work out the SAJ slots for this plan (always, for advisory), and write them when may_write allows. Never breaks the cycle."""
+        if not self.writing("battery"):
+            await self.async_release_saj("not in auto")          # a leftover schedule of HEMS (mode change missed, restart) goes now
         try:
             advice = advise(self.hass, output, self.saj_names, dt_util.get_default_time_zone())
         except Exception as err:  # noqa: BLE001 - the advisory view must not stop planning
@@ -679,10 +690,63 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             return None
         if advice is None or not self.may_write(output) or advice.missing or not advice.writes:
             return advice
-        plan = plan_writes(read_inputs(self.hass, self.saj_names), advice.target, self.saj_names)
-        result = await async_apply(self.hass, plan, self.saj_names)
-        await self._log_event("write", module="battery", writes=result.written, ok=result.ok, error=result.error, mismatches=list(result.mismatches)[:5])
+        try:
+            async with self._saj_lock:
+                if not self.may_write(output):                   # the owner let go while this cycle waited for the lock
+                    return advice
+                plan = plan_writes(read_inputs(self.hass, self.saj_names), advice.target, self.saj_names)
+                await self._set_saj_owned(True)                  # before the first call: a round that stops halfway still left slots
+                result = await async_apply(self.hass, plan, self.saj_names)
+            await self._log_event("write", module="battery", writes=result.written, ok=result.ok, error=result.error,
+                                  mismatches=list(result.mismatches)[:5])
+        except Exception as err:  # noqa: BLE001 - a failed write round must not stop planning; the next cycle writes again
+            _LOGGER.warning("HEMS SAJ write round failed: %s", err)
+            await self._log_event("write", module="battery", ok=False, error=str(err))
         return advice
+
+    async def _set_saj_owned(self, owned: bool) -> None:
+        """Remember whether HEMS's slots are on the inverter, and store it at once: a crash must neither lose HEMS's slots nor
+        make HEMS clear someone else's after the restart."""
+        if self.saj_owned != owned:
+            self.saj_owned = owned
+            await self.async_save_now()
+
+    async def async_release_saj(self, reason: str) -> bool:
+        """Clear the slots HEMS wrote and set Self-consumption, as the watchdog does: enable masks and mode first, then every slot.
+
+        Only when HEMS wrote them (battery-manager's slots are never touched). True when nothing of HEMS is left; on a failure the
+        slots stay owned and the next cycle tries again. Never raises."""
+        if not self.saj_owned:
+            return True
+        async with self._saj_lock:
+            return await self._release_locked(reason)
+
+    async def _release_locked(self, reason: str) -> bool:
+        """The release itself, under the SAJ lock."""
+        if not self.saj_owned:
+            return True
+        missing = missing_entities(self.hass, self.saj_names)
+        if missing:
+            # an unavailable input reads as empty: the inverter would look clear while its slots are still there
+            _LOGGER.debug("HEMS keeps its SAJ slots owned: %d input entities unavailable", len(missing))
+            return False
+        try:
+            have = read_inputs(self.hass, self.saj_names)
+            off = replace(have, charge_mask=0, discharge_mask=0, mode=EMPTY_INPUTS.mode)
+            ok, written = True, 0
+            for target in (off, EMPTY_INPUTS):                    # with no slot enabled the inverter ignores every slot, whatever its times
+                result = await async_apply(self.hass, plan_writes(read_inputs(self.hass, self.saj_names), target, self.saj_names), self.saj_names)
+                ok, written = ok and result.ok, written + result.written
+                if not result.ok:
+                    break
+            await self._log_event("release", module="battery", reason=reason, writes=written, ok=ok)
+        except Exception as err:  # noqa: BLE001 - releasing must never break a mode change, the master switch or the cycle
+            _LOGGER.warning("HEMS could not clear the SAJ slots: %s", err)
+            await self._log_event("release", module="battery", reason=reason, ok=False, error=str(err))
+            return False
+        if ok:
+            await self._set_saj_owned(False)
+        return ok
 
     # ------------------------------------------------------------------ realised result, control, alerts (dashboard side)
 
@@ -697,10 +761,12 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self.energy.restore(data.get("energy"))
         seen = data.get("legionella_seen")
         self.legionella_seen = dt_util.parse_datetime(seen) if isinstance(seen, str) else None
+        self.saj_owned = bool(data.get("saj_owned"))
 
     def _stored(self) -> dict[str, Any]:
         return {"ledger": self.ledger.state() if self.ledger else None, "control": self.control.state(),
-                "legionella_seen": self.legionella_seen.isoformat() if self.legionella_seen else None, "energy": self.energy.state()}
+                "legionella_seen": self.legionella_seen.isoformat() if self.legionella_seen else None, "energy": self.energy.state(),
+                "saj_owned": self.saj_owned}
 
     def _save(self) -> None:
         self._store.async_delay_save(self._stored, 30)
@@ -751,20 +817,24 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
                                                       (other.state if other and at == now_q else (known.other_action if known else None)))
 
     async def async_set_mode(self, module: str, mode: str) -> None:
-        """The owner's mode of a module (dry_run or advisory)."""
-        if module not in MODULES or mode not in MODES:
+        """The owner's mode of a module (dry_run, advisory, or auto once its lock is open). Leaving auto clears HEMS's slots."""
+        if module not in MODULES or mode not in modes_for(module):
             raise ValueError(f"unknown module or mode: {module} {mode}")
         await self._log_event("mode", module=module, **{"from": self.control.modes.get(module), "to": mode})
         self.control.modes[module] = mode
         self._payload_key = None
         self._save()
+        if module == "battery" and not self.writing("battery"):
+            await self.async_release_saj(f"mode {mode}")
         self.async_update_listeners()
 
     async def async_set_armed(self, armed: bool) -> None:
-        """The master switch. It moves nothing yet: no module writes to a device; it is here so the dashboard and the logbook show it."""
+        """The master switch: with it off no module writes, and the slots HEMS wrote are cleared."""
         await self._log_event("master", armed=armed)
         self.control.armed = armed
         self._payload_key = None
+        if not armed:
+            await self.async_release_saj("master off")
         self.async_update_listeners()
 
     async def async_disarm_all(self) -> None:
@@ -774,6 +844,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self.control.modes = {m: "dry_run" for m in MODULES}
         self._payload_key = None
         self._save()
+        await self.async_release_saj("disarm all")
         self.async_update_listeners()
 
     def recommendations(self) -> list[dict[str, Any]]:

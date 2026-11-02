@@ -17,8 +17,16 @@ from typing import Any
 MODULES = ("battery", "ev", "water_heater", "spa")
 MODE_DRY_RUN = "dry_run"
 MODE_ADVISORY = "advisory"
-MODE_AUTO = "auto"                 # writes to the device; not in MODES, so it cannot be chosen until phase 4 opens it
+MODE_AUTO = "auto"                 # writes to the device; only a module in WRITE_UNLOCKED_MODULES offers it
 MODES = (MODE_DRY_RUN, MODE_ADVISORY)
+# Phase 4 (docs/hems/live-transition-plan.md): the write lock per module. Empty until the handover; then "battery" goes in, after
+# Mark's yes. A module outside this set can never be put in auto, nor restored to it from .storage.
+WRITE_UNLOCKED_MODULES: frozenset[str] = frozenset()
+
+
+def modes_for(module: str) -> tuple[str, ...]:
+    """The modes the owner can choose for a module: auto only once its write lock is open."""
+    return (*MODES, MODE_AUTO) if module in WRITE_UNLOCKED_MODULES else MODES
 QUARTER = timedelta(minutes=15)
 EVENT_APPLIED = "hems_recommendation_applied"
 
@@ -94,7 +102,7 @@ class Control:
         if not isinstance(data, dict):
             return
         for module, mode in (data.get("modes") or {}).items():
-            if module in MODULES and mode in MODES:
+            if module in MODULES and mode in modes_for(module):
                 self.modes[module] = mode
         self.dismissed = dict.fromkeys(data.get("dismissed") or [])
         self.applied = dict(data.get("applied") or {})

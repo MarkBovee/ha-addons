@@ -5,6 +5,11 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
 ## [Unreleased]
 
 ### Added
+- Write lock per module (`advice.WRITE_UNLOCKED_MODULES`, still empty): a module whose lock is open offers `auto` in its mode select.
+- HEMS clears the SAJ slots it wrote (masks and mode first, then every slot; Self-consumption) when the battery leaves auto, the
+  master switch goes off, on `hems.disarm_all` and on unload. Whether HEMS's slots are on the inverter is stored, so slots left
+  behind by a restart are cleared on the first cycle; slots HEMS never wrote (battery-manager's) are not touched.
+- A failing SAJ write round is logged and no longer stops the cycle.
 - Spa (external control) learns its energy per day from the measured load, recent days weighing most (an existing setup's
   forecast moves from the configured kWh to the learned value; `spa_daily_kwh` is the start value).
 - The battery's round-trip efficiency is learned from its charged and discharged energy and the SoC change over the history

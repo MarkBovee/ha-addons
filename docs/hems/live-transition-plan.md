@@ -169,7 +169,8 @@ Plan en beslissingen: `phase3-saj-writer-plan.md`. Branch `feature/hems-saj-writ
 - **Schrijven staat op slot** (`WRITE_UNLOCKED = False`, `auto` niet kiesbaar).
 - Onafhankelijke review en audit gedaan (28 okt): P1 "label tegen de stroomrichting in" opgelost (geen vasthouden of afgeknepen PV meer in de planner, vangnet in de slotbouwer); P1 "watchdog ziet HEMS-uitval niet" opgelost door de voorwaarde weg te halen.
 - `Apply failed` van battery-api hoeft niet uitgezocht (Mark, 28 okt): HEMS heeft een eigen schrijver met terugmelding en retry. Bij de overdracht gaan battery-manager én battery-api uit (of battery-api in `simulation_mode`), zodat er één schrijver is.
-- Open voor fase 4 (P2 uit de audit): sloten wissen bij het verlaten van auto of uitschakelen van de hoofdschakelaar; de schrijftak van `_saj_round` in try/except.
+- Fase 4-code (2 nov, branch `feature/hems-phase4-write`): slot per module (`advice.WRITE_UNLOCKED_MODULES`, nog leeg; bij de overdracht `{"battery"}`), `auto` kiesbaar zodra het slot open is, sloten wissen bij het verlaten van auto, hoofdschakelaar uit, `disarm_all`, unload en na een herstart (opgeslagen `saj_owned`), schrijftak in try/except.
+- Nog open: de eigen grid-follow (`GridFollow`) is gebouwd maar niet aangesloten; in auto regelt de SAJ buiten de sloten zelf (Self-consumption, ongeveer 500 W naast 0).
 
 ### Voortgang fase 1 (27 okt 2026)
 
