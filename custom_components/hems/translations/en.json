@@ -379,28 +379,32 @@
         "name": "Battery mode",
         "state": {
           "dry_run": "Dry-run",
-          "advisory": "Advisory"
+          "advisory": "Advisory",
+          "auto": "Auto"
         }
       },
       "ev_mode": {
         "name": "EV mode",
         "state": {
           "dry_run": "Dry-run",
-          "advisory": "Advisory"
+          "advisory": "Advisory",
+          "auto": "Auto"
         }
       },
       "water_heater_mode": {
         "name": "Water heater mode",
         "state": {
           "dry_run": "Dry-run",
-          "advisory": "Advisory"
+          "advisory": "Advisory",
+          "auto": "Auto"
         }
       },
       "spa_mode": {
         "name": "Spa mode",
         "state": {
           "dry_run": "Dry-run",
-          "advisory": "Advisory"
+          "advisory": "Advisory",
+          "auto": "Auto"
         }
       }
     }

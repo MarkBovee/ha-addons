@@ -96,12 +96,19 @@ def advise(hass: HomeAssistant, output: EngineOutput, names: dict[str, str], tz:
     have = read_inputs(hass, names)
     follow = have.discharge[GRID_FOLLOW_SLOT - 1]
     target = wanted_inputs(schedule)
-    target = _with_follow(target, follow)
+    target = with_follow(target, follow)
     plan = plan_writes(have, target, names)
     return SajAdvice(schedule, target, tuple(mismatches(have, target)), len(plan.writes), missing)
 
 
-def _with_follow(target: InverterInputs, follow: SlotInput) -> InverterInputs:
+def in_window(schedule: Schedule, at: datetime, tz: tzinfo) -> bool:
+    """True when a planned charge or sale slot covers the moment `at` (local time of day): the grid-follow stays out of it."""
+    hhmm = at.astimezone(tz).strftime("%H:%M")
+    return any(slot.power_pct > 0 and slot.start <= hhmm < (slot.end if slot.end != "23:59" else "24:00")
+               for slot in (*schedule.charge, *schedule.discharge))
+
+
+def with_follow(target: InverterInputs, follow: SlotInput) -> InverterInputs:
     """The target with discharge slot 7 set to the grid-follow's slot, its mask bit and the mode to match."""
     discharge = target.discharge[:GRID_FOLLOW_SLOT - 1] + (follow,)
     mask = sum(1 << i for i, s in enumerate(discharge) if s.day_mask)
@@ -155,19 +162,26 @@ class GridFollow:
     inverter_power_w: float = 8000.0
     power_w: int = 0
 
-    def next_slot(self, now: datetime, grid_w: float | None, tz: tzinfo) -> SajSlot | None:
+    def next_slot(self, now: datetime, grid_w: float | None, tz: tzinfo, quarters: int = 1) -> SajSlot | None:
         """The slot after one step, or None when nothing changes. A power of 0 clears the slot (PV surplus or no house load)."""
         target = adaptive_power(grid_w, self.power_w, self.min_w, self.max_w)
         if target is None:
             return None
         self.power_w = target
-        start = now.astimezone(tz).replace(minute=now.astimezone(tz).minute - now.astimezone(tz).minute % 15, second=0, microsecond=0)
-        end = start + QUARTER
-        pct = max(0, min(100, round(target / self.inverter_power_w * 100)))
-        return SajSlot(DISCHARGE, start.strftime("%H:%M"), "23:59" if end.hour == 0 and end.minute == 0 else end.strftime("%H:%M"), pct,
-                       round(target / 4000, 3))
+        return self.slot_at(now, tz, quarters)
+
+    def slot_at(self, now: datetime, tz: tzinfo, quarters: int = 1) -> SajSlot:
+        """The slot at the present power from the running quarter on, `quarters` long (ends at midnight at the latest).
+
+        Two quarters let the slot reach past the quarter boundary, so the discharge does not stop while the next step moves it on."""
+        local = now.astimezone(tz)
+        start = local.replace(minute=local.minute - local.minute % 15, second=0, microsecond=0)
+        end = start + QUARTER * max(1, quarters)
+        pct = max(0, min(100, round(self.power_w / self.inverter_power_w * 100)))
+        return SajSlot(DISCHARGE, start.strftime("%H:%M"), "23:59" if end.date() != start.date() else end.strftime("%H:%M"), pct,
+                       round(self.power_w / 4000, 3))
 
     def plan(self, have: InverterInputs, slot: SajSlot, names: dict[str, str]) -> WritePlan:
         """The writes for the grid-follow slot alone: the other slots stay as the inverter has them."""
         follow = SlotInput(slot.start, slot.end, slot.power_pct, DAILY) if slot.power_pct else EMPTY
-        return plan_writes(have, _with_follow(have, follow), names)
+        return plan_writes(have, with_follow(have, follow), names)

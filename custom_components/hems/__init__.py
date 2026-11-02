@@ -10,7 +10,7 @@ from homeassistant.helpers.event import async_track_state_change_event, async_tr
 from datetime import timedelta
 from homeassistant.helpers.typing import ConfigType
 
-from .const import BUILD_FILE, CONF_SOC, DOMAIN, PLATFORMS, SAMPLE_SECONDS
+from .const import BUILD_FILE, CONF_SOC, DOMAIN, FOLLOW_SECONDS, PLATFORMS, SAMPLE_SECONDS
 from .services import async_register_services
 from .coordinator import HemsCoordinator
 from .panel import async_register_panel, async_unregister_panel
@@ -70,6 +70,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool
     entry.async_on_unload(async_track_utc_time_change(hass, _on_quarter, minute=(0, 15, 30, 45), second=PLAN_SECONDS))
     entry.async_on_unload(async_track_state_change_event(hass, [entry.data[CONF_SOC]], _on_soc_update))
     entry.async_on_unload(async_track_time_interval(hass, coordinator.async_sample, timedelta(seconds=SAMPLE_SECONDS)))
+    entry.async_on_unload(async_track_time_interval(hass, coordinator.async_follow_step, timedelta(seconds=FOLLOW_SECONDS)))
     entry.async_on_unload(coordinator.async_add_listener(lambda: async_dispatcher_send(hass, SIGNAL_UPDATE)))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await async_register_panel(hass)
@@ -78,7 +79,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HemsConfigEntry) -> bool:
-    """Unload the sensors; the quarter listener goes with the entry."""
+    """Unload the sensors and clear the SAJ slots HEMS wrote; the quarter listener goes with the entry."""
+    entry.runtime_data.closing = True                         # first: a follow step or write round queued behind the release writes nothing
+    await entry.runtime_data.async_release_saj("unload")   # a slot HEMS no longer manages would repeat every day
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         await entry.runtime_data.async_save_now()
