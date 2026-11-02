@@ -131,5 +131,6 @@ PLANS_FILE = "plans.jsonl"                 # one line per cycle: every planned q
 EVENTS_FILE = "events.jsonl"               # fetches, status changes, action changes, settings changes
 BUILD_FILE = "BUILD"                  # written by hems/deploy.py: the commit this code was deployed from
 STORE_VERSION = 1
+PRICE_HISTORY_DAYS = 7                   # past days of market prices for the typical peak and refill price (hems.terminal)
 FOLLOW_SECONDS = 60                      # grid-follow step, battery-manager's monitor_interval (the inverter needs about that to settle)
 SAMPLE_SECONDS = 10                      # live power is integrated into energy per quarter at this interval

@@ -9,6 +9,11 @@ earns, never lower than the default.
 
 A 'peak' is the mean of a day's best two hours (eight quarters) of export price: a 15 kWh sale takes about two hours at 8 kW, so the
 single best quarter would overstate what the sale earns.
+
+A 'low' is the mean of a day's cheapest two hours of import price: what refilling the battery typically costs. Energy kept past the
+horizon is worth at least that, not the cheapest price of today's horizon: when today's low is the cheapest moment of the week, the
+default would assume it comes back after the horizon and leave the battery empty (Mark, 2 Nov 2026: nights at 0.40-0.42, the day's low
+0.35 at 14:00, the battery ran empty at 23:00).
 """
 from datetime import date, tzinfo
 from statistics import median
@@ -31,8 +36,16 @@ def daily_peaks(prices: PriceSeries, tz: tzinfo) -> dict[date, float]:
     return {day: sum(sorted(values)[-TOP_QUARTERS:]) / TOP_QUARTERS for day, values in by_day.items() if len(values) >= MIN_DAY_QUARTERS}
 
 
+def daily_lows(prices: PriceSeries, tz: tzinfo) -> dict[date, float]:
+    """The refill price per local day (mean of its eight cheapest import quarters), for the days the series covers completely."""
+    by_day: dict[date, list[float]] = {}
+    for start, price in zip(prices.starts, prices.import_eur_kwh):
+        by_day.setdefault(start.astimezone(tz).date(), []).append(price)
+    return {day: sum(sorted(values)[:TOP_QUARTERS]) / TOP_QUARTERS for day, values in by_day.items() if len(values) >= MIN_DAY_QUARTERS}
+
+
 def reference_peak(peaks: Mapping[date, float], today: date, days: int = HISTORY_DAYS, min_days: int = MIN_HISTORY_DAYS) -> float | None:
-    """The median peak of the last `days` days before `today` that are known; None when fewer than `min_days` of them are."""
+    """The median of the last `days` days before `today` that are known (peaks or lows); None when fewer than `min_days` of them are."""
     recent = [peak for day, peak in peaks.items() if 0 < (today - day).days <= days]
     return median(recent) if len(recent) >= min_days else None
 
@@ -41,3 +54,4 @@ def terminal_value(peak: float, default: float, cfg: BatteryConfig) -> float:
     """EUR per stored kWh at the end of the horizon: what a kWh sold in a typical peak earns (net of the round trip and the margin and the haircut), at least `default`."""
     eff = cfg.round_trip_eff ** 0.5
     return max(default, eff * (peak - cfg.future_peak_haircut - cfg.min_profit_margin))
+

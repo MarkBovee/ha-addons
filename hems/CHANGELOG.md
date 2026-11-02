@@ -4,6 +4,14 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
 
 ## [Unreleased]
 
+### Changed
+- While tomorrow's prices are unknown, the battery is filled to 100 % in the day's cheapest quarters before today's most expensive
+  quarter; after that peak the plan decides freely (no forced refill at night). Once tomorrow's prices are known, no target applies.
+- Energy kept past the horizon is valued from the last 7 days of Nord Pool prices (typical peak, never below the typical refill
+  price), fetched once a day, instead of today's cheapest price.
+- The sell limit (`max_sell_hours`) applies per sell window (a run of quarters above the day's median export price), not per day:
+  a morning and an evening peak may each sell.
+
 ### Added
 - Write lock per module (`advice.WRITE_UNLOCKED_MODULES`, still empty): a module whose lock is open offers `auto` in its mode select.
 - HEMS clears the SAJ slots it wrote (masks and mode first, then every slot; Self-consumption) when the battery leaves auto, the

@@ -72,3 +72,25 @@ def test_stock_is_sold_in_a_modest_peak_by_default_and_kept_when_recent_peaks_we
     assert sold_default > 5 and sold_kept == 0
     assert default.trace["terminal"]["history_peak"] is None and kept.trace["terminal"]["history_peak"] == 0.60
     assert kept.trace["terminal"]["value"] > default.trace["terminal"]["value"] == default.trace["terminal"]["default"]
+
+
+
+
+def test_the_battery_is_full_before_todays_peak_while_tomorrow_is_unknown():
+    """Today only: 0.30, cheap 0.20 at 14-16, peak 0.50 at 18-20. The battery is full at 18:00 and not refilled after. With tomorrow known there is no target."""
+    today = date(2026, 10, 20)
+    now = datetime(2026, 10, 20, 10, tzinfo=LOCAL_TZ)
+    def run(days):
+        series = day_series(*((today + timedelta(days=k), 0.50, 96) for k in range(days)))
+        starts = [s for s in series.starts if s >= now]
+        imp = tuple(0.20 if 14 <= s.astimezone(LOCAL_TZ).hour < 16 else p for s, p in zip(series.starts, series.import_eur_kwh) if s >= now)
+        prices = PriceSeries(tuple(starts), imp, imp)
+        return plan_next(HorizonInputs(now, 5.0, prices, {s: 0.2 for s in starts}, {s: 0.0 for s in starts}, full_before_peak=True), CFG)
+    today_only = run(1)
+    peak = today_only.trace["terminal"]["full_by"]
+    assert peak == datetime(2026, 10, 20, 18, tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()
+    full = CFG.max_soc * CFG.capacity_kwh
+    at_peak = (datetime.fromisoformat(peak) - now).seconds // 900
+    assert today_only.plan.slots[at_peak - 1].soc_kwh == pytest.approx(full)
+    assert all(s.action != "charge" for s in today_only.plan.slots[at_peak:])
+    assert run(2).trace["terminal"]["full_by"] is None

@@ -6,6 +6,7 @@ Pure (no I/O, no clock): the caller supplies `now`, so the same code serves live
 """
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Mapping
 
 from .battery import BatteryConfig, Plan, Slot, floor_fraction, plan
@@ -41,7 +42,9 @@ class HorizonInputs:
     max_slots: int = 192                     # 48 h; the known prices usually end earlier
     terminal_value: float | None = None
     history_peak: float | None = None        # typical recent peak (hems.terminal.reference_peak): values energy kept past the horizon; None = the default
+    history_low: float | None = None         # typical recent refill price (median of hems.terminal.daily_lows): the floor of that value
     import_cap_kwh: float | None = None      # most grid energy per quarter the connection may deliver; None = no cap
+    full_before_peak: bool = False           # full before today's peak while tomorrow's prices are unknown (the live engine sets it)
 
 
 @dataclass(frozen=True)
@@ -68,19 +71,52 @@ def _build_slots(inputs: HorizonInputs, start: datetime) -> tuple[list[Slot], in
     return slots, missing
 
 
-def with_sell_limit(slots: list[Slot], start: datetime, cfg: BatteryConfig) -> list[Slot]:
-    """The slots with sales allowed only in each local day's best-paying quarters, `max_sell_hours` worth (0 = every quarter allowed).
+def sell_windows(slots: list[Slot], start: datetime) -> list[list[int]]:
+    """The sell windows of the horizon: per local day, each contiguous run of quarters whose export price is above that day's median.
 
-    The best by export price: that is where a sale earns most. Ties go to the earliest quarter. A day only partly in the horizon gets its
-    allowance from the quarters it has."""
+    A morning and an evening peak are two windows, split by the cheaper hours between them."""
+    days: dict = {}
+    for n in range(len(slots)):
+        days.setdefault((start + n * QUARTER).astimezone(LOCAL_TZ).date(), []).append(n)
+    windows: list[list[int]] = []
+    for idx in days.values():
+        mid = median(slots[n].export_price for n in idx)
+        run: list[int] = []
+        for n in idx:
+            if slots[n].export_price > mid:
+                run.append(n)
+                continue
+            if run:
+                windows.append(run)
+            run = []
+        if run:
+            windows.append(run)
+    return windows
+
+
+def with_sell_limit(slots: list[Slot], start: datetime, cfg: BatteryConfig) -> list[Slot]:
+    """The slots with sales allowed only in each sell window's best-paying quarters, `max_sell_hours` worth per window (0 = every quarter allowed).
+
+    Per window, not per day (Mark, 2 Nov 2026): a day with a morning and an evening peak may sell in both. The best by export price:
+    that is where a sale earns most; ties go to the earliest quarter."""
     if cfg.max_sell_hours <= 0:
         return slots
-    per_day = max(1, round(cfg.max_sell_hours / SLOT_H))
-    days: dict = {}
-    for n, slot in enumerate(slots):
-        days.setdefault((start + n * QUARTER).astimezone(LOCAL_TZ).date(), []).append(n)
-    allowed = {n for idx in days.values() for n in sorted(idx, key=lambda n: (-slots[n].export_price, n))[:per_day]}
+    per_window = max(1, round(cfg.max_sell_hours / SLOT_H))
+    allowed = {n for window in sell_windows(slots, start) for n in sorted(window, key=lambda n: (-slots[n].export_price, n))[:per_window]}
     return [s if n in allowed else replace(s, sell_allowed=False) for n, s in enumerate(slots)]
+
+
+def full_before_peak(start: datetime, slots: list[Slot]) -> int | None:
+    """The slot the battery must be full by while tomorrow's prices are unknown: today's most expensive quarter (Mark, 2 Nov 2026).
+
+    Planning on today alone ends the day empty. Battery-manager's way instead: fill to 100 % in the day's cheapest quarters before the
+    evening peak, then cover the house and sell. None when tomorrow is known (the plan decides freely) or no cheaper quarter comes first."""
+    end = start + len(slots) * QUARTER
+    if (end - QUARTER).astimezone(LOCAL_TZ).date() > start.astimezone(LOCAL_TZ).date():
+        return None
+    prices = [s.import_price for s in slots]
+    peak = prices.index(max(prices))
+    return peak if peak > 0 and min(prices[:peak]) < prices[peak] else None
 
 
 def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
@@ -91,11 +127,14 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
         return None
     slots = with_usage_floor(slots, cfg, start, LOCAL_TZ)
     slots = with_sell_limit(slots, start, cfg)
-    default = min(s.import_price for s in slots) * cfg.round_trip_eff ** 0.5
+    # what a stored kWh costs to buy again after the horizon: the horizon's cheapest price, but never below a typical recent refill
+    refill = max(min(s.import_price for s in slots), inputs.history_low or 0.0)
+    default = refill * cfg.round_trip_eff ** 0.5
     terminal = inputs.terminal_value
     if terminal is None and inputs.history_peak is not None:
         terminal = terminal_value(inputs.history_peak, default, cfg)
-    result = plan(slots, inputs.soc_kwh, cfg, terminal)
+    full_by = full_before_peak(start, slots) if inputs.full_before_peak else None
+    result = plan(slots, inputs.soc_kwh, cfg, terminal, full_by)
     first = result.slots[0]
     command = BatteryCommand(start, start + QUARTER, round(first.battery_kwh / SLOT_H * 1000))
     trace = {
@@ -109,7 +148,8 @@ def plan_next(inputs: HorizonInputs, cfg: BatteryConfig) -> Decision | None:
                     "at_floor": first.at_floor, "at_full": first.at_full, **best_later(result, start)},
         "segments": plan_segments(result, slots, start, inputs.soc_kwh, cfg.capacity_kwh),
         "terminal": {"default": round(default, 4), "history_peak": None if inputs.history_peak is None else round(inputs.history_peak, 4),
-                     "value": round(default if terminal is None else terminal, 4)},
+                     "history_low": None if inputs.history_low is None else round(inputs.history_low, 4),
+                     "value": round(default if terminal is None else terminal, 4), "full_by": None if full_by is None else (start + full_by * QUARTER).isoformat()},
     }
     earlier = dict(zip(inputs.prices.starts, inputs.prices.import_eur_kwh))
     past: list[float] = []

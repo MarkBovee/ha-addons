@@ -22,6 +22,7 @@ from .spa import SpaConfig, SpaPlan, external_spa_kwh, learned_daily_kwh, plan_s
 from .pvforecast import pv_kwh_per_quarter
 from .rolling import Decision, HorizonInputs, floor_to_quarter, plan_next, plan_shift
 from .slots import SLOT_H, slot_starts
+from .terminal import daily_lows, daily_peaks, reference_peak
 
 STATUS_OK = "ok"
 STATUS_NO_SOC = "no_soc"
@@ -64,6 +65,7 @@ class EngineInputs:
     spa_water_c: float | None = None                  # the spa's water temperature; None = unknown (no spa plan)
     outdoor_c: Mapping[datetime, float] | None = None # outdoor temperature by quarter start, for the spa's heat loss
     water_heater_w: Sequence[tuple[datetime, float]] = ()  # the water heater's own metered energy per hour (Wh = mean W); empty = not metered
+    price_history: MarketPrices | None = None         # market prices of the last days: the typical peak and refill price (hems.terminal)
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,21 @@ def _ev_plan(inputs: EngineInputs, settings: EngineSettings, prices: PriceSeries
     return plan_ev(prices, surplus_kwh_per_quarter(pv, load), inputs.now, settings.ev, state, settings.tz)
 
 
+def _history_series(inputs: EngineInputs, settings: EngineSettings) -> PriceSeries | None:
+    """The consumer prices of the last days, priced by the model; None without history."""
+    if inputs.price_history is None:
+        return None
+    return build_price_series(inputs.price_history, settings.prices, settings.latitude, settings.longitude)
+
+
+def _history_reference(history: PriceSeries | None, inputs: EngineInputs, settings: EngineSettings) -> tuple[float | None, float | None]:
+    """The typical peak (export) and refill price (import) of the last days before today; None without history."""
+    if history is None:
+        return None, None
+    today = inputs.now.astimezone(settings.tz).date()
+    return reference_peak(daily_peaks(history, settings.tz), today), reference_peak(daily_lows(history, settings.tz), today)
+
+
 def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | None = None) -> EngineOutput:
     """Plan the battery for the current quarter, or say why that is not possible."""
     cfg = settings.battery
@@ -191,7 +208,10 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
         if quarter in load:
             load[quarter] += kwh
     soc_kwh = inputs.soc_pct.value / 100 * cfg.capacity_kwh
-    decision = plan_next(HorizonInputs(inputs.now, soc_kwh, prices, load, pv, settings.max_slots, import_cap_kwh=_import_cap_kwh(settings)), cfg)
+    history = _history_series(inputs, settings)
+    peak, low = _history_reference(history, inputs, settings)
+    decision = plan_next(HorizonInputs(inputs.now, soc_kwh, prices, load, pv, settings.max_slots, history_peak=peak, history_low=low,
+                                       import_cap_kwh=_import_cap_kwh(settings), full_before_peak=True), cfg)
     if decision is None:
         return EngineOutput(STATUS_NO_PRICE_NOW, None, prices, load, pv,
                             {"status": STATUS_NO_PRICE_NOW, "price_source": source, "now": inputs.now.isoformat(),
