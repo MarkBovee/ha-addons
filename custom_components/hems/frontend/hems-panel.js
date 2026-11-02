@@ -780,9 +780,14 @@ const ICON_PATH = {
   spa: '<path d="M3 15h18v3a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"></path><path d="M8 11c0-1.5 1-1.5 1-3s-1-1.5-1-3M12 11c0-1.5 1-1.5 1-3s-1-1.5-1-3M16 11c0-1.5 1-1.5 1-3s-1-1.5-1-3"></path>',
 };
 const ICON = Object.fromEntries(Object.entries(ICON_PATH).map(([k, v]) => [k, icon(v)]));
-// Home Assistant's weather conditions on the few icons above
-const WEATHER_ICON = { sunny: "sun", "clear-night": "moon", partlycloudy: "cloudSun", cloudy: "cloud", rainy: "rain", pouring: "rain", "lightning-rainy": "storm", lightning: "storm", snowy: "snow", "snowy-rainy": "snow", hail: "snow", fog: "fog", windy: "cloud", "windy-variant": "cloud", exceptional: "cloud" };
-const WEATHER_LABEL = { sunny: "Sunny", "clear-night": "Clear", partlycloudy: "Partly cloudy", cloudy: "Cloudy", rainy: "Rain", pouring: "Heavy rain", "lightning-rainy": "Thunderstorms", lightning: "Lightning", snowy: "Snow", "snowy-rainy": "Sleet", hail: "Hail", fog: "Fog", windy: "Windy", "windy-variant": "Windy", exceptional: "Exceptional" };
+/** A WMO weather code (Open-Meteo) as a label and an icon; at night a clear or partly cloudy sky gets no sun. */
+function sky(code, isDay = true) {
+  const c = Number(code);
+  const [label, ic] = c === 0 ? ["Clear", isDay ? "sun" : "moon"] : c <= 2 ? [c === 1 ? "Mostly clear" : "Partly cloudy", isDay ? "cloudSun" : "cloud"]
+    : c === 3 ? ["Overcast", "cloud"] : c <= 48 ? ["Fog", "fog"] : c <= 57 ? ["Drizzle", "rain"] : c <= 67 ? ["Rain", "rain"]
+    : c <= 77 ? ["Snow", "snow"] : c <= 82 ? ["Showers", "rain"] : c <= 86 ? ["Snow showers", "snow"] : ["Thunderstorms", "storm"];
+  return { label, icon: ic };
+}
 
 /** A power entity in watts, whatever unit it reports (W or kW); null when unknown. */
 function watts(hass, entityId) {
@@ -790,13 +795,6 @@ function watts(hass, entityId) {
   if (v === null) return null;
   const unit = hass.states[entityId].attributes.unit_of_measurement;
   return unit === "kW" ? v * 1000 : v;
-}
-
-/** The weather entity: the `weather_entity` role when set, else the first weather entity in Home Assistant. */
-function weatherEntity(hass, s) {
-  const role = s && s.roles && s.roles.weather_entity;
-  if (role && hass.states[role]) return role;
-  return Object.keys(hass.states).find((id) => id.startsWith("weather.")) || null;
 }
 
 /**
@@ -852,20 +850,19 @@ function flowHtml(hass, p, s) {
     ${sinks.map((x, i) => node(x, 78, ky(i), 22)).join("")}</div></div>`;
 }
 
-/** Weather now and tomorrow from the weather entity and its daily forecast (subscribed by the panel). */
-function weatherHtml(hass, s, forecast) {
-  const id = weatherEntity(hass, s);
-  const st = id && hass.states[id];
-  if (!st) return `<div class="card span-2"><h2>Weather</h2><p class="quiet small">No weather entity in Home Assistant.</p></div>`;
-  const a = st.attributes;
-  const ic = (cond) => icon(ICON_PATH[WEATHER_ICON[cond] || "cloud"], 44, cond === "sunny" ? "var(--pv)" : "currentColor");
-  const tomorrowKey = localDayKey(Date.now() + 864e5);
-  const t = (forecast || []).find((f) => localDayKey(f.datetime) === tomorrowKey);
-  const wind = a.wind_speed === undefined ? "" : ` · wind ${num(a.wind_speed, 0)} ${esc(a.wind_speed_unit || "km/h")}`;
-  return `<div class="card wx">${ic(st.state)}<div><span class="quiet small">Now</span><b class="mono big">${num(a.temperature, 0)} ${esc(a.temperature_unit || "°C")}</b><span class="small">${esc(WEATHER_LABEL[st.state] || st.state)}${wind}</span></div></div>
-    <div class="card wx">${t ? ic(t.condition) : ic("cloudy")}<div><span class="quiet small">Tomorrow</span>
-      <b class="mono big">${t ? `${t.templow === undefined ? "" : num(t.templow, 0) + "–"}${num(t.temperature, 0)} ${esc(a.temperature_unit || "°C")}` : "—"}</b>
-      <span class="small">${t ? `${esc(WEATHER_LABEL[t.condition] || t.condition || "")}${t.precipitation ? ` · ${num(t.precipitation, 1)} mm` : ""}` : "waiting for the forecast"}</span></div></div>`;
+/** Weather now and tomorrow from HEMS's own Open-Meteo fetch: sky, cloud cover, temperature and (tomorrow) rain. */
+function weatherHtml(p) {
+  const w = p && p.weather;
+  if (!w || (!w.now && !w.tomorrow)) return `<div class="card span-2"><h2>Weather</h2><p class="quiet small">No weather yet (Open-Meteo).</p></div>`;
+  const card = (title, x, big, line) => {
+    if (!x) return `<div class="card wx">${icon(ICON_PATH.cloud, 44)}<div><span class="quiet small">${title}</span><b class="mono big">—</b></div></div>`;
+    const k = sky(x.code, x.is_day !== false);
+    return `<div class="card wx">${icon(ICON_PATH[k.icon], 44, k.icon === "sun" ? "var(--pv)" : "currentColor")}<div><span class="quiet small">${title}</span><b class="mono big">${big}</b><span class="small">${esc(k.label)} · ${line}</span></div></div>`;
+  };
+  const n = w.now, t = w.tomorrow;
+  return card("Now", n, n && n.temp_c !== null && n.temp_c !== undefined ? `${num(n.temp_c, 0)} °C` : "—", n ? `${num(n.cloud_pct, 0)} % cloud` : "")
+    + card("Tomorrow", t, t && t.temp_min_c !== null ? `${num(t.temp_min_c, 0)}–${num(t.temp_max_c, 0)} °C` : "—",
+      t ? `${num(t.cloud_pct, 0)} % cloud${t.precip_mm ? ` · ${num(t.precip_mm, 1)} mm` : ""}` : "");
 }
 
 /** Expected solar for tomorrow (or the rest of today before tomorrow's prices exist) as a total and bars per hour. */
@@ -952,7 +949,6 @@ class HemsPanel extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._view = viewOf(location.hash) || "overview";
     this._changesOnly = false;          // Decisions: only the quarters where the action changes
-    this._forecast = null;              // daily weather forecast, from weather/subscribe_forecast
     this._samples = [];                 // live battery and grid power, one per 10 s, the last 30 minutes ({t, batt, grid})
     this._hours = 24;
     this._period = "day";                 // Insights: day, week, month or year
@@ -971,7 +967,6 @@ class HemsPanel extends HTMLElement {
     this._hass = hass;
     TZ = tzOf(hass);
     store.attach(hass);
-    this._watchForecast();
     const dark = this._forceTheme ? this._forceTheme === "dark" : !!(hass.themes && hass.themes.darkMode);
     this.toggleAttribute("dark", dark);
     if (first) this._render();
@@ -1006,21 +1001,6 @@ class HemsPanel extends HTMLElement {
     const lp = this.shadowRoot && this.shadowRoot.getElementById("live-power"); if (lp) lp.innerHTML = liveChartsHtml(this._samples);
   }
 
-  /** Subscribe once to the daily forecast of the weather entity; it arrives on its own schedule and redraws only the weather row. */
-  _watchForecast() {
-    const id = weatherEntity(this._hass, store.settings);
-    if (!id || this._forecastFor === id || !this._hass.connection) return;
-    this._forecastFor = id;
-    if (this._forecastOff) { try { Promise.resolve(this._forecastOff()).catch(() => {}); } catch (e) { /* connection gone */ } }
-    this._hass.connection.subscribeMessage((msg) => {
-      this._forecast = msg.forecast || null;
-      const box = this.shadowRoot && this.shadowRoot.getElementById("weather");
-      if (box) box.innerHTML = weatherHtml(this._hass, store.settings, this._forecast) + sunHtml(store.payload);
-    }, { type: "weather/subscribe_forecast", forecast_type: "daily", entity_id: id })
-      .then((off) => { this._forecastOff = off; })
-      .catch(() => { this._forecastFor = null; });      // the entity has no daily forecast: the tomorrow card says so
-  }
-
   set narrow(v) { this._narrow = v; }
   set panel(v) { this._panel = v; }
   set route(v) { this._route = v; }
@@ -1041,8 +1021,6 @@ class HemsPanel extends HTMLElement {
     window.removeEventListener("resize", this._onResize);
     clearInterval(this._tick);
     if (this._ro) this._ro.disconnect();
-    if (this._forecastOff) { try { Promise.resolve(this._forecastOff()).catch(() => {}); } catch (e) { /* connection gone */ } }
-    this._forecastFor = null;
   }
 
   _go(view) { if (location.hash !== "#" + view) history.replaceState(null, "", "#" + view); this._view = view; this._sel = null; this._render(); }
@@ -1138,7 +1116,7 @@ class HemsPanel extends HTMLElement {
         <div class="card"><div class="card-head"><h2>Live power</h2><span class="quiet small">30 min</span></div><div id="live-power">${liveChartsHtml(this._samples)}</div>
           <div class="card-head" style="margin-top:18px"><h2>Phases</h2><span class="quiet small">max ${num((s && s.options && s.options.grid_limit_a) || 25, 0)} A</span></div><div id="phases">${phasesHtml(this._hass, s)}</div></div>
       </section>
-      <section class="grid-3" id="weather">${weatherHtml(this._hass, s, this._forecast)}${sunHtml(p)}</section>
+      <section class="grid-3">${weatherHtml(p)}${sunHtml(p)}</section>
       <section class="block chart">
         <div class="chart-head">
           <h2>Next ${this._hours} hours</h2><span class="quiet">per quarter</span>

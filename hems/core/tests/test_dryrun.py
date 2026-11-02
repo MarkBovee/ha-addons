@@ -69,6 +69,24 @@ def test_open_meteo_payload_is_rekeyed_to_quarter_starts():
     assert open_meteo_params(52.0, 5.0)["timezone"] == "UTC"
 
 
+def test_the_sky_now_and_tomorrow_come_from_the_hourly_block():
+    """Hourly weather code, cloud cover and daylight become 'now' and a daytime summary for tomorrow (Mark, 2 Nov 2026:
+    Buienradar said sunny at night)."""
+    from hems.weather import weather_summary
+    hours = [datetime(2026, 11, 2, 19, 0, tzinfo=timezone.utc) + timedelta(hours=h) for h in range(30)]
+    payload = {"minutely_15": {"time": ["2026-11-02T19:30"], "shortwave_radiation": [0.0], "temperature_2m": [12.0]},   # the 19:15 quarter
+               "hourly": {"time": [t.strftime("%Y-%m-%dT%H:%M") for t in hours],
+                          "weather_code": [0] * 12 + [3] * 10 + [61] * 8, "cloud_cover": [5] * 12 + [90] * 10 + [100] * 8,
+                          "is_day": [0] * 12 + [1] * 18, "precipitation": [0.0] * 22 + [0.5] * 8}}
+    weather = parse_open_meteo(payload, datetime(2026, 11, 2, 19, 20, tzinfo=timezone.utc))
+    summary = weather_summary(weather, datetime(2026, 11, 2, 19, 20, tzinfo=timezone.utc), LOCAL_TZ)
+    assert summary["now"] == {"code": 0, "is_day": False, "cloud_pct": 5, "temp_c": 12.0}, "a clear night, not sunny"
+    tomorrow = summary["tomorrow"]
+    assert tomorrow["code"] == 3 and tomorrow["precip_mm"] == 3.0, "six rain hours fall on tomorrow (local), two after midnight"
+    assert weather_summary(None, datetime(2026, 11, 2, 19, 20, tzinfo=timezone.utc), LOCAL_TZ) is None
+    assert parse_open_meteo({"minutely_15": payload["minutely_15"]}, weather.fetched_at).sky == {}, "an old response without hourly still parses"
+
+
 def test_weather_request_does_not_leak_the_exact_home_location():
     """The weather request carries coordinates rounded to about one kilometre."""
     params = open_meteo_params(52.090731, 5.121398)
