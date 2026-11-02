@@ -5,13 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-DEFAULT_ROUND_TRIP_EFFICIENCY = 0.90
+def charge_margin(expected_sell_price: float, charge_price: float) -> float:
+    """Return the margin per kWh: sell price minus charge price (no round-trip loss, Mark 2026-11-02)."""
 
-
-def charge_margin(expected_sell_price: float, charge_price: float, efficiency: float) -> float:
-    """Return net margin per kWh bought: sell price after losses minus charge price."""
-
-    return float(expected_sell_price) * float(efficiency) - float(charge_price)
+    return float(expected_sell_price) - float(charge_price)
 
 
 def intended_sell_price(
@@ -130,7 +127,6 @@ def evaluate_grid_charge(
     charge_end: datetime,
     discharge_windows: Sequence[Dict[str, Any]],
     charge_windows: Sequence[Dict[str, Any]],
-    efficiency: float,
     min_margin: float,
 ) -> Dict[str, Any]:
     """Decide whether a grid charge earns the required margin.
@@ -155,7 +151,7 @@ def evaluate_grid_charge(
             "margin": None,
         }
     expected, used = target
-    margin = charge_margin(expected, charge_price, efficiency)
+    margin = charge_margin(expected, charge_price)
     allowed = margin >= min_margin - 1e-9
     return {
         "allowed": allowed,
@@ -163,7 +159,7 @@ def evaluate_grid_charge(
             f"margin {margin:.3f} >= {min_margin:.3f}"
             if allowed
             else f"margin {margin:.3f} < {min_margin:.3f} "
-            f"(sell {expected:.3f} x{efficiency:.2f} - charge {charge_price:.3f})"
+            f"(sell {expected:.3f} - charge {charge_price:.3f})"
         ),
         "expected_sell_price": round(expected, 4),
         "margin": round(margin, 4),

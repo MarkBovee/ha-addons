@@ -1,4 +1,4 @@
-"""Task B: non-top-X grid charging needs sell * efficiency - charge >= margin."""
+"""Grid charging needs sell - charge >= margin (no round-trip loss in the margin since 2026-11-02)."""
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -18,41 +18,41 @@ def _sell(hours_from_now: float, price: float, minutes: int = 60):
 
 
 def test_charge_margin_formula():
-    assert charge_margin(0.401, 0.334, 0.90) == pytest.approx(0.0269)
-    assert charge_margin(0.422, 0.315, 0.90) == pytest.approx(0.0648)
+    assert charge_margin(0.401, 0.334) == pytest.approx(0.067)
+    assert charge_margin(0.422, 0.315) == pytest.approx(0.107)
 
 
-def test_incident_night_charge_is_rejected_for_both_target_windows():
-    """21:45 @0.334 -> 08:00 @0.401 and 22:45 @0.315 -> 19:00 @0.422 lose to the 10% loss."""
+def test_incident_night_charge_is_judged_on_the_plain_spread():
+    """21:45 @0.334 -> 08:00 @0.401 earns 0.067 < 0.10; 22:45 @0.315 -> 19:00 @0.422 earns 0.107."""
     night = {"start": T0, "end": T0 + timedelta(minutes=15), "avg_price": 0.334}
     morning = _sell(10.25, 0.401)
     verdict = evaluate_grid_charge(
         charge_price=0.334, charge_end=night["end"], discharge_windows=[morning],
-        charge_windows=[], efficiency=0.90, min_margin=0.10,
+        charge_windows=[], min_margin=0.10,
     )
     assert not verdict["allowed"]
-    assert verdict["margin"] == pytest.approx(0.027, abs=1e-3)
+    assert verdict["margin"] == pytest.approx(0.067, abs=1e-3)
 
     evening = _sell(21.25, 0.422)
     verdict = evaluate_grid_charge(
         charge_price=0.315, charge_end=T0 + timedelta(hours=2), discharge_windows=[evening],
-        charge_windows=[], efficiency=0.90, min_margin=0.10,
+        charge_windows=[], min_margin=0.10,
     )
-    assert not verdict["allowed"]
+    assert verdict["allowed"]
 
 
 def test_charge_with_enough_spread_is_allowed():
     verdict = evaluate_grid_charge(
         charge_price=0.20, charge_end=T0, discharge_windows=[_sell(3, 0.56)],
-        charge_windows=[], efficiency=0.90, min_margin=0.10,
+        charge_windows=[], min_margin=0.10,
     )
-    assert verdict["allowed"] and verdict["margin"] == pytest.approx(0.304)
+    assert verdict["allowed"] and verdict["margin"] == pytest.approx(0.36)
 
 
 def test_no_following_sell_window_means_no_charge():
     verdict = evaluate_grid_charge(
         charge_price=0.20, charge_end=T0, discharge_windows=[],
-        charge_windows=[], efficiency=0.90, min_margin=0.10,
+        charge_windows=[], min_margin=0.10,
     )
     assert not verdict["allowed"] and "no sell window" in verdict["reason"]
 
@@ -89,7 +89,7 @@ def test_gate_exempts_negative_and_past_windows():
 
 
 def test_gate_applies_to_top_x_windows_too():
-    """2026-10-19: tonight's top-X quarters at 0.343 for a 0.443 sale tomorrow morning earn 0.056 < 0.12."""
+    """2026-10-19: tonight's top-X quarters at 0.343 for a 0.443 sale tomorrow morning earn 0.100 < 0.12."""
     config = make_config(**{"heuristics.min_profit_threshold": 0.12})
     tonight = {"start": T0, "end": T0 + timedelta(hours=2), "avg_price": 0.343, "slots": [{"start": T0}]}
     morning_sale = _sell(10, 0.443, 120)
@@ -100,7 +100,7 @@ def test_gate_applies_to_top_x_windows_too():
 
     assert kept == [next_charge]
     assert records[0]["top_x"] and not records[0]["allowed"]
-    assert records[0]["margin"] == pytest.approx(0.056, abs=1e-3)
+    assert records[0]["margin"] == pytest.approx(0.100, abs=1e-3)
 
 
 def test_gate_judges_a_block_of_split_windows_against_the_sale_behind_it():
@@ -157,7 +157,7 @@ def test_gate_keeps_a_top_x_window_without_a_following_sale_but_not_a_spread_win
 
 def test_gate_defaults_follow_min_profit_and_options_override():
     window = {"start": T0, "end": T0 + timedelta(hours=1), "avg_price": 0.30, "slots": []}
-    sell = [_sell(2, 0.45)]  # 0.45 * 0.9 - 0.30 = 0.105
+    sell = [_sell(2, 0.405)]  # 0.405 - 0.30 = 0.105
 
     config = make_config()
     assert _gate(config, [window], sell)[0] == [window]  # 0.105 >= min_profit 0.10
@@ -169,11 +169,6 @@ def test_gate_defaults_follow_min_profit_and_options_override():
     config["heuristics"]["grid_charge_min_margin"] = 0.05
     assert _gate(config, [window], sell)[0] == [window]
 
-    config["heuristics"]["grid_charge_min_margin"] = 0.05
-    config["heuristics"]["round_trip_efficiency"] = 0.80  # 0.36 - 0.30 = 0.06 still ok
-    assert _gate(config, [window], sell)[0] == [window]
-    config["heuristics"]["round_trip_efficiency"] = 0.70  # 0.315 - 0.30 = 0.015
-    assert _gate(config, [window], sell)[0] == []
 
 
 def test_evening_charge_is_deferred_to_a_cheaper_night_before_the_sale():

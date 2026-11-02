@@ -2,6 +2,7 @@
 
 ## 0.9.11 — 2026-11-02
 - **Fix: No evening charge when a cheaper charge window comes before the next sale** — on 2026-11-02 the schedule charged at 21:45 (0.404) and 22:45 (0.408), while 01:00–06:15 at 0.396 came before the 08:00 sale. The overnight check only relabelled the current quarter and never touched the scheduled windows. The margin gate kept the windows because they were top-X and earned their margin. The gate now drops a charge window that has not started yet when later charge windows before the next sale are at least `charge_defer_min_saving` cheaper (new, default 0.005 EUR/kWh) and last at least as long together. The decision trace records the skip as `cheaper charge HH:MM @price comes before the next sale`.
+- **Breaking: The round-trip efficiency is gone from the margin check** — a grid charge now has to earn `sell − charge ≥ grid_charge_min_margin`, the plain spread. The option `heuristics.round_trip_efficiency` is removed; a value left in the add-on options is ignored. Set the margin to cover the losses you want to cover.
 - **Note:** `sell_wait_for_better_morning_*` only delays sales; it never decided when to charge.
 - **Tests:** `test_evening_charge_is_deferred_to_a_cheaper_night_before_the_sale`, `test_charge_is_kept_when_the_cheaper_window_is_too_short_or_after_the_sale`. 307 pass; the same 5 tests fail on master (Windows, with a `time.tzset` shim).
 
