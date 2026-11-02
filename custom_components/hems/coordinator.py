@@ -48,13 +48,15 @@ from .engine.windows import UNSOLD
 from .dashboard import build_payload
 from .advice import EVENT_APPLIED, MODE_AUTO, MODULES, WRITE_UNLOCKED_MODULES, Control, modes_for
 from .realised import EnergyCounters, Ledger, PlannedQuarter, QuarterPrice, quarter_start
-from .saj import SajAdvice, advise, async_apply, missing_entities, read_inputs
-from .engine.saj_protocol import InverterInputs, entity_names, plan_writes
+from .saj import GridFollow, SajAdvice, advise, async_apply, in_window, missing_entities, read_inputs, with_follow
+from .engine.saj_protocol import GRID_FOLLOW_SLOT, InverterInputs, entity_names, plan_writes
 from .const import SAJ_PREFIX
 from .engine.weather import OPEN_METEO_URL, Weather, open_meteo_params, parse_open_meteo
 
 _LOGGER = logging.getLogger(__name__)
 EMPTY_INPUTS = InverterInputs()                  # no slot, no mask, Self-consumption: what HEMS leaves when it lets go of the battery
+FOLLOW_SOC_MARGIN = 1.0                          # %: the grid-follow stops this far above the hard minimum (the SAJ stops there itself)
+FOLLOW_MAX_AGE = timedelta(seconds=120)          # a meter reading older than two follow steps is not stepped on
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,9 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         # master is off after one) are cleared on the first cycle: SAJ slots repeat every day and never expire.
         self.saj_owned = False
         self._saj_lock = asyncio.Lock()               # one SAJ writer at a time: a release never interleaves with a write round
+        self.closing = False                          # set at unload: no write of any kind after the last release
+        self.follow = GridFollow()                    # the own grid-follow on discharge slot 7, outside the planned windows
+        self._follow_start: str | None = None         # start of the follow slot HEMS last wrote ("HH:MM"), to move it on per quarter
 
     def _on(self, role: str) -> bool | None:
         """A binary role as a flag: True, False, or None when the role is not set or its entity has no usable state."""
@@ -583,7 +588,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
 
     def writing(self, module: str) -> bool:
         """True when the owner lets a module write: its lock open, the module in auto and the master switch on."""
-        return module in WRITE_UNLOCKED_MODULES and self.control.modes.get(module) == MODE_AUTO and self.control.armed
+        return (module in WRITE_UNLOCKED_MODULES and self.control.modes.get(module) == MODE_AUTO and self.control.armed
+                and not self.closing)
 
     def spa_water(self) -> float | None:
         """The spa's water temperature from its climate entity."""
@@ -694,7 +700,10 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             async with self._saj_lock:
                 if not self.may_write(output):                   # the owner let go while this cycle waited for the lock
                     return advice
-                plan = plan_writes(read_inputs(self.hass, self.saj_names), advice.target, self.saj_names)
+                have = read_inputs(self.hass, self.saj_names)
+                # keep the follow slot as it is now: the grid-follow may have stepped it since advise read the inverter
+                target = with_follow(advice.target, have.discharge[GRID_FOLLOW_SLOT - 1])
+                plan = plan_writes(have, target, self.saj_names)
                 await self._set_saj_owned(True)                  # before the first call: a round that stops halfway still left slots
                 result = await async_apply(self.hass, plan, self.saj_names)
             await self._log_event("write", module="battery", writes=result.written, ok=result.ok, error=result.error,
@@ -703,6 +712,66 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             _LOGGER.warning("HEMS SAJ write round failed: %s", err)
             await self._log_event("write", module="battery", ok=False, error=str(err))
         return advice
+
+    async def async_follow_step(self, now: datetime) -> None:
+        """One grid-follow step (every FOLLOW_SECONDS, as battery-manager's adaptive control): outside the planned charge and sale
+        slots, discharge slot 7 is stepped on the meter so the grid stays at 0 W; inside them, or at the SoC floor, it is cleared.
+
+        Only while HEMS writes the battery and the last cycle was healthy. Never raises."""
+        snap = self.data
+        if not self.writing("battery") or self._cycles < 2 or snap is None or snap.output.status != "ok" or snap.saj is None:
+            return
+        try:
+            async with self._saj_lock:
+                if not self.writing("battery"):
+                    return
+                await self._follow_locked(now, snap.saj)
+        except Exception as err:  # noqa: BLE001 - a failed step is logged, the next step tries again
+            _LOGGER.warning("HEMS grid-follow step failed: %s", err)
+
+    async def _follow_locked(self, now: datetime, advice: SajAdvice) -> None:
+        """The grid-follow step itself, under the SAJ lock."""
+        if missing_entities(self.hass, self.saj_names):
+            return
+        tz = dt_util.get_default_time_zone()
+        options = {**DEFAULT_OPTIONS, **self.config_entry.options}
+        self.follow.max_w = self.follow.inverter_power_w = int(float(options["max_power_kw"]) * 1000)
+        soc = self._power(CONF_SOC)
+        blocked = in_window(advice.schedule, now, tz) or soc is None or soc <= float(options["hard_min_soc_pct"]) + FOLLOW_SOC_MARGIN
+        if blocked:
+            # a planned slot runs, or the battery is at its floor: the follow slot goes, the planned slot does the work
+            if self.follow.power_w == 0 and self._follow_start is None:
+                return
+            self.follow.power_w = 0
+            slot = self.follow.slot_at(now, tz)
+        else:
+            quarters = 1 if in_window(advice.schedule, now + timedelta(minutes=15), tz) else 2
+            before = self.follow.power_w
+            slot = self.follow.next_slot(now, self._fresh_grid(now), tz, quarters)
+            if slot is None and self.follow.power_w > 0 and self.follow.slot_at(now, tz).start != self._follow_start:
+                slot = self.follow.slot_at(now, tz, quarters)          # a new quarter: move the slot on at the same power
+            if slot is None:
+                return
+        plan = self.follow.plan(read_inputs(self.hass, self.saj_names), slot, self.saj_names)
+        if not plan.writes:
+            self._follow_start = slot.start if slot.power_pct else None
+            return
+        await self._set_saj_owned(True)
+        result = await async_apply(self.hass, plan, self.saj_names)
+        if result.ok:
+            self._follow_start = slot.start if slot.power_pct else None
+        elif not blocked:
+            self.follow.power_w = before                       # the next step works from what the inverter still has
+        await self._log_event("follow", module="battery", power_w=self.follow.power_w, start=slot.start, end=slot.end, ok=result.ok,
+                              error=result.error)
+
+    def _fresh_grid(self, now: datetime) -> float | None:
+        """The meter (+ import), None when it has not reported for FOLLOW_MAX_AGE: a frozen meter must not drive the discharge."""
+        state = self.hass.states.get(self._entity(CONF_GRID) or "")
+        if state is None or now - state.last_reported > FOLLOW_MAX_AGE:
+            return None
+        reading = reading_from_state(state)
+        return None if reading is None else reading.value
 
     async def _set_saj_owned(self, owned: bool) -> None:
         """Remember whether HEMS's slots are on the inverter, and store it at once: a crash must neither lose HEMS's slots nor
@@ -746,6 +815,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             return False
         if ok:
             await self._set_saj_owned(False)
+            self.follow.power_w, self._follow_start = 0, None
         return ok
 
     # ------------------------------------------------------------------ realised result, control, alerts (dashboard side)

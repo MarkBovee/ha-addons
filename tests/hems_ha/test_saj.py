@@ -311,3 +311,76 @@ async def test_ownership_is_stored_at_once(hass: HomeAssistant, freezer, aioclie
     saj, coordinator = await _writing_entry(hass, freezer, aioclient_mock)
     data = await coordinator._store.async_load()
     assert data["saj_owned"] is True
+
+
+def _with_schedule(coordinator, schedule: Schedule) -> None:
+    """Pin the planned slots the grid-follow keeps out of."""
+    from dataclasses import replace
+    coordinator.data = replace(coordinator.data, saj=replace(coordinator.data.saj, schedule=schedule))
+
+
+async def _follow_entry(hass: HomeAssistant, freezer, aioclient_mock, schedule: Schedule = Schedule((), ())):
+    saj, coordinator = await _writing_entry(hass, freezer, aioclient_mock)
+    _with_schedule(coordinator, schedule)
+    return saj, coordinator
+
+
+async def test_the_grid_follow_steps_slot_7_on_the_meter_outside_the_planned_slots(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    """House draws 1200 W, nothing planned now: slot 7 gets 1200 W over the running and the next quarter; the meter at 0 writes nothing."""
+    saj, coordinator = await _follow_entry(hass, freezer, aioclient_mock)
+    hass.states.async_set("sensor.grid_power", "1200")
+    now = datetime.now(timezone.utc)
+    await coordinator.async_follow_step(now)
+    slot = read_inputs(hass, NAMES).discharge[6]
+    local = now.astimezone(ZoneInfo(hass.config.time_zone))
+    assert coordinator.follow.power_w == 1200 and slot.day_mask and slot.power_pct == 15
+    assert slot.start == f"{local.hour:02d}:{local.minute - local.minute % 15:02d}"
+    calls = len(saj.calls)
+    hass.states.async_set("sensor.grid_power", "20")
+    await coordinator.async_follow_step(now)
+    assert len(saj.calls) == calls
+
+
+async def test_the_grid_follow_moves_on_per_quarter_and_clears_in_a_planned_slot(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    saj, coordinator = await _follow_entry(hass, freezer, aioclient_mock)
+    tz = ZoneInfo(hass.config.time_zone)
+    hass.states.async_set("sensor.grid_power", "1200")
+    now = datetime.now(timezone.utc)
+    await coordinator.async_follow_step(now)
+    first = read_inputs(hass, NAMES).discharge[6].start
+    hass.states.async_set("sensor.grid_power", "0")
+    later = now + timedelta(minutes=15)
+    await coordinator.async_follow_step(later)
+    moved = read_inputs(hass, NAMES).discharge[6]
+    assert moved.start != first and moved.power_pct == 15, "same power, next quarter"
+    q = later.astimezone(tz)
+    start = f"{q.hour:02d}:{q.minute - q.minute % 15:02d}"
+    _with_schedule(coordinator, Schedule((SajSlot("charge", start, "23:59", 50, 4.0),), ()))
+    await coordinator.async_follow_step(later)
+    assert read_inputs(hass, NAMES).discharge[6].day_mask == 0 and coordinator.follow.power_w == 0
+
+
+async def test_the_grid_follow_stays_off_at_the_soc_floor_and_when_not_writing(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    saj, coordinator = await _follow_entry(hass, freezer, aioclient_mock)
+    hass.states.async_set("sensor.grid_power", "1200")
+    soc = "sensor.soc"
+    hass.states.async_set(soc, "5")
+    calls = len(saj.calls)
+    await coordinator.async_follow_step(datetime.now(timezone.utc))
+    assert len(saj.calls) == calls and coordinator.follow.power_w == 0
+    hass.states.async_set(soc, "60")
+    await coordinator.async_set_mode("battery", "advisory")
+    calls = len(saj.calls)
+    await coordinator.async_follow_step(datetime.now(timezone.utc))
+    assert len(saj.calls) == calls
+
+
+async def test_after_unload_starts_nothing_is_written_any_more(hass: HomeAssistant, freezer, aioclient_mock, battery_unlocked):
+    """Audit P1: a follow step queued behind the unload's release must not write slot 7 again."""
+    saj, coordinator = await _follow_entry(hass, freezer, aioclient_mock)
+    hass.states.async_set("sensor.grid_power", "1200")
+    coordinator.closing = True
+    assert await coordinator.async_release_saj("unload")
+    calls = len(saj.calls)
+    await coordinator.async_follow_step(datetime.now(timezone.utc))
+    assert len(saj.calls) == calls and not coordinator.saj_owned
