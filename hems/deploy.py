@@ -159,7 +159,9 @@ def ssh_command(target: Target, control_path: str | None, *remote: str, master: 
 
     A key is passed by path only; `batch` forbids any prompt, so an unauthorised key fails instead of asking.
     `control_path` None: no shared connection (Windows OpenSSH has no ControlMaster: "getsockname failed: Not a socket")."""
-    options = [] if control_path is None else ["-o", f"ControlPath={control_path}", "-o", "ControlMaster=yes" if master else "ControlMaster=no"]
+    # Windows OpenSSH against the HA SSH add-on fails with "Corrupted MAC on input" on the default MAC (2 Nov 2026); this one works.
+    options = ["-o", "MACs=hmac-sha2-256-etm@openssh.com"] if control_path is None else \
+        ["-o", f"ControlPath={control_path}", "-o", "ControlMaster=yes" if master else "ControlMaster=no"]
     if target.key:
         options += ["-i", target.key, "-o", "IdentitiesOnly=yes"]
     if batch:
