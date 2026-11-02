@@ -767,9 +767,11 @@ const ICON_PATH = {
   sun: '<circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"></path>',
   cloud: '<path d="M7 18h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 18z"></path>',
-  cloudSun: '<path d="M8 19h9a3.5 3.5 0 0 0 0-7 5 5 0 0 0-9.6 1.3A2.9 2.9 0 0 0 8 19z"></path><path d="M6 3v1.5M2.5 6.5H4M3.6 3.6l1 1M9.4 3.6l-1 1"></path>',
+  cloudSun: '<circle cx="8" cy="8" r="3"></circle><path d="M8 2.5v1M2.5 8h1M4.1 4.1l.7.7M11.9 4.1l-.7.7M4.1 11.9l.7-.7"></path><path d="M10 20h7a3.5 3.5 0 0 0 0-7 4.5 4.5 0 0 0-8.6 1.2A2.9 2.9 0 0 0 10 20z"></path>',
+  cloudMoon: '<path d="M8.5 3A4.5 4.5 0 1 0 13.6 9.2 3.6 3.6 0 0 1 8.5 3z"></path><path d="M10 20h7a3.5 3.5 0 0 0 0-7 4.5 4.5 0 0 0-8.6 1.2A2.9 2.9 0 0 0 10 20z"></path>',
+  drizzle: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M8 18.5v.5M12 20v.5M16 18.5v.5"></path>',
   rain: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M8 18l-1 3M12 18l-1 3M16 18l-1 3"></path>',
-  snow: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M8 19h.01M12 21h.01M16 19h.01"></path>',
+  snow: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M8 17.5v3.5M6.5 18.4l3 1.7M6.5 20.1l3-1.7M16 17.5v3.5M14.5 18.4l3 1.7M14.5 20.1l3-1.7"></path>',
   storm: '<path d="M7 15h10a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.3 3.3 0 0 0 7 15z"></path><path d="M12 15l-2 4h3l-2 4"></path>',
   fog: '<path d="M4 9h16M4 13h16M6 17h12"></path>',
   grid: '<path d="M8 21l4-18 4 18M6 8h12M5 13h14M9.5 13l5 8M14.5 13l-5 8"></path>',
@@ -783,8 +785,8 @@ const ICON = Object.fromEntries(Object.entries(ICON_PATH).map(([k, v]) => [k, ic
 /** A WMO weather code (Open-Meteo) as a label and an icon; at night a clear or partly cloudy sky gets no sun. */
 function sky(code, isDay = true) {
   const c = Number(code);
-  const [label, ic] = c === 0 ? ["Clear", isDay ? "sun" : "moon"] : c <= 2 ? [c === 1 ? "Mostly clear" : "Partly cloudy", isDay ? "cloudSun" : "cloud"]
-    : c === 3 ? ["Overcast", "cloud"] : c <= 48 ? ["Fog", "fog"] : c <= 57 ? ["Drizzle", "rain"] : c <= 67 ? ["Rain", "rain"]
+  const [label, ic] = c === 0 ? ["Clear", isDay ? "sun" : "moon"] : c <= 2 ? [c === 1 ? "Mostly clear" : "Partly cloudy", isDay ? "cloudSun" : "cloudMoon"]
+    : c === 3 ? ["Overcast", "cloud"] : c <= 48 ? ["Fog", "fog"] : c <= 57 ? ["Drizzle", "drizzle"] : c <= 67 ? ["Rain", "rain"]
     : c <= 77 ? ["Snow", "snow"] : c <= 82 ? ["Showers", "rain"] : c <= 86 ? ["Snow showers", "snow"] : ["Thunderstorms", "storm"];
   return { label, icon: ic };
 }
