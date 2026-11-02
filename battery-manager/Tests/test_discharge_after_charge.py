@@ -43,7 +43,7 @@ def test_morning_peak_has_its_own_budget_but_a_thin_margin_never_precharges_at_n
         p for p in schedule["charge"]
         if local_start(p).day == 7 and local_start(p).hour >= 21
     ]
-    assert night_charge == []  # 0.396 x efficiency - 0.31 is below the margin: no 21:45 / 22:45 grid charge
+    assert night_charge == []  # the spread after 0.31 is below the margin: no 21:45 / 22:45 grid charge
 
 
 def test_legacy_mode_still_picks_the_morning_peak(monkeypatch, amsterdam_tz):

@@ -167,7 +167,7 @@ def test_a_sale_of_an_earlier_day_does_not_switch_off_the_check_for_the_next_one
 
 
 def _plan_oct_20(monkeypatch, hhmm, soc, state=None, **overrides):
-    """Plan 2026-10-20 at local ``hhmm`` with the settings of that morning (60 % start SOC, margin 0.12, efficiency 0.9)."""
+    """Plan 2026-10-20 at local ``hhmm`` with the settings of that morning (60 % start SOC, margin 0.12)."""
     settings = {**USER_SETTINGS, "soc.sell_buffer_min_soc": 60, "heuristics.min_profit_threshold": 0.12, **overrides}
     return replay(monkeypatch, hhmm, soc=soc, remaining_solar=7.84, day=20, state=state,
                   import_curve=oct_20.import_curve(), export_curve=oct_20.export_curve(), config=make_config(**settings))
@@ -179,13 +179,13 @@ def _oct_20_state():
 
 
 def test_a_precharge_that_does_not_earn_the_margin_is_not_bought(monkeypatch, amsterdam_tz):
-    """49.8 % at 05:30: the 20 minutes cost 0.338 against a sale of 0.443 x 0.9 = 0.399, a margin of 0.061 under 0.12."""
+    """49.8 % at 05:30: the 20 minutes cost 0.338 against a sale of 0.443, a margin of 0.105 under 0.12."""
     state = _oct_20_state()
     schedule = _plan_oct_20(monkeypatch, "05:30", soc=49.8, state=state)
     assert _precharges(schedule) == []
     precharge = state.last_decision["precharge"]
     assert precharge["decision"] == "skipped" and not precharge["allowed"]
-    assert precharge["margin"] == pytest.approx(0.061, abs=1e-3)
+    assert precharge["margin"] == pytest.approx(0.105, abs=1e-3)
     sale = _morning_sale(schedule)
     assert sale is not None and local_start(sale).strftime("%H:%M") == "07:30"  # the sale goes on with what the battery holds
 
@@ -200,17 +200,17 @@ def test_the_precharge_is_judged_on_its_own_price_not_on_the_cheapest_price_of_t
 
 
 def test_the_top_up_at_0387_for_the_same_sale_is_not_bought_either(monkeypatch, amsterdam_tz):
-    """56 % at 07:00: 8 minutes at 0.387 against 0.443 x 0.9 is a margin of 0.012, with or without a looser efficiency."""
-    for settings in ({}, {"heuristics.round_trip_efficiency": 1.0, "heuristics.min_profit_threshold": 0.10}):
+    """56 % at 07:00: 8 minutes at 0.387 against 0.443 is a margin of 0.056, under 0.12 and 0.10."""
+    for settings in ({}, {"heuristics.min_profit_threshold": 0.10}):
         schedule = _plan_oct_20(monkeypatch, "07:00", soc=56.0, state=_oct_20_state(), **settings)
         assert _precharges(schedule) == []
 
 
 def test_a_precharge_that_earns_the_margin_is_still_bought(monkeypatch, amsterdam_tz):
-    """With efficiency 1.0 and margin 0.10 the 05:30 charge earns 0.443 - 0.338 = 0.105: restored to 60 % as before."""
+    """With margin 0.10 the 05:30 charge earns 0.443 - 0.338 = 0.105: restored to 60 % as before."""
     state = _oct_20_state()
     schedule = _plan_oct_20(monkeypatch, "05:30", soc=49.8, state=state,
-                            **{"heuristics.round_trip_efficiency": 1.0, "heuristics.min_profit_threshold": 0.10})
+                            **{"heuristics.min_profit_threshold": 0.10})
     precharges = _precharges(schedule)
     assert len(precharges) == 1 and precharges[0]["duration"] == 20
     assert state.last_decision["precharge"]["decision"] == "added" and state.last_decision["precharge"]["allowed"]
