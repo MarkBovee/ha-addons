@@ -80,7 +80,7 @@ def test_ssh_shares_one_connection_and_only_the_first_call_is_a_master():
 def test_without_a_control_path_ssh_has_no_shared_connection():
     """Windows OpenSSH has no ControlMaster ("getsockname failed: Not a socket", 2 Nov 2026): plain ssh calls there."""
     command = deploy.ssh_command(deploy.Target("h", "u"), None, "true", master=True)
-    assert command == ["ssh", "u@h", "true"]
+    assert command == ["ssh", "-o", "MACs=hmac-sha2-256-etm@openssh.com", "u@h", "true"]
 
 
 def test_tar_options_fit_gnu_tar_and_windows_bsdtar():
