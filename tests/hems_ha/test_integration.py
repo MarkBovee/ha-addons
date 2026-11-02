@@ -447,7 +447,8 @@ async def test_the_core_values_are_entities_with_series_for_a_chart(recorder_moc
     assert charge.state not in ("unknown", "unavailable") and datetime.fromisoformat(charge.attributes["end"]) > datetime.fromisoformat(charge.state)
     assert charge.attributes["kwh"] > 0 and charge.attributes["pv_kwh"] >= 0 and charge.attributes["load_kwh"] > 0
     assert {"power_w", "avg_price_eur_kwh", "soc_from_pct", "soc_to_pct", "pv_kwh", "load_kwh"} <= set(charge.attributes)
-    assert discharge.state not in ("unknown", "unavailable") and discharge.attributes["avg_price_eur_kwh"] > 0
+    # today's prices only: the plan ends full, so the sale may give way to keeping the battery charged; the sensor still says so
+    assert discharge.state != "unavailable" and "planned" in discharge.attributes
 
 
 async def test_the_window_sensors_are_unknown_when_the_plan_has_no_such_window(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):

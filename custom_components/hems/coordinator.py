@@ -33,7 +33,7 @@ from .engine.spa import SpaConfig, SpaTarget, spa_target
 from .engine.balancer import PhaseLoad, allocate_phases
 from .engine.contracts import MarketPrices
 from .engine.decision_log import cycle_line, event_line, plan_summary, plan_table, plan_tree, plan_windows, plan_words, settings_snapshot, window_tree
-from .engine.nordpool import NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
+from .engine.nordpool import DELIVERY_TZ, NORD_POOL_HEADERS, NORD_POOL_URL, delivery_dates, fetch_due, merge_days, nordpool_params, parse_day_ahead, tomorrow_quarters
 from .engine.dryrun import EngineInputs, EngineOutput, EngineSettings, step
 from .engine.balancer import phase_room_a
 from .engine.executor import AS_PLANNED, Execution, execute
@@ -50,7 +50,7 @@ from .advice import EVENT_APPLIED, MODE_AUTO, MODULES, WRITE_UNLOCKED_MODULES, C
 from .realised import EnergyCounters, Ledger, PlannedQuarter, QuarterPrice, quarter_start
 from .saj import GridFollow, SajAdvice, advise, async_apply, in_window, missing_entities, read_inputs, with_follow
 from .engine.saj_protocol import GRID_FOLLOW_SLOT, InverterInputs, entity_names, plan_writes
-from .const import SAJ_PREFIX
+from .const import PRICE_HISTORY_DAYS, SAJ_PREFIX
 from .engine.weather import OPEN_METEO_URL, Weather, open_meteo_params, parse_open_meteo
 
 _LOGGER = logging.getLogger(__name__)
@@ -205,6 +205,8 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         self._market_prices: dict[datetime, float] = {}
         self._market: MarketPrices | None = None
         self._market_tried_at: datetime | None = None
+        self._price_history: dict[datetime, float] = {}   # market prices of the last days (hems.terminal: typical peak and refill price)
+        self._price_history_on: date | None = None        # the local day the past days were last fetched (once a day)
         self._weather_tried_at: datetime | None = None
         self._weather_retry_used = False            # one quick retry per outage: an outage must not turn into a fetch every minute
         self._weather_retry_wanted = False
@@ -386,6 +388,41 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         await self._log_event("market", fetched=results, known_quarters=len(self._market_prices),
                               covers_until=self._market.covers_until().isoformat() if self._market else None)
 
+    async def _refresh_price_history(self, now: datetime) -> None:
+        """Keep the market prices of the last PRICE_HISTORY_DAYS days: what is already known is kept, a day that is missing or
+        incomplete is fetched, at most once per local day. A failure leaves the history as it is (the planner then uses its default)."""
+        options = {**DEFAULT_OPTIONS, **self.config_entry.options}
+        today = now.astimezone(DELIVERY_TZ).date()
+        self._price_history.update(self._market_prices)
+        if not options["nordpool_enabled"] or self._price_history_on == today:
+            return
+        self._price_history_on = today
+        oldest = today - timedelta(days=PRICE_HISTORY_DAYS)
+        have: dict[date, int] = {}
+        for start in self._price_history:
+            have[start.astimezone(DELIVERY_TZ).date()] = have.get(start.astimezone(DELIVERY_TZ).date(), 0) + 1
+        fetched = []
+        for day in (oldest + timedelta(days=n) for n in range(PRICE_HISTORY_DAYS)):
+            if have.get(day, 0) >= 88:
+                continue
+            try:
+                async with async_get_clientsession(self.hass).get(
+                        NORD_POOL_URL, params=nordpool_params(day, options["delivery_area"]), headers=NORD_POOL_HEADERS,
+                        timeout=aiohttp.ClientTimeout(total=20)) as response:
+                    response.raise_for_status()
+                    self._price_history.update(parse_day_ahead(await response.json(), options["delivery_area"]))
+                    fetched.append(day.isoformat())
+            except Exception as err:  # noqa: BLE001 - the history only refines a value; it must never stop a cycle
+                _LOGGER.warning("Nord Pool history for %s failed (%s)", day, err)
+        cutoff = datetime.combine(oldest, time(), DELIVERY_TZ).astimezone(timezone.utc)
+        self._price_history = {s: p for s, p in self._price_history.items() if s >= cutoff}
+        await self._log_event("price_history", fetched=fetched, known_quarters=len(self._price_history))
+
+    def price_history(self, now: datetime) -> MarketPrices | None:
+        """The market prices of the days before today, for the engine."""
+        midnight = datetime.combine(now.astimezone(DELIVERY_TZ).date(), time(), DELIVERY_TZ).astimezone(timezone.utc)
+        return merge_days([{s: p for s, p in self._price_history.items() if s < midnight}], now)
+
     async def _refresh_weather(self, now: datetime, settings: EngineSettings) -> None:
         """Fetch Open-Meteo at most every WEATHER_REFRESH; keep the last good copy for WEATHER_MAX_AGE."""
         if not {**DEFAULT_OPTIONS, **self.config_entry.options}["weather_enabled"]:
@@ -534,6 +571,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
         settings = settings_from_entry(self.config_entry, self.hass.config.latitude, self.hass.config.longitude)
         await self._refresh_history(now)
         await self._refresh_market(now)
+        await self._refresh_price_history(now)
         await self._refresh_weather(now, settings)
         gain = self._calibrated_gain(settings)
         settings = replace(settings, pv_gain_w_per_wm2=gain, ev=self.ev_ceiling_a(settings))
@@ -551,7 +589,7 @@ class HemsCoordinator(DataUpdateCoordinator[HemsSnapshot]):
             load_history_w=self._history, ghi_w_m2=self._weather.ghi_w_m2 if self._weather else None, market=self._market,
             ev=self.ev_state(settings) if settings.ev.enabled else None, legionella_last=self.legionella_last(),
             spa_water_c=self.spa_water() if settings.spa.enabled else None, outdoor_c=self._weather.temperature_c if self._weather else None,
-            water_heater_w=self._heater_history)
+            water_heater_w=self._heater_history, price_history=self.price_history(now))
         previous = self._previous
         output = await self.hass.async_add_executor_job(step, inputs, settings, previous)
         output.trace["learned"] = self._learned_record(output)

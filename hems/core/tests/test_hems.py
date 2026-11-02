@@ -393,3 +393,15 @@ def test_the_water_heater_runs_are_learned_from_its_own_meter():
     assert hourly_from_sum([(t0, 5000.0), (t0 + timedelta(hours=1), 0.0)]) == [(t0 + timedelta(hours=1), 0.0)], "a reset is 0"
     assert hourly_from_sum([(t0, 0.0), (t0 + timedelta(hours=3), 900.0)]) == [], "across a gap: no hour"
     assert without_metered([(t0, 2500.0), (t0 + timedelta(hours=1), 300.0)], [(t0, 2000.0), (t0 + timedelta(hours=1), 900.0)]) == [(t0, 500.0), (t0 + timedelta(hours=1), 0.0)]
+
+
+def test_two_peaks_in_a_day_are_two_sell_windows_with_an_hour_each():
+    """Mark, 2 Nov 2026: one hour per sell window. A morning and an evening peak split by a cheap midday: four quarters in each."""
+    from datetime import datetime, timezone
+    from hems.rolling import with_sell_limit
+    cfg = BatteryConfig(max_sell_hours=1.0)
+    exports = [0.30] * 4 + [0.50, 0.52, 0.55, 0.53, 0.51, 0.50] + [0.30] * 6 + [0.60, 0.62, 0.65, 0.66, 0.64, 0.61] + [0.30] * 4
+    slots = [Slot(0.30, e, 0.1, 0.0) for e in exports]
+    start = datetime(2026, 11, 2, 6, 0, tzinfo=timezone.utc)
+    allowed = [n for n, s in enumerate(with_sell_limit(slots, start, cfg)) if s.sell_allowed]
+    assert allowed == [5, 6, 7, 8, 17, 18, 19, 20]

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from hems.slots import SLOT_H
 
 INF = float("inf")
+FULL_PENALTY = 10.0              # EUR per kWh short of full at the `full_by` slot: far above any price, so full wins when it can be reached
 REASON_DIGITS = 3                # the reason text prints prices with this many decimals; its comparison is judged on what it prints
 
 
@@ -206,13 +207,15 @@ def self_consumption_step(net_kwh: float, k: int, eff: float, step: float, limit
 
 
 def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
-         terminal_value: float | None = None) -> Plan:
+         terminal_value: float | None = None, full_by: int | None = None) -> Plan:
     """Optimal battery schedule. terminal_value: EUR/kWh credit for energy left at
     the end of the horizon (default: cheapest import price in horizon * eff, i.e.
     what it would cost to refill). The floor may differ per slot (Slot.reserve_soc);
     The floor is a sell floor: below it the battery still covers the house (self-consumption) down to hard_min_soc, it only
     stops exporting. Every slot is self-consumption unless the plan charges more (a charge window) or discharges more (a sale);
-    there is no 'hold' while the house imports, the battery always keeps the meter at 0 W outside a window."""
+    there is no 'hold' while the house imports, the battery always keeps the meter at 0 W outside a window.
+    full_by: the battery must be full at the start of this slot (a penalty per kWh short, so a plan exists when full cannot be reached);
+    the plan then fills it in the cheapest quarters before it."""
     n = len(slots)
     eff = cfg.round_trip_eff ** 0.5
     step = cfg.step_kwh
@@ -263,7 +266,7 @@ def plan(slots: list[Slot], soc_kwh: float, cfg: BatteryConfig,
                 c += value[t + 1][k2]
                 if c < best:
                     best, best_d = c, d
-            value[t][k] = best
+            value[t][k] = best + (FULL_PENALTY * (hi - k) * step if t == full_by else 0.0)
             choice[t][k] = best_d
 
     out = Plan()

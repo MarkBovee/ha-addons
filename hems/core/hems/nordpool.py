@@ -1,9 +1,9 @@
 """Nord Pool day-ahead prices: request parameters, parsing and the refresh policy (pure; HTTP lives in the HA layer).
 
 The public data portal answers with 96 quarter-hour entries per delivery day (CET date); tomorrow's day is
-HTTP 204 until it is published, around 13:00 local. Prices are EUR/MWh in the payload and EUR/kWh everywhere else.
+HTTP 204 until it is published, around 12:45 local. Prices are EUR/MWh in the payload and EUR/kWh everywhere else.
 """
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -14,7 +14,7 @@ NORD_POOL_URL = "https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices"
 # The public portal only answers requests that look like its own web app; the same headers the energy-prices add-on sends.
 NORD_POOL_HEADERS = {"Origin": "https://data.nordpoolgroup.com", "Referer": "https://data.nordpoolgroup.com/"}
 DELIVERY_TZ = ZoneInfo("Europe/Amsterdam")          # delivery days are CET dates
-PUBLISH_HOUR = 13                                    # tomorrow is expected from this local hour
+PUBLISH_FROM = time(12, 30)                          # tomorrow is asked for from this local time: Nord Pool publishes around 12:45, 204 before that
 RETRY_AFTER = timedelta(minutes=10)
 
 
@@ -52,13 +52,13 @@ def wanted_until(now: datetime) -> datetime:
     """End (UTC) of the delivery days that should be known at `now`: today, plus tomorrow from the publication hour."""
     local = now.astimezone(DELIVERY_TZ)
     midnight = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return (midnight + timedelta(days=1) if local.hour >= PUBLISH_HOUR else midnight).astimezone(timezone.utc)
+    return (midnight + timedelta(days=1) if local.time() >= PUBLISH_FROM else midnight).astimezone(timezone.utc)
 
 
 def delivery_dates(now: datetime) -> list[date]:
     """Delivery dates to request at `now`: today, plus tomorrow from the publication hour."""
     local = now.astimezone(DELIVERY_TZ)
-    return [local.date()] + ([local.date() + timedelta(days=1)] if local.hour >= PUBLISH_HOUR else [])
+    return [local.date()] + ([local.date() + timedelta(days=1)] if local.time() >= PUBLISH_FROM else [])
 
 
 def tomorrow_quarters(starts: Iterable[datetime], now: datetime) -> int:
