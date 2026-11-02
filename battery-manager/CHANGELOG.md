@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.11 — 2026-11-02
+- **Fix: No evening charge when a cheaper charge window comes before the next sale** — on 2026-11-02 the schedule charged at 21:45 (0.404) and 22:45 (0.408), while 01:00–06:15 at 0.396 came before the 08:00 sale. The overnight check only relabelled the current quarter and never touched the scheduled windows. The margin gate kept the windows because they were top-X and earned their margin. The gate now drops a charge window that has not started yet when later charge windows before the next sale are at least `charge_defer_min_saving` cheaper (new, default 0.005 EUR/kWh) and last at least as long together. The decision trace records the skip as `cheaper charge HH:MM @price comes before the next sale`.
+- **Note:** `sell_wait_for_better_morning_*` only delays sales; it never decided when to charge.
+- **Tests:** `test_evening_charge_is_deferred_to_a_cheaper_night_before_the_sale`, `test_charge_is_kept_when_the_cheaper_window_is_too_short_or_after_the_sale`. 307 pass; the same 5 tests fail on master (Windows, with a `time.tzset` shim).
+
 ## 0.9.10 — 2026-10-30
 - **Fix: A running sale is no longer paused by the cached sell-buffer target** — on 2026-10-30 the 07:15 sale started at 83% and was paused at 07:56 (`SOC sell-buffer protection (59.6% < 60.0%)`, `3 charge + 0 discharge`). The target is computed before the sale and cached, and the monitor kept applying it while the sale drained the battery below it by design. Same gap as 0.9.6, now in the monitor. `_get_active_sell_buffer_soc` returns no target while a planned sell window is running (gaps between windows of one sale included) and the SOC is above `conservative_soc`; at or below it the target holds adaptive again, as before.
 - **Note:** `Live adaptive price band has no active window - regenerating rolling schedule` every quarter is the intended rolling regeneration of the 15-minute adaptive window, not a fault.
