@@ -79,7 +79,6 @@ options:
     charge_spread_enabled: true
     charge_spread_max_price_delta: 0.01
     min_profit_threshold: 0.1
-    round_trip_efficiency: 0.9
     margin_basis: day_min_import
     discharge_after_charge_only: true
     overnight_wait_threshold: 0.02
@@ -188,7 +187,6 @@ schema:
     charge_spread_max_price_delta: float(0,1)?
     min_profit_threshold: float(0,2)
     grid_charge_min_margin: float(0,2)?
-    round_trip_efficiency: float(0.5,1)?
     margin_basis: list(day_min_import|solar_export)?
     discharge_after_charge_only: bool?
     overnight_wait_threshold: float(0,1)

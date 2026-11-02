@@ -22,7 +22,6 @@ from shared.ha_mqtt_discovery import MqttDiscovery
 from .decision_trace import fit_attributes, get_trace_path, summarize, write_trace
 from .ev_charger_monitor import should_pause_discharge
 from .margin import (
-    DEFAULT_ROUND_TRIP_EFFICIENCY,
     cheaper_window_ahead,
     evaluate_grid_charge,
     window_has_exact_slot,
@@ -156,7 +155,6 @@ DEFAULT_CONFIG = {
         "charge_spread_enabled": True,
         "charge_spread_max_price_delta": 0.02,
         "min_profit_threshold": 0.1,
-        "round_trip_efficiency": DEFAULT_ROUND_TRIP_EFFICIENCY,
         "margin_basis": "day_min_import",
         "discharge_after_charge_only": True,
         "overnight_wait_threshold": 0.02,
@@ -1934,15 +1932,13 @@ def _parse_start_set(starts: set[str]) -> set[datetime]:
     return parsed
 
 
-# Read the margin rule every grid charge is held to: (round-trip efficiency, minimum margin per kWh).
-def _grid_charge_margin_settings(config: Dict[str, Any]) -> tuple[float, float]:
-    """Return ``(efficiency, min_margin)``; the margin falls back to ``min_profit_threshold``."""
+# Read the minimum margin per kWh every grid charge is held to.
+def _grid_charge_min_margin(config: Dict[str, Any]) -> float:
+    """Return the minimum margin; it falls back to ``min_profit_threshold``."""
 
     heur = config["heuristics"]
-    efficiency = float(heur.get("round_trip_efficiency", DEFAULT_ROUND_TRIP_EFFICIENCY))
     min_margin = heur.get("grid_charge_min_margin")
-    min_margin = float(heur.get("min_profit_threshold", 0.1) if min_margin is None else min_margin)
-    return efficiency, min_margin
+    return float(heur.get("min_profit_threshold", 0.1) if min_margin is None else min_margin)
 
 
 # Hold the pre-sell charge to the margin rule, priced on the quarters it would really run in.
@@ -1961,7 +1957,7 @@ def _evaluate_precharge(
     measured from where the charge starts, because a charge that starts now may still run when the sale begins.
     """
 
-    efficiency, min_margin = _grid_charge_margin_settings(config)
+    min_margin = _grid_charge_min_margin(config)
     charge_price = average_price_between(import_curve, precharge_start, precharge_until)
     if charge_price is None:
         return {
@@ -1975,7 +1971,6 @@ def _evaluate_precharge(
         charge_end=precharge_start,
         discharge_windows=upcoming.get("discharge", []),
         charge_windows=upcoming.get("charge", []),
-        efficiency=efficiency,
         min_margin=min_margin,
     )
     return {**verdict, "charge_price": round(charge_price, 4)}
@@ -1991,7 +1986,7 @@ def _apply_grid_charge_margin_gate(
     """Drop grid charge windows that earn too little margin on the sale they are meant for.
 
     A window is kept only when
-    ``sell * round_trip_efficiency - charge_price >= grid_charge_min_margin`` for
+    ``sell - charge_price >= grid_charge_min_margin`` for
     the sell windows following it, before the next charge window. That holds for
     top-X windows too: the cheapest hours left in the evening are not worth buying
     for a sale the spread does not pay for (2026-10-19: 0.343 tonight for 0.443
@@ -2001,7 +1996,7 @@ def _apply_grid_charge_margin_gate(
     Negative-price windows and windows that already ended are never gated.
     """
 
-    efficiency, min_margin = _grid_charge_margin_settings(config)
+    min_margin = _grid_charge_min_margin(config)
     defer_min_saving = float(config.get("heuristics", {}).get("charge_defer_min_saving", 0.005) or 0.0)
 
     kept: List[Dict[str, Any]] = []
@@ -2046,7 +2041,6 @@ def _apply_grid_charge_margin_gate(
             charge_end=window["end"],
             discharge_windows=upcoming.get("discharge", []),
             charge_windows=upcoming.get("charge", []),
-            efficiency=efficiency,
             min_margin=min_margin,
         )
         if is_top_x and verdict["expected_sell_price"] is None:
