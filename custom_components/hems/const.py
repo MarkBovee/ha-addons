@@ -48,6 +48,7 @@ DEFAULT_OPTIONS = {
     "reserve_soc_pct": 30.0,                   # sell floor minimum: a sale stops here, below it the battery only covers the house
     "reserve_max_soc_pct": 60.0,               # sell floor maximum: the floor follows the expected use until a refill (hems.reserve); = minimum turns that off
     **{f"reserve_soc_{day}_pct": 0.0 for day in ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")},  # sell floor minimum per weekday; 0 = the general minimum
+    "max_soc_pct": 99.0,                       # charge ceiling: the planner never charges above this; at least the sell floor maximum
     "reserve_load_factor": 1.3,                # safety factor on the load forecast for that floor
     "max_sell_quarters": 0,                    # sell in at most this many quarters per sell window, the best-paying ones; 0 = no limit
     "round_trip_eff": 0.82,                    # the start value: HEMS learns it from the battery's charged and discharged kWh (hems.learn)

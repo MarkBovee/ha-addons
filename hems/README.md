@@ -46,7 +46,9 @@ HEMS is not in HACS yet. Install it by hand:
 1. Copy `custom_components/hems/` into `/config/custom_components/hems/` on your Home Assistant.
 2. Restart Home Assistant.
 3. Settings → Devices & services → Add integration → **HEMS**, and pick your entities.
-4. Open **HEMS** in the sidebar. The gear holds the settings, the mode per module and the Energy dashboard setup.
+4. Open **HEMS** in the sidebar. The gear holds the planning settings (sell floor, margins, water heater, EV targets and deadlines,
+   spa comfort), the mode per module and the Energy dashboard setup. The installation and the contract (battery, prices, grid,
+   module switches) stay in Settings → Devices & services → HEMS → Configure.
 
 ## Safety
 

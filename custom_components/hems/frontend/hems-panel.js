@@ -12,7 +12,7 @@
  * URL options: ?kiosk (one screen for the wall tablet), ?theme=dark|light (force a theme), #overview|decisions|insights|settings (older hashes still land on the right view).
  */
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 const Q_MS = 15 * 60 * 1000;
 
 /* ------------------------------------------------------------------ store */
@@ -953,6 +953,10 @@ class HemsPanel extends HTMLElement {
     this._sel = null;
     this._confirm = false;
     this._details = false;
+    this._draft = {};                   // Settings: edited values not saved yet, by key
+    this._errors = {};                  // Settings: the server's errors per key after a save
+    this._undo = null;                  // Settings: the values before the last save ({section, values}), for one undo
+    this._openSections = new Set(["module_battery"]);
     const q = new URLSearchParams(location.search);
     this._kiosk = q.has("kiosk");
     this._forceTheme = q.get("theme") || (this._kiosk ? "dark" : null);
@@ -1038,6 +1042,10 @@ class HemsPanel extends HTMLElement {
 
   _render() {
     if (!this._hass) return;
+    // A pushed update re-renders the whole view; while a settings input has focus that would eat the user's typing, so wait for blur.
+    const focused = this.shadowRoot && this.shadowRoot.activeElement;
+    if (focused && /^(INPUT|SELECT)$/.test(focused.tagName) && focused.closest("[data-editor]")) { this._renderPending = true; return; }
+    this._renderPending = false;
     if (this._armTimer) { clearTimeout(this._armTimer); this._armTimer = null; }      // a re-render ends a hold in progress
     const p = store.payload, s = store.settings;
     let body;
@@ -1064,6 +1072,7 @@ class HemsPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => { this._changesOnly = b.dataset.filter === "changes"; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-period]").forEach((b) => b.addEventListener("click", () => { this._period = b.dataset.period; this._render(); }));
     this._bindActions();
+    this._bindEditor();
     this._drawCharts();
   }
 
@@ -1296,14 +1305,139 @@ class HemsPanel extends HTMLElement {
         <div class="row"><button type="button" class="btn" data-act="energy-preview">Check</button>${this._energy && this._energy.changes.length && this._energy.preview ? `<button type="button" class="btn pri" data-act="energy-apply">Add ${this._energy.changes.length}</button>` : ""}</div>
         ${this._energy ? `<p class="quiet small">${this._energy.changes.length ? (this._energy.saved ? "Added: " : "Would add: ") + this._energy.changes.map(esc).join(" · ") : "Nothing missing: the Energy dashboard already has solar, battery and prices."}</p>` : ""}
       </section>
+      ${this._editorHtml(s)}
       <section class="block stack">
-        <div class="spread"><h2>Settings</h2>${configureLink(s)}</div>
+        <div class="spread"><h2>Installation and contract</h2>${configureLink(s)}</div>
+        <p class="quiet small">These are set in Home Assistant (Settings → Devices &amp; services → HEMS → Configure).</p>
         ${settingsInWords(s.options).map(([h, t]) => `<div><b>${h}</b><p class="quiet small" style="margin:2px 0 0">${t}</p></div>`).join("")}
       </section>
       <details class="block"><summary>Entities</summary><div class="scroll-x" style="margin-top:12px"><table>
         ${Object.entries(s.roles).sort().map(([k, v]) => `<tr><td class="mono">${esc(k.replace(/_entity$|_entities$/, ""))}</td><td class="mono">${esc(Array.isArray(v) ? v.join(", ") : String(v))}</td><td class="mono small">${typeof v === "string" && v.includes(".") ? (this._hass.states[v] ? esc(this._hass.states[v].state) : `<span class="c-fault">missing</span>`) : ""}</td></tr>`).join("")}
       </table></div></details>
       <p class="quiet small mono">panel ${VERSION} · HEMS build ${esc((p && p.meta.build) || "?")}</p>`;
+  }
+
+  /* ---------------- Settings editor: the planning settings (hems/settings/update); the installation stays in Home Assistant */
+  _value(s, key) { return key in this._draft ? this._draft[key] : s.options[key]; }
+
+  _editorHtml(s) {
+    if (!s.editable) return "";
+    const admin = !!(this._hass.user && this._hass.user.is_admin);
+    return `<section class="block stack" data-editor>
+        <div class="spread"><h2>Planning</h2>${this._undo ? `<button type="button" class="btn" data-undo>Undo last save</button>` : ""}</div>
+        <p class="quiet small">Changes apply at once: HEMS replans as soon as you save.${admin ? "" : " Only an administrator can change them."}</p>
+        ${s.editable.map((part) => this._sectionHtml(s, part, admin)).join("")}
+      </section>`;
+  }
+
+  _sectionHtml(s, part, admin) {
+    const name = part.section;
+    const keys = part.settings.map((x) => x.key);
+    const dirty = keys.filter((k) => k in this._draft && this._draft[k] !== s.options[k]);
+    const title = ((s.labels && s.labels.sections[name]) || name).replace(/^(Module|Base): /, "");
+    const plain = part.settings.filter((x) => !(name === "module_ev" && x.kind === "time") && !/^reserve_soc_[a-z]+day_pct$/.test(x.key));
+    return `<details class="setsec" data-section="${name}" ${this._openSections.has(name) ? "open" : ""}>
+        <summary><span>${esc(title)}</span>${dirty.length ? `<span class="tag warn">${dirty.length} unsaved</span>` : ""}</summary>
+        ${name === "module_battery" ? socBarHtml(s, (k) => this._value(s, k)) + learnedHtml(s) : ""}
+        <div class="setgrid">${plain.map((x) => this._inputHtml(s, x, admin)).join("")}</div>
+        ${name === "module_battery" ? this._weekHtml(s, "reserve_soc_%s_pct", "number", "Sell floor minimum per weekday (%; 0 = the general minimum)", admin) : ""}
+        ${name === "module_ev" ? this._weekHtml(s, "ev_deadline_%s", "time", "Deadline per weekday (empty = no deadline that day)", admin) : ""}
+        <div class="row"><button type="button" class="btn pri" data-save="${name}" ${dirty.length && admin ? "" : "disabled"}>Save</button>
+          ${dirty.length ? `<button type="button" class="btn" data-reset="${name}">Discard</button>` : ""}</div>
+      </details>`;
+  }
+
+  _inputHtml(s, x, admin) {
+    const label = (s.labels && s.labels.settings[x.key]) || x.key;
+    const v = this._value(s, x.key);
+    const err = this._errors[x.key];
+    const dis = admin ? "" : "disabled";
+    let input;
+    if (x.kind === "bool") input = `<input type="checkbox" data-key="${x.key}" ${v ? "checked" : ""} ${dis}>`;
+    else if (x.kind === "choice") input = `<select data-key="${x.key}" ${dis}>${x.options.map((o) => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc(DAY_LABEL[o] || o)}</option>`).join("")}</select>`;
+    else if (x.kind === "number") input = `<input type="number" data-key="${x.key}" value="${esc(v)}" min="${x.min}" max="${x.max}" step="${x.step < 0.001 ? "any" : x.step}" ${dis}>`;
+    else input = `<input type="${x.kind === "time" ? "time" : "text"}" data-key="${x.key}" value="${esc(v)}" ${dis}>`;
+    return `<label class="setfield ${x.kind === "bool" ? "inline" : ""} ${err ? "bad" : ""}"><span>${esc(label)}</span>${input}${err ? `<em class="c-fault small">${esc(err)}</em>` : ""}</label>`;
+  }
+
+  _weekHtml(s, pattern, kind, title, admin) {
+    const days = Object.keys(DAY_LABEL);
+    return `<div class="week"><span class="quiet small">${esc(title)}</span><div class="weekgrid">${days.map((d) => {
+      const key = pattern.replace("%s", d);
+      const spec = s.editable.flatMap((p) => p.settings).find((x) => x.key === key) || { key, kind };
+      const v = this._value(s, key);
+      const err = this._errors[key];
+      const input = kind === "time" ? `<input type="time" data-key="${key}" value="${esc(v)}" ${admin ? "" : "disabled"}>`
+        : `<input type="number" data-key="${key}" value="${esc(v)}" min="${spec.min}" max="${spec.max}" step="${spec.step}" ${admin ? "" : "disabled"}>`;
+      return `<label class="setfield ${err ? "bad" : ""}"><span>${DAY_LABEL[d].slice(0, 3)}</span>${input}${err ? `<em class="c-fault small">${esc(err)}</em>` : ""}</label>`;
+    }).join("")}</div></div>`;
+  }
+
+  _bindEditor() {
+    const root = this.shadowRoot;
+    const s = store.settings;
+    if (!s || !root.querySelector("[data-editor]")) return;
+    const read = (el) => {
+      const spec = s.editable.flatMap((p) => p.settings).find((x) => x.key === el.dataset.key);
+      if (el.type === "checkbox") return el.checked;
+      if (spec && spec.kind === "number") return el.value === "" ? null : Number(el.value);
+      return el.value;
+    };
+    root.querySelectorAll("[data-editor] [data-key]").forEach((el) => {
+      const keep = () => {
+        this._draft[el.dataset.key] = read(el); delete this._errors[el.dataset.key];
+        // the Save button follows the draft at once; a full re-render waits until focus leaves the editor
+        const sec = el.closest("details.setsec"), btn = sec && sec.querySelector("[data-save]");
+        if (btn && this._hass.user && this._hass.user.is_admin) btn.disabled = !this._sectionKeys(sec.dataset.section).some((k) => k in this._draft && this._draft[k] !== s.options[k]);
+      };
+      el.addEventListener("input", keep);
+      el.addEventListener("change", () => { keep(); if (el.type === "checkbox" || el.tagName === "SELECT") this._render(); });
+    });
+    // after typing: the deferred pushed update and the dirty counts catch up once focus leaves the editor
+    root.querySelector("[data-editor]").addEventListener("focusout", (ev) => {
+      // moving to another field or a button of the editor is not leaving it (a re-render now would swallow a click on Save)
+      if (ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest("[data-editor]")) return;
+      setTimeout(() => this._render(), 0);
+    });
+    root.querySelectorAll("details.setsec").forEach((d) => d.addEventListener("toggle", () => {
+      if (d.open) this._openSections.add(d.dataset.section); else this._openSections.delete(d.dataset.section);
+    }));
+    root.querySelectorAll("[data-save]").forEach((b) => b.addEventListener("click", () => this._saveSection(b.dataset.save)));
+    root.querySelectorAll("[data-reset]").forEach((b) => b.addEventListener("click", () => {
+      for (const k of this._sectionKeys(b.dataset.reset)) { delete this._draft[k]; delete this._errors[k]; }
+      this._render();
+    }));
+    const undo = root.querySelector("[data-undo]");
+    if (undo) undo.addEventListener("click", () => this._send(this._undo.section, this._undo.values, false));
+  }
+
+  _sectionKeys(name) {
+    const part = (store.settings.editable || []).find((p) => p.section === name);
+    return part ? part.settings.map((x) => x.key) : [];
+  }
+
+  _saveSection(name) {
+    const o = store.settings.options;
+    const changes = {};
+    for (const k of this._sectionKeys(name)) if (k in this._draft && this._draft[k] !== o[k]) changes[k] = this._draft[k];
+    if (Object.keys(changes).length) this._send(name, changes, true);
+  }
+
+  /** Store changes; `keepUndo` remembers the old values so one undo can put them back. */
+  async _send(name, changes, keepUndo) {
+    const o = store.settings.options;
+    const before = Object.fromEntries(Object.keys(changes).map((k) => [k, o[k]]));
+    try {
+      const res = await this._hass.callWS({ type: "hems/settings/update", changes });
+      if (!res.ok) { this._errors = { ...this._errors, ...res.errors }; this._render(); return; }
+      for (const k of Object.keys(changes)) { delete this._draft[k]; delete this._errors[k]; }
+      store.settings = { ...store.settings, options: res.options };
+      this._undo = keepUndo ? { section: name, values: before } : null;
+      store.refreshSettings(this._hass);
+    } catch (err) {
+      this._errors = { ...this._errors, ...Object.fromEntries(Object.keys(changes).map((k) => [k, (err && err.message) || "not saved"])) };
+    }
+    this._render();
   }
 
   /* ---------------- Wall tablet: one screen, read from across the room */
@@ -1404,6 +1538,24 @@ p { margin:0; }
 .live dd small { font-size:14px; color:var(--fg-3); }
 .live .sub { font-size:12px; color:var(--fg-3); white-space:nowrap; }
 .block { background:var(--panel); border-radius:14px; padding:22px 24px; min-width:0; }
+.setsec { border-top:1px solid var(--line-2); padding:12px 0; }
+.setsec > summary { display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:500; min-height:36px; }
+.setsec[open] > summary { margin-bottom:12px; }
+.setgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px 20px; margin-bottom:14px; }
+.setfield { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--fg-2); min-width:0; }
+.setfield.inline { flex-direction:row-reverse; justify-content:flex-end; align-items:center; gap:10px; }
+.setfield input:not([type=checkbox]), .setfield select { font:14px var(--font-data); padding:8px 10px; min-height:40px; border-radius:8px; border:1px solid var(--line); background:var(--panel-2); color:var(--fg); width:100%; }
+.setfield input[type=checkbox] { width:20px; height:20px; }
+.setfield.bad input, .setfield.bad select { border-color:var(--fault); }
+.week { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
+.weekgrid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; }
+@media (max-width:640px) { .weekgrid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+.socbar { position:relative; height:14px; border-radius:7px; background:var(--panel-2); overflow:hidden; margin:4px 0 6px; }
+.socbar i { position:absolute; top:0; bottom:0; }
+.socbar .floor { left:0; background:var(--fault); opacity:.55; }
+.socbar .band { background:var(--discharge-soft); border-left:2px solid var(--discharge); border-right:2px solid var(--discharge); }
+.socbar .ceil { background:var(--line); }
+.learned { margin:10px 0 14px; display:flex; flex-direction:column; gap:2px; }
 .block.chart { padding:20px 24px 14px; }
 .chart-head { display:flex; align-items:center; flex-wrap:wrap; gap:10px 20px; margin-bottom:12px; font-size:13px; color:var(--fg-3); }
 .chart-head h2 { margin:0; }
@@ -1562,6 +1714,27 @@ function wouldWriteHtml(saj) {
 
 function configureLink(s) {
   return s ? `<a data-nav href="/config/integrations/integration/hems" class="small">Change in HEMS settings →</a>` : "";
+}
+
+/** The battery's SoC limits as one bar: hard minimum, the sell floor band, the charge ceiling (draft values while editing). */
+function socBarHtml(s, v) {
+  const hard = Number(v("hard_min_soc_pct")), lo = Number(v("reserve_soc_pct")), hi = Number(v("reserve_max_soc_pct")), top = Number(v("max_soc_pct"));
+  const pct = (x) => Math.max(0, Math.min(100, x));
+  return `<div class="socbar" role="img" aria-label="Never below ${hard} %, sales stop between ${lo} and ${hi} %, charging up to ${top} %">
+      <i class="floor" style="width:${pct(hard)}%"></i>
+      <i class="band" style="left:${pct(lo)}%;width:${pct(Math.max(0, hi - lo))}%"></i>
+      <i class="ceil" style="left:${pct(top)}%;width:${pct(100 - top)}%"></i>
+    </div>
+    <div class="spread quiet small"><span>never below ${num(hard, 0)} %</span><span>sales stop at ${num(lo, 0)}–${num(hi, 0)} %</span><span>charge up to ${num(top, 0)} %</span></div>`;
+}
+
+/** Learned values next to the configured ones; read-only, they stay set in Home Assistant. */
+function learnedHtml(s) {
+  const l = s.learned || {}, o = s.options;
+  const rows = [];
+  if (l.round_trip_eff) rows.push(`Round-trip efficiency: set ${num(o.round_trip_eff, 2)} · learned ${num(l.round_trip_eff.value, 2)}${l.round_trip_eff.source === "learned" ? ` (from ${num(l.round_trip_eff.charged_kwh, 1)} kWh charged)` : ` (${esc(l.round_trip_eff.source)})`}`);
+  if (l.pv_gain_w_per_wm2) rows.push(`PV gain: set ${o.pv_gain_w_per_wm2 ? num(o.pv_gain_w_per_wm2, 2) : "automatic"} · in use ${num(l.pv_gain_w_per_wm2.value, 2)} W per W/m²`);
+  return rows.length ? `<div class="learned">${rows.map((r) => `<p class="small">${r}</p>`).join("")}<p class="quiet small">Learned values are shown only; change the starting values in Home Assistant.</p></div>` : "";
 }
 
 function settingsInWords(o) {
