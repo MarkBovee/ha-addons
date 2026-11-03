@@ -1824,6 +1824,17 @@ def _build_pause_recovery_schedule(
 
 
 # Sum the time still ahead in today's charge periods so the rate is spread over the whole remaining window.
+# Tell whether a previously built schedule has a charge period covering ``now``.
+def _schedule_charges_at(schedule: Optional[Dict[str, Any]], now: datetime) -> bool:
+    """Return True when ``schedule`` holds a charge period with start <= now < end."""
+
+    for period in (schedule or {}).get("charge", []):
+        bounds = _parse_schedule_period_bounds(period)
+        if bounds is not None and bounds[0] <= now < bounds[1]:
+            return True
+    return False
+
+
 def _remaining_charge_window_hours(schedule: Dict[str, Any], now: datetime) -> float:
     total_seconds = 0.0
     for period in schedule.get("charge", []):
@@ -1982,8 +1993,12 @@ def _apply_grid_charge_margin_gate(
     exact_start_dts: set[datetime],
     now: datetime,
     records: List[Dict[str, Any]],
+    charging_now: bool = False,
 ) -> List[Dict[str, Any]]:
     """Drop grid charge windows that earn too little margin on the sale they are meant for.
+
+    ``charging_now`` says the previous schedule already had a charge running at ``now``; only then is a
+    window that started before ``now`` exempt from deferral.
 
     A window is kept only when
     ``sell - charge_price >= grid_charge_min_margin`` for
@@ -2006,11 +2021,14 @@ def _apply_grid_charge_margin_gate(
             kept.append(window)
             continue
         is_top_x = window_has_exact_slot(window, exact_start_dts)
-        # Only windows that have not started: deferring a running charge would flap every cycle.
+        # A charge that is really running is not deferred (that would flap every cycle). A window that only
+        # appears after its start is not running: 2026-11-03 22:15:46 a new 22:15-00:00 @0.406 window
+        # skipped this check and charged while 00:00 @0.376 came before the 07:30 sale.
+        running = window["start"] <= now and charging_now
         later = (
-            cheaper_window_ahead(window, upcoming.get("charge", []), upcoming.get("discharge", []), defer_min_saving)
-            if window["start"] > now
-            else None
+            None
+            if running
+            else cheaper_window_ahead(window, upcoming.get("charge", []), upcoming.get("discharge", []), defer_min_saving)
         )
         if later is not None:
             reason = (
@@ -2630,6 +2648,7 @@ def generate_schedule(
         _parse_start_set(today_exact_charge_slot_starts | tomorrow_exact_charge_slot_starts),
         now,
         margin_gate_records,
+        charging_now=_schedule_charges_at(state.published_schedule or state.schedule, now) if state else False,
     )
     trace["margin_gate"] = margin_gate_records
 
@@ -4182,7 +4201,7 @@ def monitor_and_adjust_active_period(
             logger.info("%s | 🟡 Reduced | Reasons: %s", " | ".join(status_parts), ", ".join(reduce_reasons))
     elif active_charge or active_discharge:
         if status_changed:
-            logger.info("%s | Active | Mode: %s", " | ".join(status_parts), runtime_price_range)
+            logger.info("%s | Active | Price band: %s", " | ".join(status_parts), runtime_price_range)
     else:
         if status_changed:
             logger.info("%s", " | ".join(status_parts))
