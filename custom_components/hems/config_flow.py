@@ -78,7 +78,7 @@ def _number(minimum: float, maximum: float, step: float) -> selector.NumberSelec
 # (prices, forecasts). Each part is a collapsible section in this order on screen; a module with an on/off switch has it as its first setting.
 # The battery is open, the rest is folded away.
 SECTIONS: dict[str, tuple[str, ...]] = {
-    "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "reserve_load_factor", "max_sell_quarters",
+    "module_battery": ("capacity_kwh", "max_power_kw", "hard_min_soc_pct", "reserve_soc_pct", "reserve_max_soc_pct", "max_soc_pct", "reserve_load_factor", "max_sell_quarters",
                        "reserve_soc_monday_pct", "reserve_soc_tuesday_pct", "reserve_soc_wednesday_pct", "reserve_soc_thursday_pct", "reserve_soc_friday_pct",
                        "reserve_soc_saturday_pct", "reserve_soc_sunday_pct", "round_trip_eff", "min_profit_margin", "hold_cost_kwh_h"),
     "module_water_heater": ("water_heater_enabled", "water_heater_energy_kwh", "water_heater_hours", "water_heater_night_energy_kwh",
@@ -96,7 +96,7 @@ SECTIONS: dict[str, tuple[str, ...]] = {
     "logging": ("trace_full_plan",),
 }
 OPEN_SECTIONS = ("module_battery",)
-NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1), "reserve_max_soc_pct": (0, 100, 1), "reserve_load_factor": (1, 3, 0.05), "max_sell_quarters": (0, 48, 1),
+NUMBERS = {"capacity_kwh": (1, 100, 0.1), "max_power_kw": (0.5, 30, 0.1), "hard_min_soc_pct": (0, 50, 1), "reserve_soc_pct": (0, 100, 1), "reserve_max_soc_pct": (0, 100, 1), "max_soc_pct": (50, 100, 1), "reserve_load_factor": (1, 3, 0.05), "max_sell_quarters": (0, 48, 1),
            **{f"reserve_soc_{day}_pct": (0, 100, 1) for day in ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")},
            "round_trip_eff": (0.5, 1.0, 0.01), "min_profit_margin": (0, 1, 0.01), "hold_cost_kwh_h": (0, 0.05, 0.0005), "pv_gain_w_per_wm2": (0, 30, 0.1),
            "pv_max_ac_w": (0, 30000, 100), "import_vat_multiplier": (1, 2, 0.01), "import_markup": (-0.5, 0.5, 0.0001), "import_energy_tax": (0, 1, 0.00001),
@@ -119,11 +119,21 @@ def _field(key: str) -> Any:
     return {"water_heater_legionella_weekday": _WEEKDAY, "spa_phase": _PHASE, "spa_control": _SPA_CONTROL, "delivery_area": str, "salderen_until": _OPTIONAL_DATE, **{f"ev_deadline_{d}": str for d in _DAYS}}.get(key, bool)
 
 
+# Settings that may be left empty (no deadline that day, no end date). The frontend refuses to save while a required field is empty,
+# so these are optional in the form; a submitted section without one of them means the user cleared it.
+EMPTYABLE = frozenset({"salderen_until", *(f"ev_deadline_{d}" for d in _DAYS)})
+
+
+def _key(key: str, current: dict[str, Any]) -> vol.Marker:
+    """The form key for one setting: required with its current value as default, or optional for a setting that may be empty."""
+    return vol.Optional(key) if key in EMPTYABLE else vol.Required(key, default=current[key])
+
+
 def _options_schema(current: dict[str, Any]) -> vol.Schema:
     """The settings form: one collapsible section per part. Every setting has its current value as default (the server fills a field left out) and
     as suggested value (what the screen shows: Home Assistant's screen starts a section from an empty object when the section itself has a default,
     and does not apply the defaults of the fields inside it)."""
-    return vol.Schema({vol.Optional(name): section(vol.Schema({vol.Required(key, default=current[key]): _field(key) for key in keys}),
+    return vol.Schema({vol.Optional(name): section(vol.Schema({_key(key, current): _field(key) for key in keys}),
                                                    {"collapsed": name not in OPEN_SECTIONS})
                        for name, keys in SECTIONS.items()})
 
@@ -134,8 +144,12 @@ def suggested_by_section(current: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def flatten_sections(user_input: dict[str, Any]) -> dict[str, Any]:
-    """The options as stored (flat): the settings of every section, side by side."""
-    return {key: value for part in user_input.values() for key, value in part.items()}
+    """The options as stored (flat): the settings of every section, side by side. An emptyable setting missing from a submitted section is stored empty."""
+    flat: dict[str, Any] = {}
+    for name, part in user_input.items():
+        flat.update({key: "" for key in SECTIONS.get(name, ()) if key in EMPTYABLE})
+        flat.update(part)
+    return flat
 
 
 class HemsConfigFlow(ConfigFlow, domain=DOMAIN):

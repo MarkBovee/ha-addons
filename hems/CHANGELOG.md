@@ -42,6 +42,11 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
 - Spa module (off by default): keeps the water in a temperature band, heats in cheap quarters or on solar surplus, gives way first on
   a full phase; `sensor.hems_spa_target`, `select.hems_spa_mode`, roles `spa_climate_entity` and `spa_power_entity`. The writer
   (`climate.set_temperature`) is behind the phase lock.
+- Battery setting `max_soc_pct` (charge ceiling, default 99 %): the planner never charges above it; it never drops below the sell floor maximum.
+
+### Fixed
+- The settings form could not be saved ("Not all required fields are filled in"): an empty EV deadline or net-metering end date was a
+  required field. Those fields are optional now; leaving one empty stores it empty.
 
 ## [0.2.0] - 2026-10-29
 

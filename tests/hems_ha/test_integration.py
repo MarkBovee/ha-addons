@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
-from custom_components.hems.config_flow import SECTIONS
+from custom_components.hems.config_flow import EMPTYABLE, SECTIONS, suggested_by_section
 from custom_components.hems.config_flow import ROLE_SELECTORS
 from custom_components.hems.const import (CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_PLUGGED, CONF_EV_SOC, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_EV, CONF_INVERTER, CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_GRID, CONF_PRICE_CURVE, CONF_PV,
                                           CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
@@ -981,3 +981,21 @@ async def test_alerts_turn_on_for_stale_data_and_an_overdue_legionella_run(recor
     assert hass.states.get("binary_sensor.hems_alert_data").state == "on" and "no_soc" in hass.states.get("binary_sensor.hems_alert_data").attributes["reason"]
     assert hass.states.get("binary_sensor.hems_alert_legionella").state == "on"
     assert hass.states.get("binary_sensor.hems_alert_deadline").state == "off"
+
+
+async def test_saving_every_section_as_the_frontend_sends_it_succeeds_and_sets_the_charge_ceiling(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """The frontend submits every section with every field; the stored defaults must pass the form's own validation, and the ceiling reaches the planner."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    full = suggested_by_section({**DEFAULT_OPTIONS, **entry.options})
+    full = {name: {k: v for k, v in part.items() if v != ""} for name, part in full.items()}     # the frontend leaves empty fields out
+    full["module_battery"]["max_soc_pct"] = 95.0
+    full["module_ev"].pop("ev_deadline_monday")                                                 # cleared by the user
+    saved = await hass.config_entries.options.async_configure(form["flow_id"], full)
+    await hass.async_block_till_done()
+    assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["max_soc_pct"] == 95.0
+    assert entry.options["ev_deadline_monday"] == "" and entry.options["ev_deadline_thursday"] == "07:30"
+    assert not any(isinstance(k, vol.Required) and str(k) in EMPTYABLE for part in form["data_schema"].schema.values() for k in part.schema.schema)
+    latest = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
+    assert latest["values"]["battery"]["max_soc"] == 0.95
