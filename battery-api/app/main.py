@@ -818,9 +818,13 @@ class BatteryApiAddon:
                     self.status['api_status'] = 'Connected' if not self.simulation_mode else 'Simulation'
                     logger.debug("Schedule applied to provider")
                 else:
+                    # Keep the backend's specific reason (e.g. "Apply failed: command verify mismatch") instead of a generic one.
+                    reason = str(self.status.get('schedule_status') or '')
+                    if not reason.startswith(('Apply failed', 'Error')):
+                        reason = 'Apply failed'
                     self.status['api_status'] = 'Apply Failed'
-                    self.status['schedule_status'] = 'Apply failed'
-                    logger.error("Failed to apply schedule")
+                    self.status['schedule_status'] = reason
+                    logger.error("Failed to apply schedule: %s", reason)
             except Exception as e:
                 self.status['api_status'] = f'Error: {e}'
                 self.status['schedule_status'] = f'Error: {e}'

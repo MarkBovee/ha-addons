@@ -543,8 +543,10 @@ class ModbusHaBatteryBackend(BatteryBackend):
             if not self.set_mode(mode):
                 self._set_status(schedule_status="Apply failed: mode write failed")
                 return False
-            read_back = self._wait_for_schedule_inputs(schedule)
-            if not self._schedule_matches(read_back, schedule):
+            # The inverter stores power in whole percents, so verify against what it can hold (7000 W reads back as 7040 W).
+            written = self._as_written(schedule)
+            read_back = self._wait_for_schedule_inputs(written)
+            if not self._schedule_matches(read_back, written):
                 self._set_status(schedule_status="Apply failed: command verify mismatch")
                 return False
             self._set_status(
@@ -856,6 +858,17 @@ class ModbusHaBatteryBackend(BatteryBackend):
         for idx in range(max(0, count)):
             mask |= 1 << idx
         return mask
+
+    # Return the schedule with each power rounded to what the percent inputs can hold.
+    def _as_written(self, schedule: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Copy ``schedule`` with every period's power passed through the watts -> percent -> watts round trip."""
+        return {
+            kind: [
+                {**period, "power": self._percent_to_watts(self._watts_to_percent(int(period.get("power", 0))))}
+                for period in schedule.get(kind, [])
+            ]
+            for kind in ("charge", "discharge")
+        }
 
     def _watts_to_percent(self, power_w: int) -> int:
         if self.inverter_power_reference_w <= 0:

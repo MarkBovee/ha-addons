@@ -2,6 +2,11 @@
 
 All notable changes to the Battery API add-on will be documented in this file.
 
+## 0.3.6 — 2026-11-03
+- **Fix: No false "Failed to apply schedule" on the Modbus provider** — the inverter stores slot power in whole percents of `modbus_inverter_power_w`, so 7000 W is written as 88 % and reads back as 7040 W. The verify step compared that with the requested 7000 W and reported a mismatch, while the inverter ran the schedule. On 2026-11-03 this logged an error on almost every write since 19:45 (300, 500, 600, 2500 and 7000 W failed; 0, 400 and 800 W passed). The check now compares against the power after the same percent rounding.
+- **Change: The failure reason is kept** — `schedule_status` and the error log show the backend's reason (for example `Apply failed: command verify mismatch`) instead of a plain `Apply failed`.
+- **Tests:** `test_modbus_save_schedule_accepts_power_rounded_to_whole_percents`. 27 pass; `test_modbus_set_mode_verifies_read_back` fails on master as well.
+
 ## [0.3.5] - 2026-09-09
 
 ### Fixed
