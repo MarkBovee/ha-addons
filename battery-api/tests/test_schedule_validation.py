@@ -683,3 +683,24 @@ def test_modbus_poll_status_uses_single_state_snapshot():
     assert context.status["grid_power"] == 2925.0
     assert context.status["load_power"] == 1650.0
     assert context.status["user_mode"] == "1"
+
+
+# Replay of 2026-11-03: 7000 W is stored as 88 % and reads back as 7040 W; that is a match, not a verify mismatch.
+def test_modbus_save_schedule_accepts_power_rounded_to_whole_percents():
+    context = BackendContext(
+        config={"provider": "modbus_ha", "modbus_inverter_power_w": 8000, "modbus_entities": {}},
+        status={},
+        simulation_mode=False,
+        battery_mode_setting="Self-consumption",
+        schedule_json="{}",
+        validated_schedule=None,
+    )
+    backend = ModbusHaBatteryBackend(context)
+    requested = {"charge": [{"start": "22:15", "duration": 104, "power": 7000}], "discharge": []}
+    read_back = {"charge": [{"start": "22:15", "duration": 104, "power": 7040}], "discharge": []}
+
+    with patch.object(backend, "_write_slots", return_value=None):
+        with patch.object(backend, "set_mode", return_value=True):
+            with patch.object(backend, "_read_schedule_inputs_from_ha", return_value=read_back):
+                with patch("app.backends.time.sleep", return_value=None):
+                    assert backend.save_schedule([], json.dumps(requested)) is True
