@@ -191,6 +191,25 @@ def test_evening_charge_is_deferred_to_a_cheaper_night_before_the_sale():
     assert "cheaper charge" in records[0]["reason"]
 
 
+# Replay of 2026-11-03 22:15:46: a charge window that appears after its start is deferred unless a charge was running.
+@pytest.mark.parametrize("charging_now, expect_kept", [(False, False), (True, True)])
+def test_window_first_seen_after_its_start_is_still_deferred(charging_now, expect_kept):
+    """22:15-00:00 @0.406 charged while 00:00-05:30 @0.376 came before the 07:30 sale."""
+    config = make_config(**{"heuristics.min_profit_threshold": 0.05})
+    now = T0 + timedelta(seconds=46)
+    late = {"start": T0, "end": T0 + timedelta(hours=1.75), "avg_price": 0.406, "slots": []}
+    night = {"start": T0 + timedelta(hours=1.75), "end": T0 + timedelta(hours=7.25), "avg_price": 0.376, "slots": []}
+    sale = _sell(9.25, 0.517, 120)
+    records = []
+
+    kept = bm_main._apply_grid_charge_margin_gate(
+        config, {"charge": [late, night], "discharge": [sale]}, set(), now, records, charging_now=charging_now
+    )
+
+    assert (late in kept) is expect_kept
+    assert night in kept
+
+
 def test_charge_is_kept_when_the_cheaper_window_is_too_short_or_after_the_sale():
     config = make_config(**{"heuristics.min_profit_threshold": 0.05})
     tonight = {"start": T0, "end": T0 + timedelta(hours=2), "avg_price": 0.40, "slots": []}

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.13 — 2026-11-03
+- **Fix: A charge window that appears after its start time is still deferred to a cheaper night** — on 2026-11-03 the schedule charged 21:30–22:00 (0.405) and 22:15–00:00 (0.406) from the grid, while 00:00–05:30 at 0.376 came before the 07:30 sale. Both windows were deferred correctly 15 minutes earlier. At 21:30:42 and 22:15:46 the rolling regeneration then saw them start a few seconds in the past, and the margin gate exempts started windows from deferral so a running charge does not flap. A window now counts as running only when the previous schedule already had a charge period covering now (`_schedule_charges_at`). Everything else gets the cheaper-window check.
+- **Change: The monitor log says `Price band:` instead of `Mode:`** — `✅ Charging | Mode: adaptive` showed the price band, not what the battery did. The `mode` entity was already correct (`load`).
+- **Tests:** `test_window_first_seen_after_its_start_is_still_deferred` (not running: deferred; running: kept). 310 pass; 4 fail on master as well (`test_decision_trace`, three in `test_main_reduced_adaptive`).
+
 ## 0.9.12 — 2026-11-02
 - **Breaking: The round-trip efficiency is gone from the margin check** — a grid charge now has to earn `sell − charge ≥ grid_charge_min_margin`, the plain spread. The option `heuristics.round_trip_efficiency` is removed; a value left in the add-on options is ignored. Set the margin to cover the losses you want to cover.
 - **Tests:** margin tests use the plain spread. 307 pass; the same 5 fail on master (Windows, with a `time.tzset` shim).
