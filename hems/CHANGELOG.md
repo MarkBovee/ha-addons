@@ -5,6 +5,16 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
 ## [Unreleased]
 
 ### Changed
+- Settings are split (docs/hems/settings-split-plan.md). The Home Assistant form keeps the installation and the contract: battery
+  hardware and charge ceiling, module switches, EV battery, spa hardware, prices, forecasts and grid. The planning settings are edited
+  in the panel (gear → Planning): sell floor and its weekday minimums, sell limit, margins, the water heater, EV targets and a week grid of
+  deadlines, spa comfort and logging. A panel save applies at once (HEMS replans without a reload), shows errors next to the field,
+  and can be undone once. Only an administrator can save. Every setting keeps its key and value, so nothing needs migrating.
+- Panel 0.7.0: the battery part shows the SoC limits as one bar, and the learned round-trip efficiency and PV gain next to the
+  configured values (read-only).
+- New websocket command `hems/settings/update` (admin only) checks bounds and the rules between settings: hard minimum ≤ sell floor
+  ≤ sell floor maximum ≤ charge ceiling, EV required ≤ maximum target, minimum current ≤ maximum current, and the water heater's
+  temperature pairs.
 - Panel 0.6.0: the Today, Plan and Devices tabs are one **Overview** (what HEMS does now and the result, a live energy flow
   from solar, grid and battery through the house to the active modules, phase load, weather now and tomorrow, expected solar,
   the next 24 hours per quarter, what is coming up and the devices with their mode) and a **Decisions** tab (every planned
@@ -12,7 +22,7 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
   new tabs.
 - The Open-Meteo request also asks for the hourly weather code, cloud cover, daylight and precipitation. The panel's weather
   (now and tomorrow) comes from that, not from a Home Assistant weather entity: Buienradar reported "sunny" at night.
-- While tomorrow's prices are unknown, the battery is filled to 100 % in the day's cheapest quarters before today's most expensive
+- While tomorrow's prices are unknown, the battery is filled to the charge ceiling (`max_soc_pct`) in the day's cheapest quarters before today's most expensive
   quarter; after that peak the plan decides freely (no forced refill at night). Once tomorrow's prices are known, no target applies.
 - Energy kept past the horizon is valued from the last 7 days of Nord Pool prices (typical peak, never below the typical refill
   price), fetched once a day, instead of today's cheapest price.

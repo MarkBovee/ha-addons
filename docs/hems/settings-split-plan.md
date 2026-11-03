@@ -1,6 +1,6 @@
 # Settings split: basic setup in HA, planning in the dashboard
 
-Status: plan, not started (2026-11-03).
+Status: built on branch fix/hems-settings-save (2026-11-03): phases 1-4 done; the panel editor is not yet checked on the live server.
 
 ## Problem
 

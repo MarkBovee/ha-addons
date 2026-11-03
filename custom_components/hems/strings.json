@@ -60,7 +60,7 @@
     "step": {
       "init": {
         "title": "HEMS settings",
-        "description": "Settings in the parts of the HEMS plan: modules first, then the base components they share. Fold a part open to change it, then save once.",
+        "description": "Settings in the parts of the HEMS plan: modules first, then the base components they share. Fold a part open to change it, then save once. This form holds the installation and the contract; planning settings (sell floor, margins, water heater, EV targets and deadlines, spa comfort, logging) are in the HEMS panel under the gear.",
         "sections": {
           "module_battery": {
             "name": "Module: battery",

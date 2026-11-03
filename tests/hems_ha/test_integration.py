@@ -1,4 +1,5 @@
 import csv
+from types import SimpleNamespace
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
@@ -6,17 +7,19 @@ from pathlib import Path
 
 import pytest
 import voluptuous as vol
+from homeassistant.exceptions import Unauthorized
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
-from custom_components.hems.config_flow import EMPTYABLE, SECTIONS, suggested_by_section
+from custom_components.hems.config_flow import EMPTYABLE, suggested_by_section
+from custom_components.hems.settings_schema import HA_SECTIONS, PANEL_KEYS, SECTIONS
 from custom_components.hems.config_flow import ROLE_SELECTORS
 from custom_components.hems.const import (CONF_EV_CHARGING, CONF_EV_CURRENTS, CONF_EV_PLUGGED, CONF_EV_SOC, CONF_METER_CURRENTS, CONF_METER_EXPORTS, CONF_EV, CONF_INVERTER, CONF_BATTERY_POSITIVE_DISCHARGING, CONF_BATTERY_POWER, CONF_GRID, CONF_PRICE_CURVE, CONF_PV,
                                           CONF_SOC, DEFAULT_OPTIONS, DOMAIN)
 from custom_components.hems.engine.nordpool import NORD_POOL_URL, nordpool_params
 from custom_components.hems.engine.weather import OPEN_METEO_URL
-from custom_components.hems.websocket import ws_settings, ws_subscribe
+from custom_components.hems.websocket import ws_settings, ws_settings_update, ws_subscribe
 
 ROOT = Path(__file__).resolve().parents[2]
 PRICES = ROOT / "hems" / "core" / "tests" / "fixtures" / "quarter_import_prices.csv"
@@ -419,13 +422,13 @@ async def test_saving_the_settings_form_reloads_hems_and_the_planner_uses_the_ne
     entry = await setup_entry(hass, freezer, aioclient_mock)
     first = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
     form = await hass.config_entries.options.async_init(entry.entry_id)
-    assert form["type"] == FlowResultType.FORM and list(map(str, form["data_schema"].schema)) == ["module_battery", "module_water_heater", "module_ev", "module_spa", "base_prices", "base_forecast", "base_grid", "logging"]
-    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"module_battery": {"reserve_soc_pct": 40.0, "hold_cost_kwh_h": 0.01}})
+    assert form["type"] == FlowResultType.FORM and list(map(str, form["data_schema"].schema)) == ["module_battery", "module_water_heater", "module_ev", "module_spa", "base_prices", "base_forecast", "base_grid"]
+    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"module_battery": {"capacity_kwh": 20.0, "round_trip_eff": 0.8}})
     await hass.async_block_till_done()
-    assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["reserve_soc_pct"] == 40.0 and entry.options["hold_cost_kwh_h"] == 0.01
+    assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["capacity_kwh"] == 20.0 and entry.options["round_trip_eff"] == 0.8
     assert entry.state.value == "loaded" and hass.states.get("sensor.hems_status").state == "ok"
     latest = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
-    assert latest["hash"] != first["hash"] and latest["values"]["battery"]["reserve_soc"] == 0.4 and latest["values"]["battery"]["hold_cost_kwh_h"] == 0.01
+    assert latest["hash"] != first["hash"] and latest["values"]["battery"]["capacity_kwh"] == 20.0 and latest["values"]["battery"]["round_trip_eff"] == 0.8
 
 
 async def test_the_core_values_are_entities_with_series_for_a_chart(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
@@ -659,13 +662,14 @@ async def test_the_water_heater_module_is_off_by_default_and_changes_nothing(rec
 
 
 async def test_the_options_form_switches_the_water_heater_module_on_and_the_plan_follows(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
-    """The settings form shows the module's fields (the weekday as a choice), saving reloads the entry and the plan appears; a legionella weekday of today
-    (Tuesday 6 Oct) makes today's run the three-hour, 2.6 kWh one."""
+    """The settings form switches the module on, saving reloads the entry and the plan appears; a legionella weekday of today (Tuesday 6 Oct,
+    set in the panel) makes today's run the three-hour, 2.6 kWh one."""
     await hass.config.async_set_time_zone("Europe/Amsterdam")
     set_states(hass)
     entry = await setup_entry(hass, freezer, aioclient_mock)
+    assert (await _update(hass, {"water_heater_legionella_weekday": "tuesday"}))["ok"] is True
     form = await hass.config_entries.options.async_init(entry.entry_id)
-    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"module_water_heater": {"water_heater_enabled": True, "water_heater_legionella_weekday": "tuesday"}})
+    saved = await hass.config_entries.options.async_configure(form["flow_id"], {"module_water_heater": {"water_heater_enabled": True}})
     await hass.async_block_till_done()
     assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["water_heater_enabled"] is True
     window, = hass.states.get("sensor.hems_water_heater_plan").attributes["windows"]
@@ -679,17 +683,19 @@ async def test_the_settings_form_is_split_into_parts_that_cover_every_option_and
     entry = await setup_entry(hass, freezer, aioclient_mock)
     form = await hass.config_entries.options.async_init(entry.entry_id)
     collapsed = {str(name): part.options["collapsed"] for name, part in form["data_schema"].schema.items()}
-    assert collapsed == {"module_battery": False, "module_water_heater": True, "module_ev": True, "module_spa": True, "base_prices": True, "base_forecast": True, "base_grid": True, "logging": True}
-    assert list(collapsed) == list(SECTIONS), "modules first, then the base components they share"
+    assert collapsed == {"module_battery": False, "module_water_heater": True, "module_ev": True, "module_spa": True, "base_prices": True, "base_forecast": True, "base_grid": True}
+    assert list(collapsed) == list(HA_SECTIONS), "modules first, then the base components they share"
+    ha_keys = {key for keys in HA_SECTIONS.values() for key in keys}
+    assert not ha_keys & PANEL_KEYS and ha_keys | PANEL_KEYS == set(DEFAULT_OPTIONS), "every option is edited in exactly one place"
     keys = [key for keys in SECTIONS.values() for key in keys]
     assert sorted(keys) == sorted(set(keys)) and set(keys) == set(DEFAULT_OPTIONS), "every editable option is in exactly one part"
     for language in ("strings", "translations/en"):
         texts = json.loads((ROOT / "custom_components" / "hems" / f"{language}.json").read_text())["options"]["step"]["init"]["sections"]
         assert {name: set(part["data"]) for name, part in texts.items()} == {name: set(keys) for name, keys in SECTIONS.items()}
     before = dict(entry.options)
-    await hass.config_entries.options.async_configure(form["flow_id"], {"module_water_heater": {"water_heater_hours": 2}})
+    await hass.config_entries.options.async_configure(form["flow_id"], {"module_water_heater": {"water_heater_enabled": True}})
     await hass.async_block_till_done()
-    assert entry.options["water_heater_hours"] == 2 and {k: v for k, v in entry.options.items() if k != "water_heater_hours"} == {k: v for k, v in before.items() if k != "water_heater_hours"}
+    assert entry.options["water_heater_enabled"] is True and {k: v for k, v in entry.options.items() if k != "water_heater_enabled"} == {k: v for k, v in before.items() if k != "water_heater_enabled"}
 
 
 async def test_the_settings_form_shows_the_current_values_inside_every_section(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
@@ -698,15 +704,15 @@ async def test_the_settings_form_shows_the_current_values_inside_every_section(r
     set_states(hass)
     entry = await setup_entry(hass, freezer, aioclient_mock)
     first = await hass.config_entries.options.async_init(entry.entry_id)
-    await hass.config_entries.options.async_configure(first["flow_id"], {"module_battery": {"reserve_soc_pct": 40.0}})
+    await hass.config_entries.options.async_configure(first["flow_id"], {"module_battery": {"capacity_kwh": 20.0}})
     await hass.async_block_till_done()
     form = await hass.config_entries.options.async_init(entry.entry_id)
     shown = {}
     for marker, part in form["data_schema"].schema.items():
         assert marker.default is vol.UNDEFINED, "a section default empties the section on screen"
         shown.update({str(key): (key.description or {}).get("suggested_value", "missing") for key in part.schema.schema})
-    assert set(shown) == set(DEFAULT_OPTIONS) and "missing" not in shown.values()
-    assert shown["reserve_soc_pct"] == 40.0 and shown["capacity_kwh"] == DEFAULT_OPTIONS["capacity_kwh"]
+    assert set(shown) == set(DEFAULT_OPTIONS) - PANEL_KEYS and "missing" not in shown.values()
+    assert shown["capacity_kwh"] == 20.0 and shown["max_power_kw"] == DEFAULT_OPTIONS["max_power_kw"]
 
 
 async def test_a_charge_window_the_plan_does_not_have_shows_the_cheapest_price_block_and_says_so(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
@@ -831,8 +837,9 @@ async def test_the_price_sensors_serve_the_energy_prices_consumers(recorder_mock
 class FakeConnection:
     """Stands in for a websocket connection: the frozen test clock would expire a real client's access token."""
 
-    def __init__(self) -> None:
+    def __init__(self, admin: bool = True) -> None:
         self.messages, self.subscriptions = [], {}
+        self.user = SimpleNamespace(is_admin=admin)
 
     def send_message(self, message) -> None:
         self.messages.append(message)
@@ -883,9 +890,51 @@ async def test_the_settings_command_gives_the_options_and_roles_in_force(recorde
     entry = await setup_entry(hass, freezer, aioclient_mock, options={"reserve_soc_pct": 35.0})
     conn = FakeConnection()
     ws_settings(hass, conn, {"id": 1, "type": "hems/settings"})
+    await hass.async_block_till_done(wait_background_tasks=True)
     result = conn.messages[0]["result"]
     assert result["entry_id"] == entry.entry_id and result["loaded"] is True
     assert result["options"]["reserve_soc_pct"] == 35.0 and result["roles"][CONF_SOC] == "sensor.soc"
+    editable = {x["key"]: x for part in result["editable"] for x in part["settings"]}
+    assert set(editable) == PANEL_KEYS and editable["reserve_soc_pct"] == {"key": "reserve_soc_pct", "kind": "number", "min": 0, "max": 100, "step": 1}
+    assert editable["ev_deadline_monday"]["kind"] == "time" and result["labels"]["settings"]["max_soc_pct"] == "Charge ceiling (%)"
+    assert set(result["learned"]) <= {"round_trip_eff", "pv_gain_w_per_wm2"} and "pv_gain_w_per_wm2" in result["learned"]
+
+
+async def _update(hass: HomeAssistant, changes: dict, admin: bool = True) -> dict:
+    """Send hems/settings/update through the fake connection and return its result."""
+    conn = FakeConnection(admin)
+    ws_settings_update(hass, conn, {"id": 1, "type": "hems/settings/update", "changes": changes})
+    await hass.async_block_till_done(wait_background_tasks=True)       # async_response runs the handler as a background task
+    return conn.messages[0]["result"]
+
+
+async def test_the_panel_stores_planning_settings_and_replans_at_once_without_a_reload(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """A panel save stores the values with their types, keeps every other option, replans in the same call (new settings hash) and does not reload."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    coordinator, before = entry.runtime_data, dict(entry.options)
+    first = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
+    result = await _update(hass, {"reserve_soc_pct": 40, "water_heater_hours": 2, "ev_deadline_tuesday": "06:45", "trace_full_plan": False})
+    assert result["ok"] is True and result["changed"] == ["ev_deadline_tuesday", "reserve_soc_pct", "trace_full_plan", "water_heater_hours"]
+    assert entry.options["reserve_soc_pct"] == 40.0 and entry.options["water_heater_hours"] == 2 and isinstance(entry.options["water_heater_hours"], int)
+    assert {k: v for k, v in entry.options.items() if k not in result["changed"]} == {k: v for k, v in before.items() if k not in result["changed"]}
+    assert entry.runtime_data is coordinator and entry.state.value == "loaded", "no reload"
+    latest = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
+    assert latest["hash"] != first["hash"] and latest["values"]["battery"]["reserve_soc"] == 0.4
+
+
+async def test_the_panel_refuses_bad_values_contract_settings_and_non_admins_and_stores_nothing(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
+    """Bounds, formats and rules between settings come back per key; a Home Assistant setting is refused; a non-admin cannot write."""
+    set_states(hass)
+    entry = await setup_entry(hass, freezer, aioclient_mock)
+    before = dict(entry.options)
+    bad = await _update(hass, {"reserve_soc_pct": 120, "ev_deadline_monday": "7:3", "capacity_kwh": 10})
+    assert bad["ok"] is False and set(bad["errors"]) == {"reserve_soc_pct", "ev_deadline_monday", "capacity_kwh"}
+    crossed = await _update(hass, {"reserve_max_soc_pct": 100, "ev_target_required_pct": 90, "ev_target_max_pct": 85})
+    assert crossed["ok"] is False and set(crossed["errors"]) == {"reserve_max_soc_pct", "ev_target_required_pct"}
+    with pytest.raises(Unauthorized):
+        await _update(hass, {"reserve_soc_pct": 35}, admin=False)
+    assert dict(entry.options) == before
 
 
 async def test_the_plan_diff_and_last_cycle_sensors_follow_the_cycles(recorder_mock, hass: HomeAssistant, freezer, aioclient_mock):
@@ -991,11 +1040,11 @@ async def test_saving_every_section_as_the_frontend_sends_it_succeeds_and_sets_t
     full = suggested_by_section({**DEFAULT_OPTIONS, **entry.options})
     full = {name: {k: v for k, v in part.items() if v != ""} for name, part in full.items()}     # the frontend leaves empty fields out
     full["module_battery"]["max_soc_pct"] = 95.0
-    full["module_ev"].pop("ev_deadline_monday")                                                 # cleared by the user
+    full["base_prices"].pop("salderen_until")                                                   # cleared by the user
     saved = await hass.config_entries.options.async_configure(form["flow_id"], full)
     await hass.async_block_till_done()
     assert saved["type"] == FlowResultType.CREATE_ENTRY and entry.options["max_soc_pct"] == 95.0
-    assert entry.options["ev_deadline_monday"] == "" and entry.options["ev_deadline_thursday"] == "07:30"
+    assert entry.options["salderen_until"] == "" and entry.options["ev_deadline_monday"] == "07:30", "a panel setting survives a save of the form"
     assert not any(isinstance(k, vol.Required) and str(k) in EMPTYABLE for part in form["data_schema"].schema.values() for k in part.schema.schema)
     latest = [e for e in read_jsonl(hass, "events.jsonl") if e["event"] == "settings"][-1]
     assert latest["values"]["battery"]["max_soc"] == 0.95
