@@ -4,6 +4,19 @@ All notable changes to the HEMS integration. Versions follow `custom_components/
 
 ## [Unreleased]
 
+### Added
+- The house load forecast follows the outdoor temperature. From the last days HEMS fits how much more the house uses per
+  degree colder (the heat pump) and moves the forecast by the forecast temperature. Without a clear fit (fewer than 48 hours
+  with a temperature, under 2 °C spread, or warmer meaning more) the plain profile stays. The trace and the panel show it as
+  `load_source` `…+temperature` and `load_w_per_c`.
+- Hourly weather for the next 12 hours (sky, temperature, rain and its chance, irradiance), with the solar and house kWh the plan
+  expects in each hour. Open-Meteo now also returns `precipitation_probability`.
+
+### Changed
+- Panel 0.8.0: the energy flow uses one colour per flow: solar amber, grid purple, battery blue while charging and orange while
+  discharging, and use teal. On a phone the flow stands upright (sources, house, consumers) instead of scrolling sideways.
+  On narrow screens the header drops the title so the three tabs fit.
+
 ### Changed
 - Settings are split (docs/hems/settings-split-plan.md). The Home Assistant form keeps the installation and the contract: battery
   hardware and charge ceiling, module switches, EV battery, spa hardware, prices, forecasts and grid. The planning settings are edited

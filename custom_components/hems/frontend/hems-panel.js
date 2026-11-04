@@ -12,7 +12,7 @@
  * URL options: ?kiosk (one screen for the wall tablet), ?theme=dark|light (force a theme), #overview|decisions|insights|settings (older hashes still land on the right view).
  */
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 const Q_MS = 15 * 60 * 1000;
 
 /* ------------------------------------------------------------------ store */
@@ -131,6 +131,8 @@ const TOKENS = `
   --discharge:#c0611a; --discharge-soft:rgba(201,102,26,.16);
   --pv:#9a7800; --pv-soft:rgba(214,170,20,.22);
   --load:#55606b; --load-soft:rgba(85,96,107,.16);
+  --grid:#7a4fc4; --grid-soft:rgba(122,79,196,.16);        /* grid import and export: purple, apart from charge blue and solar amber */
+  --use:#14857a; --use-soft:rgba(20,133,122,.16);          /* consumption (house, EV, spa): teal */
   --cheap:#2f6fd0; --dear:#c9661a; --mid:#c3c8ce;
   --ok:#2b8a57; --warn:#a87400; --fault:#c2362f; --stale:#7d62a6; --dry:#6b7480;
   --font-display:"Archivo Narrow","Roboto Condensed","Arial Narrow",system-ui,sans-serif;
@@ -145,6 +147,8 @@ const TOKENS = `
   --discharge:#f0a05a; --discharge-soft:rgba(240,160,90,.20);
   --pv:#e2bd3a; --pv-soft:rgba(226,189,58,.18);
   --load:#a3adb8; --load-soft:rgba(163,173,184,.14);
+  --grid:#b08ef0; --grid-soft:rgba(176,142,240,.20);
+  --use:#4cc3b1; --use-soft:rgba(76,195,177,.18);
   --cheap:#6ea2ef; --dear:#f0a05a; --mid:#3a434e;
   --ok:#4fbf83; --warn:#e3b341; --fault:#f0675f; --stale:#b39ddb; --dry:#8b95a1;
   color-scheme: dark;
@@ -800,7 +804,7 @@ function watts(hass, entityId) {
  * and the rest of the house). A link that carries power is drawn wide with moving dashes in the direction of the flow.
  * The house load follows the planner's balance (below), the rest of the house is that minus the metered modules.
  */
-function flowHtml(hass, p, s) {
+function flowHtml(hass, p, s, vertical = false) {
   const r = (s && s.roles) || {};
   const o = (s && s.options) || {};
   const pvIds = [r.pv_entity, ...(r.pv_extra_entities || [])].filter(Boolean);
@@ -821,31 +825,73 @@ function flowHtml(hass, p, s) {
   const whTemp = wh ? wh.attributes.current_temperature : null;
   const spaClimate = o.spa_enabled && r.spa_climate_entity ? hass.states[r.spa_climate_entity] : null;
   const evPlugged = r.ev_plugged_entity && hass.states[r.ev_plugged_entity] ? hass.states[r.ev_plugged_entity].state === "on" : null;
+  // each flow has its own colour: solar amber, grid purple, battery blue while charging and orange while discharging, use teal
+  const battColour = batt !== null && on(batt) && batt < 0 ? "--discharge" : "--charge";
   const sources = [
-    { key: "pv", label: "Solar", icon: icon(ICON_PATH.sun, 22, "var(--pv)"), value: kwTxt(pv), sub: "", w: pv, colour: "--pv", out: true },
-    { key: "grid", label: "Grid", icon: icon(ICON_PATH.grid, 22), value: kwTxt(grid), sub: grid === null || !on(grid) ? "" : grid > 0 ? "import" : "export", w: grid, colour: "--fg-2", out: grid === null || grid >= 0 },
-    { key: "batt", label: "Battery", icon: icon(ICON_PATH.battery, 22, "var(--ok)"), value: soc === null ? "—" : `${num(soc, 0)} %`, sub: batt === null || !on(batt) ? "idle" : `${batt > 0 ? "charging" : "discharging"} ${kwTxt(batt)}`, w: batt, colour: "--ok", out: batt === null || batt <= 0 },
+    { label: "Solar", icon: icon(ICON_PATH.sun, 22, "var(--pv)"), value: kwTxt(pv), sub: "", w: pv, colour: "--pv", out: true },
+    { label: "Grid", icon: icon(ICON_PATH.grid, 22, "var(--grid)"), value: kwTxt(grid), sub: grid === null || !on(grid) ? "" : grid > 0 ? "import" : "export", w: grid, colour: "--grid", out: grid === null || grid >= 0 },
+    { label: "Battery", icon: icon(ICON_PATH.battery, 22, `var(${battColour})`), value: soc === null ? "—" : `${num(soc, 0)} %`, sub: batt === null || !on(batt) ? "idle" : `${batt > 0 ? "charging" : "discharging"} ${kwTxt(batt)}`, w: batt, colour: battColour, out: batt === null || batt <= 0 },
   ];
-  const sinks = [{ label: "Home", icon: ICON.house, value: kwTxt(rest), sub: "", w: rest }];
-  if (o.ev_enabled) sinks.push({ label: "EV", icon: ICON.car, value: kwTxt(ev), sub: evPlugged === false ? "not plugged in" : "", w: ev });
-  if (o.water_heater_enabled) sinks.push({ label: "Water heater", icon: ICON.tank, value: whTemp === null || whTemp === undefined ? "—" : `${num(whTemp, 0)} °C`, sub: "", w: null });
-  if (o.spa_enabled) sinks.push({ label: "Spa", icon: ICON.spa, value: spa === null ? (spaClimate && spaClimate.attributes.current_temperature !== undefined ? `${num(spaClimate.attributes.current_temperature, 1)} °C` : "—") : kwTxt(spa), sub: "", w: spa });
-  // geometry in a 1000 x 300 box: sources at x 0-200, the house at 400-600, consumers at 780-1000
-  const sy = (i) => 55 + i * 95, ky = (i) => sinks.length === 1 ? 150 : 40 + i * (220 / (sinks.length - 1));
-  const link = (x1, y1, x2, y2, live, colour, reverse) => {
-    const mx = (x1 + x2) / 2, d = `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`;
-    return live ? `<path d="${d}" stroke="var(${colour})" stroke-width="9" fill="none" stroke-linecap="round" opacity=".28" vector-effect="non-scaling-stroke"></path><path class="flow${reverse ? " rev" : ""}" d="${d}" stroke="var(${colour})" stroke-width="2" fill="none" stroke-dasharray="4 8" stroke-linecap="round" vector-effect="non-scaling-stroke"></path>`
-      : `<path d="${d}" stroke="var(--line)" stroke-width="1.5" fill="none" vector-effect="non-scaling-stroke"></path>`;
-  };
-  const svg = `<svg class="flow-lines" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">
-    ${sources.map((x, i) => link(200, sy(i), 400, 150, on(x.w), x.colour, !x.out)).join("")}
-    ${sinks.map((x, i) => link(600, 150, 780, ky(i), on(x.w), "--ok", false)).join("")}</svg>`;
-  const node = (x, left, top, width) => `<div class="fnode ${on(x.w) ? "on" : ""}" style="left:${left}%;top:${top / 3}%;width:${width}%">${x.icon}<div><span>${esc(x.label)}</span><b class="mono">${esc(x.value)}</b>${x.sub ? `<i>${esc(x.sub)}</i>` : ""}</div></div>`;
+  const sinks = [{ label: "Home", icon: icon(ICON_PATH.house, 22, "var(--use)"), value: kwTxt(rest), sub: "", w: rest, colour: "--use" }];
+  if (o.ev_enabled) sinks.push({ label: "EV", icon: icon(ICON_PATH.car, 22, "var(--use)"), value: kwTxt(ev), sub: evPlugged === false ? "not plugged in" : "", w: ev, colour: "--use" });
+  if (o.water_heater_enabled) sinks.push({ label: "Water heater", icon: icon(ICON_PATH.tank, 22, "var(--use)"), value: whTemp === null || whTemp === undefined ? "—" : `${num(whTemp, 0)} °C`, sub: "", w: null, colour: "--use" });
+  if (o.spa_enabled) sinks.push({ label: "Spa", icon: icon(ICON_PATH.spa, 22, "var(--use)"), value: spa === null ? (spaClimate && spaClimate.attributes.current_temperature !== undefined ? `${num(spaClimate.attributes.current_temperature, 1)} °C` : "—") : kwTxt(spa), sub: "", w: spa, colour: "--use" });
   const label = `Solar ${kwTxt(pv)}, grid ${kwTxt(grid)}, battery ${sources[2].sub}, house ${kwTxt(house)}`;
-  return `<div class="scroll-x"><div class="flowbox" role="img" aria-label="${esc(label)}">${svg}
-    ${sources.map((x, i) => node(x, 0, sy(i), 20)).join("")}
-    <div class="fhouse">${icon(ICON_PATH.house, 28)}<b class="mono">${esc(kwTxt(house))}</b><span>use</span></div>
-    ${sinks.map((x, i) => node(x, 78, ky(i), 22)).join("")}</div></div>`;
+  return flowLayout({ sources, sinks, house: kwTxt(house), on, label, vertical });
+}
+
+/**
+ * Draws the flow in a 1000 x 1000 box scaled to the container: sources, the house in the middle, consumers.
+ * Wide: three columns left to right. Vertical (phones): sources on top, the house, consumers below, so nothing scrolls sideways.
+ */
+function flowLayout({ sources, sinks, house, on, label, vertical }) {
+  const spread = (n, i, lo, hi) => n === 1 ? (lo + hi) / 2 : lo + i * ((hi - lo) / (n - 1));
+  // node centres in box units, and where lines meet the house
+  const src = sources.map((_, i) => vertical ? [spread(sources.length, i, 170, 830), 90] : [100, spread(sources.length, i, 180, 820)]);
+  const snk = sinks.map((_, i) => vertical ? [spread(sinks.length, i, sinks.length > 3 ? 125 : 170, sinks.length > 3 ? 875 : 830), 910] : [890, spread(sinks.length, i, 130, 870)]);
+  const houseIn = vertical ? [500, 400] : [400, 500], houseOut = vertical ? [500, 600] : [600, 500];
+  const srcEdge = (c) => vertical ? [c[0], 175] : [200, c[1]], snkEdge = (c) => vertical ? [c[0], 825] : [780, c[1]];
+  const curve = ([x1, y1], [x2, y2]) => vertical ? `M${x1} ${y1} C${x1} ${(y1 + y2) / 2} ${x2} ${(y1 + y2) / 2} ${x2} ${y2}` : `M${x1} ${y1} C${(x1 + x2) / 2} ${y1} ${(x1 + x2) / 2} ${y2} ${x2} ${y2}`;
+  const link = (a, b, live, colour, reverse) => live
+    ? `<path d="${curve(a, b)}" stroke="var(${colour})" stroke-width="10" fill="none" stroke-linecap="round" opacity=".22" vector-effect="non-scaling-stroke"></path><path class="flow${reverse ? " rev" : ""}" d="${curve(a, b)}" stroke="var(${colour})" stroke-width="2.5" fill="none" stroke-dasharray="4 8" stroke-linecap="round" vector-effect="non-scaling-stroke"></path>`
+    : `<path d="${curve(a, b)}" stroke="var(--line)" stroke-width="1.5" fill="none" vector-effect="non-scaling-stroke"></path>`;
+  const svg = `<svg class="flow-lines" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+    ${sources.map((x, i) => link(srcEdge(src[i]), houseIn, on(x.w), x.colour, !x.out)).join("")}
+    ${sinks.map((x, i) => link(houseOut, snkEdge(snk[i]), on(x.w), x.colour, false)).join("")}</svg>`;
+  const node = (x, [cx, cy]) => `<div class="fnode ${on(x.w) ? "on" : ""}" style="left:${cx / 10}%;top:${cy / 10}%;--c:var(${x.colour})">${x.icon}<div><span>${esc(x.label)}</span><b class="mono">${esc(x.value)}</b>${x.sub ? `<i>${esc(x.sub)}</i>` : ""}</div></div>`;
+  return `<div class="flowbox ${vertical ? "vertical" : ""} ${vertical && sinks.length > 3 ? "many" : ""}" role="img" aria-label="${esc(label)}">${svg}
+    ${sources.map((x, i) => node(x, src[i])).join("")}
+    <div class="fhouse">${icon(ICON_PATH.house, 28, "var(--use)")}<b class="mono">${esc(house)}</b><span>use</span></div>
+    ${sinks.map((x, i) => node(x, snk[i])).join("")}</div>`;
+}
+
+/** The coming hours side by side: sky, temperature, rain, and what the plan expects from solar and the house in that hour. */
+function hoursHtml(p) {
+  const w = p && p.weather;
+  const hours = (w && w.hours) || [];
+  if (!hours.length) return "";
+  const byHour = new Map();
+  for (const q of (p.quarters || [])) {
+    const k = new Date(q.t); k.setUTCMinutes(0, 0, 0);
+    const e = byHour.get(k.getTime()) || { pv: 0, load: 0 };
+    e.pv += q.pv || 0; e.load += q.load || 0; byHour.set(k.getTime(), e);
+  }
+  const m = p.meta || {};
+  const slope = m.load_w_per_c;
+  const why = `Solar comes from this irradiance${slope !== null && slope !== undefined ? `; house use follows the temperature (${num(-slope, 0)} W more per degree colder)` : ""}.`;
+  return `<div class="card span-3"><div class="card-head"><h2>Next ${hours.length} hours</h2><span class="quiet small">used by the plan</span></div>
+    <div class="hours scroll-x" role="list">${hours.map((x) => {
+      const k = sky(x.code, x.is_day !== false), e = byHour.get(new Date(x.t).getTime());
+      // rain only when it is likely or measured: a 10 % chance in every hour is noise
+      const rain = x.precip_mm >= 0.1 ? `${num(x.precip_mm, 1)} mm` : x.precip_chance_pct >= 20 ? `${x.precip_chance_pct} %` : "";
+      return `<div class="hour" role="listitem" title="${esc(k.label)}, ${num(x.cloud_pct, 0)} % cloud">
+        <span class="mono small quiet">${hhmm(x.t)}</span>${icon(ICON_PATH[k.icon], 26, k.icon === "sun" ? "var(--pv)" : "currentColor")}
+        <b class="mono">${x.temp_c === null || x.temp_c === undefined ? "—" : `${num(x.temp_c, 0)}°`}</b>
+        <span class="small rain">${rain ? esc(rain) : "&nbsp;"}</span>
+        <span class="small mono" style="color:var(--pv)">${e && e.pv > 0.005 ? `☀ ${num(e.pv, 1)}` : "&nbsp;"}</span>
+        <span class="small mono" style="color:var(--use)">${e ? `⌂ ${num(e.load, 1)}` : "&nbsp;"}</span></div>`;
+    }).join("")}</div>
+    <p class="quiet small">${why} ☀ solar and ⌂ house in kWh per hour.</p></div>`;
 }
 
 /** Weather now and tomorrow from HEMS's own Open-Meteo fetch: sky, cloud cover, temperature and (tomorrow) rain. */
@@ -1025,6 +1071,9 @@ class HemsPanel extends HTMLElement {
     if (this._ro) this._ro.disconnect();
   }
 
+  /** The flow stands upright on a phone: three columns side by side would need sideways scrolling. */
+  _flowVertical() { return (this.clientWidth || window.innerWidth) < 700; }
+
   _go(view) { if (location.hash !== "#" + view) history.replaceState(null, "", "#" + view); this._view = view; this._sel = null; this._render(); }
 
   _liveUpdate() {
@@ -1034,7 +1083,7 @@ class HemsPanel extends HTMLElement {
     const p = store.payload, s = store.settings;
     const live = root.getElementById("live"); if (live) live.innerHTML = liveNumbersHtml(this._hass, p, s);
     const ph = root.getElementById("phases"); if (ph) ph.innerHTML = phasesHtml(this._hass, s);
-    const fl = root.getElementById("flow"); if (fl) fl.innerHTML = flowHtml(this._hass, p, s);
+    const fl = root.getElementById("flow"); if (fl) fl.innerHTML = flowHtml(this._hass, p, s, this._flowVertical());
     this._sample(s);
     const lp = root.getElementById("live-power"); if (lp) lp.innerHTML = liveChartsHtml(this._samples);
     const clock = root.getElementById("clock"); if (clock) clock.textContent = hhmm(Date.now());
@@ -1119,11 +1168,11 @@ class HemsPanel extends HTMLElement {
       </section>
       ${recsHtml(p, this._applyId)}
       <section class="grid-3">
-        <div class="card span-2"><div class="card-head"><h2>Energy flow</h2><span class="quiet small">live</span></div><div id="flow">${flowHtml(this._hass, p, s)}</div></div>
+        <div class="card span-2"><div class="card-head"><h2>Energy flow</h2><span class="quiet small">live</span></div><div id="flow">${flowHtml(this._hass, p, s, this._flowVertical())}</div></div>
         <div class="card"><div class="card-head"><h2>Live power</h2><span class="quiet small">30 min</span></div><div id="live-power">${liveChartsHtml(this._samples)}</div>
           <div class="card-head" style="margin-top:18px"><h2>Phases</h2><span class="quiet small">max ${num((s && s.options && s.options.grid_limit_a) || 25, 0)} A</span></div><div id="phases">${phasesHtml(this._hass, s)}</div></div>
       </section>
-      <section class="grid-3">${weatherHtml(p)}${sunHtml(p)}</section>
+      <section class="grid-3">${weatherHtml(p)}${sunHtml(p)}${hoursHtml(p)}</section>
       <section class="block chart">
         <div class="chart-head">
           <h2>Next ${this._hours} hours</h2><span class="quiet">per quarter</span>
@@ -1606,21 +1655,34 @@ a { color:var(--charge); }
 .card-head h2 { margin:0; }
 .grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr)); gap:20px; }
 .grid-3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; }
+.span-3 { grid-column:1 / -1; }
+.hours { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(64px,1fr); gap:6px; padding-bottom:6px; scroll-snap-type:x mandatory; }
+.hour { display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 4px; border-radius:10px; background:var(--panel-2); scroll-snap-align:start; }
+.hour .rain { color:var(--charge); }
 .span-2 { grid-column:span 2; }
 .hero .money { flex:1 1 260px; max-width:360px; }
 .ic { flex:none; vertical-align:-4px; }
 #flow > .scroll-x { overflow-y:hidden; }
-.flowbox { position:relative; height:340px; min-width:680px; }
+.flowbox { position:relative; height:340px; }
+.flowbox.vertical { height:500px; }
 .flow-lines { position:absolute; inset:0; width:100%; height:100%; }
-.fnode { position:absolute; transform:translateY(-50%); box-sizing:border-box; display:flex; align-items:center; gap:10px; background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:8px 12px; opacity:.6; white-space:nowrap; overflow:hidden; }
+.fnode { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; display:flex; align-items:center; gap:10px; background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:8px 12px; opacity:.6; white-space:nowrap; width:20%; min-width:0; overflow:hidden; }
 .fnode > div { min-width:0; }
-.fnode.on { opacity:1; border-color:var(--ok); }
+.fnode.on { opacity:1; border-color:var(--c); box-shadow:inset 3px 0 0 var(--c); }
 .fnode span { display:block; font-size:12px; color:var(--fg-3); }
 .fnode b { display:block; font-size:16px; }
 .fnode i { display:block; font-style:normal; font-size:12px; color:var(--fg-3); overflow:hidden; text-overflow:ellipsis; }
-.fhouse { position:absolute; left:40%; top:50%; width:20%; transform:translateY(-50%); background:var(--panel-2); border:1px solid var(--fg-3); border-radius:14px; padding:14px; text-align:center; }
+.fhouse { position:absolute; left:50%; top:50%; width:20%; transform:translate(-50%,-50%); background:var(--panel-2); border:1px solid var(--use); border-radius:14px; padding:14px; text-align:center; }
 .fhouse b { display:block; font-size:24px; margin-top:4px; }
 .fhouse span { font-size:12px; color:var(--fg-3); }
+/* upright on phones: small stacked tiles, icon above the text */
+.flowbox.vertical .fnode { width:30%; flex-direction:column; gap:4px; padding:8px 6px; text-align:center; white-space:normal; }
+.flowbox.vertical .fnode.on { box-shadow:inset 0 3px 0 var(--c); }
+.flowbox.vertical .fnode b { font-size:15px; }
+.flowbox.vertical .fnode i { white-space:nowrap; }
+.flowbox.vertical .fhouse { width:44%; padding:10px; }
+.flowbox.vertical .fhouse b { font-size:20px; }
+.flowbox.vertical.many .fnode { width:23%; }
 @media (prefers-reduced-motion: no-preference) { .flow { animation:flow 1.2s linear infinite; } .flow.rev { animation-direction:reverse; } @keyframes flow { to { stroke-dashoffset:-24; } } }
 .next { font-size:19px; color:var(--fg); }
 .spark { margin-bottom:10px; }
@@ -1663,7 +1725,10 @@ h1.huge { font-size:58px; line-height:1.05; }
 :host([kiosk]) .live .sub { font-size:14px; }
 /* narrow screens: everything stacks */
 @media (max-width: 860px) {
-  header.top { padding:0 14px; gap:14px; }
+  header.top { padding:0 10px 0 4px; gap:10px; }
+  header .title { display:none; }        /* the sidebar already says HEMS; the three tabs need the room */
+  nav.tabs { gap:16px; }
+  nav.tabs button { font-size:14px; }
   .pill { display:none; }
   main { padding:20px 14px 36px; gap:24px; }
   h1 { font-size:24px; }

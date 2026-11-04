@@ -131,7 +131,7 @@ def test_a_short_day_is_left_alone():
 def test_the_forecast_without_the_heater_model_is_what_it_was():
     """No cap, no runs: the median profile, labelled 'history'."""
     inputs = EngineInputs(NOW, None, [], days_of_history(12), None)
-    load, source = _load_forecast(inputs, EngineSettings(), START, 8)
+    load, source, _ = _load_forecast(inputs, EngineSettings(), START, 8)
     assert source == "history" and load[START] == pytest.approx(0.15)
 
 
@@ -141,8 +141,8 @@ def test_the_planned_run_replaces_the_smeared_peak_in_the_forecast():
     history = days_of_history(12)
     run = [HeatingRun(datetime(2026, 10, 15, 13, tzinfo=LOCAL_TZ), datetime(2026, 10, 15, 14, tzinfo=LOCAL_TZ), 1.9)]
     start = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)                # 12:00 local
-    plain, _ = _load_forecast(EngineInputs(NOW, None, [], history, None), EngineSettings(), start, 8)
-    modelled, source = _load_forecast(EngineInputs(NOW, None, [], history, None), EngineSettings(water_heater=ON), start, 8, run)
+    plain, _, _ = _load_forecast(EngineInputs(NOW, None, [], history, None), EngineSettings(), start, 8)
+    modelled, source, _ = _load_forecast(EngineInputs(NOW, None, [], history, None), EngineSettings(water_heater=ON), start, 8, run)
     hour = lambda load, first: sum(load[start + timedelta(minutes=15 * (first + k))] for k in range(4))
     assert source == "history+heater"
     assert hour(plain, 0) == pytest.approx(2.6) and hour(plain, 4) == pytest.approx(0.6)                       # the old forecast: peak at 12, flat at 13

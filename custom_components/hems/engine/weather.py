@@ -16,11 +16,12 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
 @dataclass(frozen=True)
 class Sky:
-    """One hour of sky: the WMO weather code, cloud cover (%), daylight, and precipitation (mm in the preceding hour)."""
+    """One hour of sky: the WMO weather code, cloud cover (%), daylight, precipitation (mm in the preceding hour) and its chance (%)."""
     code: int
     cloud_pct: float
     is_day: bool
     precip_mm: float
+    precip_chance_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,7 @@ def open_meteo_params(latitude: float, longitude: float, past_days: int = 7, for
     The coordinates are rounded to two decimals (about 1 km): enough for weather, and the exact home location
     does not leave the installation."""
     return {"latitude": round(latitude, 2), "longitude": round(longitude, 2), "minutely_15": "shortwave_radiation,temperature_2m",
-            "hourly": "weather_code,cloud_cover,is_day,precipitation",
+            "hourly": "weather_code,cloud_cover,is_day,precipitation,precipitation_probability",
             "past_days": past_days, "forecast_days": forecast_days, "timezone": "UTC"}
 
 
@@ -52,12 +53,14 @@ def _sky(block: Mapping[str, list] | None) -> dict[datetime, Sky]:
     if not block:
         return {}
     out: dict[datetime, Sky] = {}
+    chances = block.get("precipitation_probability") or [None] * len(block["time"])       # older responses lack it
     for i, t in enumerate(block["time"]):
         code = block["weather_code"][i]
         if code is None:
             continue
         cloud, day, rain = block["cloud_cover"][i], block["is_day"][i], block["precipitation"][i]
-        out[datetime.fromisoformat(t).replace(tzinfo=timezone.utc)] = Sky(int(code), float(cloud or 0), bool(day), float(rain or 0))
+        out[datetime.fromisoformat(t).replace(tzinfo=timezone.utc)] = Sky(int(code), float(cloud or 0), bool(day), float(rain or 0),
+                                                                     None if chances[i] is None else float(chances[i]))
     return out
 
 
@@ -74,9 +77,35 @@ def _worst(codes: list[int]) -> int:
     return max(counts, key=lambda c: (counts[c], c))
 
 
+FORECAST_HOURS = 12        # hours ahead shown per hour on the dashboard
+
+
+def _hour_mean(series: Mapping[datetime, float], hour: datetime) -> float | None:
+    """The mean of a quarter series over the four quarters of one hour; None when the hour has no values."""
+    values = [v for q in range(4) if (v := series.get(hour + timedelta(minutes=15 * q))) is not None]
+    return round(sum(values) / len(values), 1) if values else None
+
+
+def hourly_forecast(weather: Weather, now: datetime, hours: int = FORECAST_HOURS) -> list[dict[str, Any]]:
+    """The coming hours from the current one: sky code, daylight, cloud cover, temperature and irradiance (hour means), rain and
+    its chance. An hour without a sky entry is skipped, so a short forecast gives a shorter list."""
+    start = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    out = []
+    for h in range(hours):
+        hour = start + timedelta(hours=h)
+        sky = weather.sky.get(hour)
+        if sky is None:
+            continue
+        out.append({"t": hour.isoformat(), "code": sky.code, "is_day": sky.is_day, "cloud_pct": round(sky.cloud_pct),
+                    "temp_c": _hour_mean(weather.temperature_c, hour), "ghi_w_m2": _hour_mean(weather.ghi_w_m2, hour),
+                    "precip_mm": round(sky.precip_mm, 1), "precip_chance_pct": None if sky.precip_chance_pct is None else round(sky.precip_chance_pct)})
+    return out
+
+
 def weather_summary(weather: Weather | None, now: datetime, tz: tzinfo) -> dict[str, Any] | None:
-    """The sky now and tomorrow for the dashboard: code, daylight, cloud cover, temperature (now), and for tomorrow the
-    daytime code and cloud cover (07-19 local), the day's low and high, and its precipitation. None without weather."""
+    """The sky now, the coming hours and tomorrow for the dashboard: code, daylight, cloud cover, temperature (now), the hourly
+    forecast, and for tomorrow the daytime code and cloud cover (07-19 local), the day's low and high, and its precipitation.
+    None without weather."""
     if weather is None:
         return None
     hour = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
@@ -92,4 +121,4 @@ def weather_summary(weather: Weather | None, now: datetime, tz: tzinfo) -> dict[
         "code": _worst([s.code for s in daytime]), "cloud_pct": round(sum(s.cloud_pct for s in daytime) / len(daytime)),
         "precip_mm": round(sum(s.precip_mm for _, s in hours), 1),
         "temp_min_c": round(min(temps), 1) if temps else None, "temp_max_c": round(max(temps), 1) if temps else None}
-    return {"now": current, "tomorrow": tomorrow}
+    return {"now": current, "tomorrow": tomorrow, "hours": hourly_forecast(weather, now)}
