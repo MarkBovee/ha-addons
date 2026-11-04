@@ -83,6 +83,9 @@ def test_the_sky_now_and_tomorrow_come_from_the_hourly_block():
     assert summary["now"] == {"code": 0, "is_day": False, "cloud_pct": 5, "temp_c": 12.0}, "a clear night, not sunny"
     tomorrow = summary["tomorrow"]
     assert tomorrow["code"] == 3 and tomorrow["precip_mm"] == 3.0, "six rain hours fall on tomorrow (local), two after midnight"
+    hours_ahead = summary["hours"]
+    assert len(hours_ahead) == 12 and hours_ahead[0]["t"] == "2026-11-02T19:00:00+00:00" and hours_ahead[0]["temp_c"] == 12.0
+    assert hours_ahead[0]["precip_chance_pct"] is None, "a response without the chance still gives the hours"
     assert weather_summary(None, datetime(2026, 11, 2, 19, 20, tzinfo=timezone.utc), LOCAL_TZ) is None
     assert parse_open_meteo({"minutely_15": payload["minutely_15"]}, weather.fetched_at).sky == {}, "an old response without hourly still parses"
 

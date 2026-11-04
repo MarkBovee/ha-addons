@@ -62,6 +62,8 @@ def build_payload(snap: Any, *, build: str, cycle_at: datetime | None, previous:
     meta = {"version": PAYLOAD_VERSION, "build": build, "cycle_at": _iso(cycle_at), "status": out.status, "dry_run": True,
             "price_source": trace.get("price_source"), "weather_age_min": _r(snap.weather_age_min, 0), "history_hours": snap.history_hours,
             "tomorrow_quarters": snap.tomorrow_quarters, "prices_until": _iso(snap.prices_until), "pv_gain_w_per_wm2": _r(snap.pv_gain_w_per_wm2, 2),
+            # how the forecast load follows the temperature (heat pump): W more per degree colder; None = not applied
+            "load_source": trace.get("load_source"), "load_w_per_c": trace.get("load_w_per_c"),
             "stale_after_s": {"soc": int(soc_max_age.total_seconds()), "plan": PLAN_STALE_S, "live": LIVE_STALE_S, "prices": PRICES_STALE_S}}
     cap = battery.capacity_kwh
     batt = {"capacity_kwh": cap, "reserve_kwh": round(cap * battery.reserve_soc, 2), "floor_kwh": round(cap * battery.hard_min_soc, 2),

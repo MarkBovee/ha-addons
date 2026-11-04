@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from hems.battery import BatteryConfig
 from hems.contracts import MarketPrices, Reading
 from hems.decision_log import plan_detail
-from hems.forecast import LOCAL_TZ, hourly_profile, to_slots_kwh
+from hems.forecast import LOCAL_TZ, hourly_profile, temperature_slope, to_slots_kwh, with_temperature
 from hems.prices import PriceModel, PriceSeries, build_price_series, price_series_from_import_curve
 from hems.ev import EvConfig, EvPlan, EvState, ev_kwh_per_quarter, ev_record, plan_ev
 from hems.heater import HeatingRun, WaterHeaterConfig, plan_runs, run_kwh_per_quarter, without_daily_peak
@@ -62,7 +62,7 @@ class EngineInputs:
     ev: EvState | None = None                         # the car and its socket; None = unknown (the EV module then says so)
     legionella_last: datetime | None = None           # the water heater's last legionella run; None = unknown (the run is planned as due)
     spa_water_c: float | None = None                  # the spa's water temperature; None = unknown (no spa plan)
-    outdoor_c: Mapping[datetime, float] | None = None # outdoor temperature by quarter start, for the spa's heat loss
+    outdoor_c: Mapping[datetime, float] | None = None # outdoor temperature by quarter start (past days and forecast), for the spa's heat loss and the load's temperature response
     water_heater_w: Sequence[tuple[datetime, float]] = ()  # the water heater's own metered energy per hour (Wh = mean W); empty = not metered
     price_history: MarketPrices | None = None         # market prices of the last days: the typical peak and refill price (hems.terminal)
 
@@ -116,23 +116,31 @@ def _without_heater(inputs: EngineInputs, settings: EngineSettings) -> list[tupl
 
 
 def _load_forecast(inputs: EngineInputs, settings: EngineSettings, start: datetime, n_slots: int,
-                   runs: Sequence[HeatingRun] = ()) -> tuple[dict[datetime, float], str]:
-    """Base-load kWh per quarter from the local-hour median profile, or the flat default without history.
+                   runs: Sequence[HeatingRun] = ()) -> tuple[dict[datetime, float], str, float | None]:
+    """Base-load kWh per quarter from the local-hour median profile, or the flat default without history; the third item is the fitted
+    temperature response (W per °C) when it was applied, else None.
 
     With the water heater module on, each day's heater is taken out of the history first and the module's planned `runs`
-    are added where it plans them."""
+    are added where it plans them. With an outdoor temperature series (past days and forecast) the profile is moved by the temperature
+    when the history shows the house uses more when it is colder (the heat pump)."""
     heater = settings.water_heater.enabled and settings.water_heater.energy_kwh > 0
+    slope = None
     if inputs.load_history_w:
         history = _without_heater(inputs, settings) if heater else list(inputs.load_history_w)
         history = without_flexible_load(history, settings.spa, settings.tz)     # an externally controlled spa moves with the prices: planned apart
         profile, source = hourly_profile(history, settings.load_days, settings.tz), "history+heater" if heater else "history"
+        fit = temperature_slope(history, inputs.outdoor_c, profile, settings.tz) if inputs.outdoor_c else None
     else:
-        profile, source = [settings.default_load_w] * 24, "default"
+        profile, source, fit = [settings.default_load_w] * 24, "default", None
     load = dict(zip(slot_starts(start, n_slots), to_slots_kwh(profile, start, n_slots, settings.tz)))
+    if fit is not None:
+        slope, hour_means = fit
+        load = with_temperature(load, profile, slope, hour_means, inputs.outdoor_c, settings.tz)
+        source += "+temperature"
     for quarter, kwh in run_kwh_per_quarter(runs).items():
         if quarter in load:
             load[quarter] += kwh
-    return load, source
+    return load, source, slope
 
 
 def _import_cap_kwh(settings: EngineSettings) -> float | None:
@@ -191,7 +199,7 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
         heater_cfg, heater_learned = water_heater_runs(inputs.water_heater_w, settings.water_heater, inputs.now.astimezone(settings.tz).date(), settings.tz, recorded)
         settings = replace(settings, water_heater=heater_cfg)
     runs = tuple(plan_runs(prices, inputs.now, settings.water_heater, settings.tz, inputs.legionella_last))
-    load, load_source = _load_forecast(inputs, settings, start, settings.max_slots, runs)
+    load, load_source, load_temp_slope = _load_forecast(inputs, settings, start, settings.max_slots, runs)
     pv = pv_kwh_per_quarter(inputs.ghi_w_m2 or {}, settings.pv_gain_w_per_wm2, settings.pv_max_ac_w)
     ev_plan = _ev_plan(inputs, settings, prices, load, pv)
     if ev_plan is not None:
@@ -215,7 +223,7 @@ def step(inputs: EngineInputs, settings: EngineSettings, previous: Decision | No
         return EngineOutput(STATUS_NO_PRICE_NOW, None, prices, load, pv,
                             {"status": STATUS_NO_PRICE_NOW, "price_source": source, "now": inputs.now.isoformat(),
                              "prices_end": prices.starts[-1].isoformat()})
-    trace = {"status": STATUS_OK, "price_source": source, "load_source": load_source, "weather": inputs.ghi_w_m2 is not None,
+    trace = {"status": STATUS_OK, "price_source": source, "load_source": load_source, "load_w_per_c": None if load_temp_slope is None else round(load_temp_slope, 1), "weather": inputs.ghi_w_m2 is not None,
              "inputs": {"soc_age_s": round(inputs.soc_pct.age(inputs.now).total_seconds()), "price_quarters": len(prices.starts),
                         "prices_until": (prices.starts[-1] + timedelta(minutes=15)).isoformat(), "load_samples": len(inputs.load_history_w), "heating_runs": len(runs)},
              **decision.trace}
