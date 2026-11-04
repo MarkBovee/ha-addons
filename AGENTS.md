@@ -32,6 +32,8 @@ A collection of **Home Assistant Supervisor add-ons** for home energy management
 
 This repository is evolving toward a modular **Home Energy Management System (HEMS)**.
 
+HEMS itself (the Home Assistant integration, its engine and its panel) lives in its own repository: [MarkBovee/ha-hems](https://github.com/MarkBovee/ha-hems). The add-ons here are modules HEMS can use through Home Assistant.
+
 The following architectural rule is fundamental and MUST be preserved by all agents and implementations.
 
 ## Home Assistant is the Only Integration Boundary
